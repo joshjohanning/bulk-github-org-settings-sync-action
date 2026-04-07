@@ -459,7 +459,7 @@ export async function syncCustomProperties(octokit, org, desiredProperties, dele
         }
       }
       // Skip deletions — don't leave org in partially-applied state
-      return { subResults };
+      return { subResults, failed: true };
     }
   }
 
@@ -495,7 +495,7 @@ export async function syncCustomProperties(octokit, org, desiredProperties, dele
     }
   }
 
-  return { subResults };
+  return { subResults, failed: false };
 }
 
 // ─── Result helpers ─────────────────────────────────────────────────────────────
@@ -590,31 +590,42 @@ export async function run() {
             dryRun
           );
           result.subResults.push(...cpResult.subResults);
+
+          if (cpResult.failed) {
+            result.success = false;
+            result.error = 'Custom properties sync failed';
+          }
         }
 
         // Derive hasWarnings from subResults
         result.hasWarnings = result.subResults.some(s => s.status === SubResultStatus.WARNING);
 
-        successCount++;
-        if (result.hasWarnings) {
-          warningCount++;
-        }
-        const orgHasChanges = hasOrgChanges(result);
-        if (orgHasChanges) {
-          changedCount++;
-        }
-
-        if (dryRun) {
-          if (orgHasChanges) {
-            core.info(`🔍 Would update ${org}`);
-          } else {
-            core.info(`✅ No changes needed for ${org}`);
-          }
+        if (!result.success) {
+          // Sync function reported failure (e.g., PATCH failed)
+          failureCount++;
+          core.warning(`❌ Failed to update ${org}: ${result.error}`);
         } else {
+          successCount++;
+          if (result.hasWarnings) {
+            warningCount++;
+          }
+          const orgHasChanges = hasOrgChanges(result);
           if (orgHasChanges) {
-            core.info(`✅ Successfully updated ${org}`);
+            changedCount++;
+          }
+
+          if (dryRun) {
+            if (orgHasChanges) {
+              core.info(`🔍 Would update ${org}`);
+            } else {
+              core.info(`✅ No changes needed for ${org}`);
+            }
           } else {
-            core.info(`✅ No changes needed for ${org}`);
+            if (orgHasChanges) {
+              core.info(`✅ Successfully updated ${org}`);
+            } else {
+              core.info(`✅ No changes needed for ${org}`);
+            }
           }
         }
       } catch (error) {
