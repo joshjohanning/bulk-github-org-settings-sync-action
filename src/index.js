@@ -7,7 +7,7 @@
  * Uses core.getInput() which reads INPUT_<NAME> env vars (hyphens preserved).
  * Since shell variables can't contain hyphens, set these via env(1):
  *
- *    env 'INPUT_GITHUB-TOKEN=ghp_xxx' 'INPUT_ORGANIZATIONS=my-org' node src/index.js
+ *    env 'INPUT_GITHUB-TOKEN=ghp_xxx' 'INPUT_ORGANIZATIONS=my-org' node "$(pwd)/src/index.js"
  */
 
 import * as core from '@actions/core';
@@ -356,10 +356,10 @@ export function compareCustomProperty(existing, desired) {
     changes.push(`description updated`);
   }
   // Compare default_value (deep compare for arrays, scalar for strings/null)
-  const existingDefault = existing.default_value || null;
-  const desiredDefault = desired.default_value || null;
+  const existingDefault = existing.default_value ?? null;
+  const desiredDefault = desired.default_value ?? null;
   if (JSON.stringify(existingDefault) !== JSON.stringify(desiredDefault)) {
-    changes.push(`default_value: ${existingDefault || 'none'} → ${desiredDefault || 'none'}`);
+    changes.push(`default_value: ${existingDefault ?? 'none'} → ${desiredDefault ?? 'none'}`);
   }
   if ((existing.values_editable_by || 'org_actors') !== (desired.values_editable_by || 'org_actors')) {
     changes.push(`values_editable_by: ${existing.values_editable_by} → ${desired.values_editable_by}`);

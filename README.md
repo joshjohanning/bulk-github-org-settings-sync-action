@@ -296,5 +296,5 @@ env 'INPUT_GITHUB-TOKEN=ghp_xxx' \
     'INPUT_ORGANIZATIONS=my-org' \
     'INPUT_CUSTOM-PROPERTIES-FILE=./sample-configuration/custom-properties.yml' \
     'INPUT_DRY-RUN=true' \
-    node src/index.js
+    node "$(pwd)/src/index.js"
 ```
