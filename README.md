@@ -7,7 +7,7 @@
 [![Publish GitHub Action](https://github.com/joshjohanning/bulk-github-org-settings-sync-action/actions/workflows/publish.yml/badge.svg)](https://github.com/joshjohanning/bulk-github-org-settings-sync-action/actions/workflows/publish.yml)
 ![Coverage](./badges/coverage.svg)
 
-🏢 Bulk sync GitHub organization custom property definitions across multiple orgs using a declarative YAML config
+🏢 Bulk configure GitHub organization settings across multiple orgs using a declarative YAML config
 
 ## What's new
 

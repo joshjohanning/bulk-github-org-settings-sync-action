@@ -1,5 +1,5 @@
 name: 'Bulk GitHub Organization Settings Sync'
-description: 'Bulk sync GitHub organization custom property definitions across multiple orgs'
+description: 'Bulk configure GitHub organization settings across multiple orgs'
 
 branding:
   icon: 'settings'
