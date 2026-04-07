@@ -721,10 +721,10 @@ export async function run() {
       }
     }
 
-    core.info('\n✅ Action completed successfully!');
-
     if (failureCount > 0) {
-      core.warning(`${failureCount} organization(s) failed to update`);
+      core.setFailed(`${failureCount} organization(s) failed to update`);
+    } else {
+      core.info('\n✅ Action completed successfully!');
     }
   } catch (error) {
     core.setFailed(`Action failed with error: ${error.message}`);

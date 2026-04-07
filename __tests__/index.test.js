@@ -729,7 +729,7 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
 
       await run();
 
-      expect(mockCore.setFailed).not.toHaveBeenCalled();
+      expect(mockCore.setFailed).toHaveBeenCalledWith('1 organization(s) failed to update');
       expect(mockCore.setOutput).toHaveBeenCalledWith('failed-organizations', '1');
       expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('Failed to update my-org'));
     });
