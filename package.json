@@ -1,7 +1,7 @@
 {
-  "name": "nodejs-actions-starter-template",
-  "description": "👋 A starter template for creating GitHub Actions with Node.js",
-  "version": "2.0.1",
+  "name": "bulk-github-org-settings-sync-action",
+  "description": "🏢 Bulk configure GitHub organization settings across multiple orgs using a declarative YAML config",
+  "version": "1.0.0",
   "type": "module",
   "author": {
     "name": "Josh Johanning",
@@ -9,20 +9,22 @@
     "url": "https://github.com/joshjohanning"
   },
   "private": true,
-  "homepage": "https://github.com/joshjohanning/nodejs-actions-starter-template#readme",
+  "homepage": "https://github.com/joshjohanning/bulk-github-org-settings-sync-action#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/joshjohanning/nodejs-actions-starter-template.git"
+    "url": "git+https://github.com/joshjohanning/bulk-github-org-settings-sync-action.git"
   },
   "bugs": {
-    "url": "https://github.com/joshjohanning/nodejs-actions-starter-template/issues"
+    "url": "https://github.com/joshjohanning/bulk-github-org-settings-sync-action/issues"
   },
   "keywords": [
     "github-actions",
-    "template",
-    "starter",
-    "nodejs",
-    "hello-world"
+    "github",
+    "organization",
+    "settings",
+    "custom-properties",
+    "javascript",
+    "node-action"
   ],
   "exports": {
     ".": "./dist/index.js"
@@ -46,7 +48,8 @@
   "dependencies": {
     "@actions/core": "^3.0.0",
     "@actions/github": "^9.0.0",
-    "@octokit/rest": "^22.0.1"
+    "@octokit/rest": "^22.0.1",
+    "js-yaml": "^4.1.0"
   },
   "devDependencies": {
     "@joshjohanning/make-coverage-badge-better": "^1.0.1",

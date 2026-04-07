@@ -1,0 +1,44 @@
+# Standalone custom properties file for use with custom-properties-file input
+# Use with: custom-properties-file: './custom-properties.yml'
+#
+# These are the base properties applied to all organizations.
+# Per-org overrides in org-settings.yml layer on top (same name = override).
+
+# Single-select property for team ownership
+- name: team
+  value-type: single_select
+  required: true
+  description: 'The team that owns this repository'
+  allowed-values:
+    - platform
+    - frontend
+    - backend
+    - devops
+    - security
+  values-editable-by: org_actors
+
+# Multi-select property for deployment environments
+- name: environment
+  value-type: multi_select
+  required: false
+  description: 'Deployment environments for this repository'
+  allowed-values:
+    - production
+    - staging
+    - development
+  values-editable-by: org_and_repo_actors
+
+# Boolean property for production flag
+- name: is-production
+  value-type: true_false
+  required: false
+  default-value: 'false'
+  description: 'Whether this repository is used in production'
+  values-editable-by: org_actors
+
+# Free-form string property
+- name: cost-center
+  value-type: string
+  required: false
+  description: 'Cost center code for billing'
+  values-editable-by: org_actors

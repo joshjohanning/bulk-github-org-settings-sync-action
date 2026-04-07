@@ -1,34 +1,56 @@
-name: 'NodeJS Actions Starter Template'
-description: '👋 A simple Hello World GitHub Action template with customizable greetings'
+name: 'Bulk GitHub Organization Settings Sync'
+description: 'Bulk configure GitHub organization settings (custom properties, security, member privileges) across multiple orgs'
 
 branding:
-  icon: 'message-circle'
-  color: 'green'
+  icon: 'settings'
+  color: 'blue'
 
 inputs:
-  who-to-greet:
-    description: 'Who to greet in the message'
-    required: false
-    default: 'World'
-  include-time:
-    description: 'Whether to include current time in output'
-    required: false
-    default: 'false'
-  message-prefix:
-    description: 'Prefix for the greeting message'
-    required: false
-    default: 'Hello'
+  # === Authentication ===
   github-token:
-    description: 'GitHub token for API access (optional, for repo stats)'
+    description: 'GitHub token for API access (requires admin:org scope)'
+    required: true
+  github-api-url:
+    description: 'GitHub API URL (e.g., https://api.github.com for GitHub.com or https://ghes.domain.com/api/v3 for GHES). Instance URL is auto-derived.'
+    required: false
+    default: '${{ github.api_url }}'
+
+  # === Organization Selection ===
+  organizations:
+    description: 'Comma-separated list of organization names'
+    required: false
+  organizations-file:
+    description: 'Path to YAML file containing organization settings configuration (org-settings.yml)'
     required: false
 
+  # === Custom Properties ===
+  custom-properties-file:
+    description: 'Path to a YAML file defining custom property schemas to sync to target organizations'
+    required: false
+  delete-unmanaged-properties:
+    description: 'Delete custom properties not defined in the configuration file'
+    required: false
+    default: 'false'
+
+  # === Execution Options ===
+  dry-run:
+    description: 'Preview changes without applying them (logs what would be changed)'
+    required: false
+    default: 'false'
+
 outputs:
-  message:
-    description: 'The generated greeting message'
-  time:
-    description: 'Current timestamp (if requested)'
-  repo-stats:
-    description: 'Repository statistics (if token provided)'
+  updated-organizations:
+    description: 'Number of organizations successfully processed (changed + unchanged)'
+  changed-organizations:
+    description: 'Number of organizations with reportable changes (or would have in dry-run mode)'
+  unchanged-organizations:
+    description: 'Number of organizations with no reportable changes'
+  failed-organizations:
+    description: 'Number of organizations that failed to update'
+  warning-organizations:
+    description: 'Number of organizations that emitted warnings'
+  results:
+    description: 'JSON array of update results for each organization'
 
 runs:
   using: 'node24'
