@@ -1,0 +1,47 @@
+# Organization settings configuration for bulk-github-org-settings-sync-action
+# Use with: organizations-file: './org-settings.yml'
+#
+# Base custom properties can be defined in a separate custom-properties.yml file
+# and provided via the custom-properties-file input. Per-org overrides below
+# layer on top — properties with the same name override the base definition.
+
+orgs:
+  # Org that inherits all base properties from custom-properties-file as-is
+  - org: my-org
+
+  # Org with per-org overrides (adds extra allowed values for "team")
+  - org: my-other-org
+    custom-properties:
+      - name: team
+        value-type: single_select
+        required: true
+        description: 'The team that owns this repository'
+        allowed-values:
+          - platform
+          - frontend
+          - backend
+          - data-science
+        values-editable-by: org_actors
+
+# ---
+# Alternative: fully self-contained (no base custom-properties-file needed)
+# Each org defines all its properties inline:
+#
+# orgs:
+#   - org: my-org
+#     custom-properties:
+#       - name: team
+#         value-type: single_select
+#         required: true
+#         description: 'The team that owns this repository'
+#         allowed-values:
+#           - platform
+#           - frontend
+#           - backend
+#         values-editable-by: org_actors
+#
+#       - name: cost-center
+#         value-type: string
+#         required: false
+#         description: 'Cost center code for billing'
+#         values-editable-by: org_actors
