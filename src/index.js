@@ -1,6 +1,6 @@
 /**
  * Bulk GitHub Organization Settings Sync Action
- * Sync organization settings (custom properties, etc.) across multiple GitHub organizations
+ * Sync organization settings across multiple GitHub organizations
  *
  * Local Development & Testing:
  *
