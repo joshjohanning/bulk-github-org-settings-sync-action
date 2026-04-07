@@ -361,7 +361,7 @@ export function compareCustomProperty(existing, desired) {
   if (JSON.stringify(existingDefault) !== JSON.stringify(desiredDefault)) {
     changes.push(`default_value: ${existingDefault ?? 'none'} → ${desiredDefault ?? 'none'}`);
   }
-  if ((existing.values_editable_by || 'org_actors') !== (desired.values_editable_by || 'org_actors')) {
+  if ((existing.values_editable_by ?? 'org_actors') !== (desired.values_editable_by ?? 'org_actors')) {
     changes.push(`values_editable_by: ${existing.values_editable_by} → ${desired.values_editable_by}`);
   }
 
