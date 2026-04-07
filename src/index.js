@@ -18,16 +18,16 @@ import * as yaml from 'js-yaml';
 // ─── Helpers ────────────────────────────────────────────────────────────────────
 
 /**
- * Parse a boolean-ish action input, returning null when the input is empty.
+ * Parse a boolean action input, returning null when the input is empty.
+ * Delegates boolean parsing to core.getBooleanInput() so standard
+ * GitHub Actions boolean values such as true, True, and FALSE are accepted.
  * @param {string} name - Input name
  * @returns {boolean|null}
  */
 function getBooleanInput(name) {
   const val = core.getInput(name);
   if (val === '') return null;
-  if (val === 'true') return true;
-  if (val === 'false') return false;
-  throw new Error(`Input "${name}" must be "true" or "false", got "${val}"`);
+  return core.getBooleanInput(name);
 }
 
 // ─── YAML key validation ────────────────────────────────────────────────────────
@@ -311,9 +311,15 @@ export function normalizeCustomProperties(properties) {
     };
 
     if (prop['default-value'] !== undefined && prop['default-value'] !== null) {
-      // multi_select default values are arrays; other types are strings
-      if (prop['value-type'] === 'multi_select' && Array.isArray(prop['default-value'])) {
-        normalized.default_value = prop['default-value'].map(v => String(v));
+      // multi_select default values must be arrays; other types are strings
+      if (prop['value-type'] === 'multi_select') {
+        if (Array.isArray(prop['default-value'])) {
+          normalized.default_value = prop['default-value'].map(v => String(v));
+        } else {
+          throw new Error(
+            `Custom property "${prop.name}" with value-type "multi_select" must have an array for "default-value"`
+          );
+        }
       } else {
         normalized.default_value = String(prop['default-value']);
       }
@@ -349,8 +355,11 @@ export function compareCustomProperty(existing, desired) {
   if ((existing.description || null) !== (desired.description || null)) {
     changes.push(`description updated`);
   }
-  if ((existing.default_value || null) !== (desired.default_value || null)) {
-    changes.push(`default_value: ${existing.default_value || 'none'} → ${desired.default_value || 'none'}`);
+  // Compare default_value (deep compare for arrays, scalar for strings/null)
+  const existingDefault = existing.default_value || null;
+  const desiredDefault = desired.default_value || null;
+  if (JSON.stringify(existingDefault) !== JSON.stringify(desiredDefault)) {
+    changes.push(`default_value: ${existingDefault || 'none'} → ${desiredDefault || 'none'}`);
   }
   if ((existing.values_editable_by || 'org_actors') !== (desired.values_editable_by || 'org_actors')) {
     changes.push(`values_editable_by: ${existing.values_editable_by} → ${desired.values_editable_by}`);
@@ -430,7 +439,31 @@ export async function syncCustomProperties(octokit, org, desiredProperties, dele
     }
   }
 
-  // Determine deletions
+  // Apply creates/updates via batch PATCH (before deletions to avoid destructive partial state)
+  if (toCreateOrUpdate.length > 0 && !dryRun) {
+    try {
+      await octokit.request('PATCH /orgs/{org}/properties/schema', {
+        org,
+        properties: toCreateOrUpdate
+      });
+    } catch (error) {
+      // Mark all pending creates/updates as warnings
+      core.warning(`  ⚠️  Failed to sync custom properties: ${error.message}`);
+      for (let i = 0; i < subResults.length; i++) {
+        const sub = subResults[i];
+        if (
+          (sub.kind === 'custom-property-create' || sub.kind === 'custom-property-update') &&
+          sub.status === SubResultStatus.CHANGED
+        ) {
+          subResults[i] = createSubResult(sub.kind, SubResultStatus.WARNING, `Failed: ${error.message}`);
+        }
+      }
+      // Skip deletions — don't leave org in partially-applied state
+      return { subResults };
+    }
+  }
+
+  // Determine and apply deletions (only after successful creates/updates)
   if (deleteUnmanaged) {
     for (const existing of existingProperties) {
       if (!desiredMap.has(existing.property_name)) {
@@ -451,35 +484,12 @@ export async function syncCustomProperties(octokit, org, desiredProperties, dele
             });
           } catch (error) {
             core.warning(`  ⚠️  Failed to delete custom property "${existing.property_name}": ${error.message}`);
-            // Replace the last CHANGED sub-result with a WARNING
             subResults[subResults.length - 1] = createSubResult(
               'custom-property-delete',
               SubResultStatus.WARNING,
               `Failed to delete "${existing.property_name}": ${error.message}`
             );
           }
-        }
-      }
-    }
-  }
-
-  // Apply creates/updates via batch PUT
-  if (toCreateOrUpdate.length > 0 && !dryRun) {
-    try {
-      await octokit.request('PATCH /orgs/{org}/properties/schema', {
-        org,
-        properties: toCreateOrUpdate
-      });
-    } catch (error) {
-      // Mark all pending creates/updates as warnings
-      core.warning(`  ⚠️  Failed to sync custom properties: ${error.message}`);
-      for (let i = 0; i < subResults.length; i++) {
-        const sub = subResults[i];
-        if (
-          (sub.kind === 'custom-property-create' || sub.kind === 'custom-property-update') &&
-          sub.status === SubResultStatus.CHANGED
-        ) {
-          subResults[i] = createSubResult(sub.kind, SubResultStatus.WARNING, `Failed: ${error.message}`);
         }
       }
     }
@@ -673,7 +683,7 @@ export async function run() {
         summaryBuilder = summaryBuilder.addRaw('\n**🔍 DRY-RUN MODE:** No changes were applied\n');
       }
 
-      summaryBuilder
+      await summaryBuilder
         .addRaw(`\n**Total Organizations:** ${orgList.length}`)
         .addRaw(`\n**Changed:** ${changedCount}`)
         .addRaw(`\n**Unchanged:** ${unchangedCount}`)

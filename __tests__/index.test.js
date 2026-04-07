@@ -479,7 +479,7 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
     test('should create new properties when none exist', async () => {
       // Mock: no existing properties
       mockRequest.mockResolvedValueOnce({ data: [] });
-      // Mock: successful PUT
+      // Mock: successful PATCH
       mockRequest.mockResolvedValueOnce({ data: {} });
 
       const result = await syncCustomProperties(mockOctokit, 'my-org', desiredProperties, false, false);
@@ -531,7 +531,7 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
           }
         ]
       });
-      // Mock: successful PUT
+      // Mock: successful PATCH
       mockRequest.mockResolvedValueOnce({ data: {} });
 
       const result = await syncCustomProperties(mockOctokit, 'my-org', desiredProperties, false, false);
@@ -636,7 +636,7 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
       const error404 = new Error('Not Found');
       error404.status = 404;
       mockRequest.mockRejectedValueOnce(error404);
-      // Mock: successful PUT
+      // Mock: successful PATCH
       mockRequest.mockResolvedValueOnce({ data: {} });
 
       const result = await syncCustomProperties(mockOctokit, 'my-org', desiredProperties, false, false);
@@ -687,6 +687,11 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
         };
         return inputs[name] ?? '';
       });
+      mockCore.getBooleanInput.mockImplementation(name => {
+        if (name === 'dry-run') return true;
+        if (name === 'delete-unmanaged-properties') return false;
+        return false;
+      });
 
       // Mock: no existing properties for each org
       mockRequest.mockResolvedValueOnce({ data: [] });
@@ -712,6 +717,11 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
           'dry-run': 'false'
         };
         return inputs[name] ?? '';
+      });
+      mockCore.getBooleanInput.mockImplementation(name => {
+        if (name === 'dry-run') return false;
+        if (name === 'delete-unmanaged-properties') return false;
+        return false;
       });
 
       // Mock: GET throws non-404 error
