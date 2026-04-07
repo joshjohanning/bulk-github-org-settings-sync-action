@@ -49,13 +49,67 @@ const {
   normalizeCustomProperties,
   compareCustomProperty,
   syncCustomProperties,
-  mergeCustomProperties
+  mergeCustomProperties,
+  validateOrgConfig
 } = await import('../src/index.js');
 
 describe('Bulk GitHub Organization Settings Sync Action', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockRequest.mockReset();
+  });
+
+  // ─── validateOrgConfig ───────────────────────────────────────────────
+
+  describe('validateOrgConfig', () => {
+    test('should not warn for known keys', () => {
+      validateOrgConfig({ org: 'my-org', 'custom-properties': [] }, 'my-org');
+      expect(mockCore.warning).not.toHaveBeenCalled();
+    });
+
+    test('should warn for unknown org-level key', () => {
+      validateOrgConfig({ org: 'my-org', 'custm-properties': [] }, 'my-org');
+      expect(mockCore.warning).toHaveBeenCalledWith(
+        expect.stringContaining('Unknown configuration key "custm-properties"')
+      );
+    });
+
+    test('should warn for unknown custom property key', () => {
+      validateOrgConfig(
+        {
+          org: 'my-org',
+          'custom-properties': [{ name: 'team', 'value-type': 'string', requred: true }]
+        },
+        'my-org'
+      );
+      expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('Unknown custom property key "requred"'));
+    });
+
+    test('should not warn for valid custom property keys', () => {
+      validateOrgConfig(
+        {
+          org: 'my-org',
+          'custom-properties': [
+            {
+              name: 'team',
+              'value-type': 'single_select',
+              required: true,
+              description: 'Team',
+              'default-value': null,
+              'allowed-values': ['a'],
+              'values-editable-by': 'org_actors'
+            }
+          ]
+        },
+        'my-org'
+      );
+      expect(mockCore.warning).not.toHaveBeenCalled();
+    });
+
+    test('should handle null/non-object gracefully', () => {
+      expect(() => validateOrgConfig(null, 'test')).not.toThrow();
+      expect(() => validateOrgConfig('string', 'test')).not.toThrow();
+    });
   });
 
   // ─── normalizeCustomProperties ──────────────────────────────────────────

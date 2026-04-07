@@ -30,6 +30,64 @@ function getBooleanInput(name) {
   throw new Error(`Input "${name}" must be "true" or "false", got "${val}"`);
 }
 
+// ─── YAML key validation ────────────────────────────────────────────────────────
+
+/**
+ * Known keys for organization config entries in the YAML file.
+ * Used to warn about typos or unknown keys.
+ */
+const KNOWN_ORG_CONFIG_KEYS = new Set(['org', 'custom-properties']);
+
+/**
+ * Known keys for custom property definitions in the YAML file.
+ * Used to warn about typos or unknown keys.
+ */
+const KNOWN_CUSTOM_PROPERTY_KEYS = new Set([
+  'name',
+  'value-type',
+  'required',
+  'description',
+  'default-value',
+  'allowed-values',
+  'values-editable-by'
+]);
+
+/**
+ * Validate organization configuration and warn about unknown keys.
+ * @param {Object} orgConfig - Organization configuration object from YAML
+ * @param {string} orgName - Organization name for logging context
+ */
+export function validateOrgConfig(orgConfig, orgName) {
+  if (typeof orgConfig !== 'object' || orgConfig === null) {
+    return;
+  }
+
+  for (const key of Object.keys(orgConfig)) {
+    if (!KNOWN_ORG_CONFIG_KEYS.has(key)) {
+      core.warning(
+        `⚠️  Unknown configuration key "${key}" found for organization "${orgName}". ` +
+          `This setting may not exist, may not be available in this version, or may have a typo.`
+      );
+    }
+  }
+
+  // Validate custom property keys if present
+  if (Array.isArray(orgConfig['custom-properties'])) {
+    for (const prop of orgConfig['custom-properties']) {
+      if (typeof prop !== 'object' || prop === null) continue;
+      const propName = prop.name || '(unnamed)';
+      for (const key of Object.keys(prop)) {
+        if (!KNOWN_CUSTOM_PROPERTY_KEYS.has(key)) {
+          core.warning(
+            `⚠️  Unknown custom property key "${key}" found for property "${propName}" in organization "${orgName}". ` +
+              `This key may not exist or may have a typo.`
+          );
+        }
+      }
+    }
+  }
+}
+
 // ─── SubResult model (mirrors bulk-github-repo-settings-sync-action PR #120) ─
 
 /**
@@ -172,6 +230,8 @@ export function parseOrganizationsFile(filePath) {
     if (!orgConfig.org) {
       throw new Error('Each entry in "orgs" must have an "org" field');
     }
+
+    validateOrgConfig(orgConfig, orgConfig.org);
 
     const result = { org: orgConfig.org };
 
