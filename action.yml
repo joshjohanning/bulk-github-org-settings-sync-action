@@ -20,7 +20,7 @@ inputs:
     description: 'Comma-separated list of organization names'
     required: false
   organizations-file:
-    description: 'Path to YAML file containing organization settings configuration (org-settings.yml)'
+    description: 'Path to YAML file containing organization settings configuration (orgs.yml)'
     required: false
 
   # === Custom Properties ===

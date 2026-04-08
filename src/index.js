@@ -36,7 +36,7 @@ function getBooleanInput(name) {
  * Known keys for organization config entries in the YAML file.
  * Used to warn about typos or unknown keys.
  */
-const KNOWN_ORG_CONFIG_KEYS = new Set(['org', 'custom-properties']);
+const KNOWN_ORG_CONFIG_KEYS = new Set(['org', 'custom-properties', 'custom-properties-file']);
 
 /**
  * Known keys for custom property definitions in the YAML file.
@@ -142,6 +142,9 @@ function formatSubResultSummary(subResult) {
  * merged with per-org overrides from organizations-file. Per-org properties override
  * base properties with the same name; base properties not overridden are preserved.
  *
+ * Per-org custom-properties-file in the organizations file overrides the base
+ * custom-properties-file from the action input for that org.
+ *
  * Modes:
  *   1. organizations-file (optionally combined with custom-properties-file for base settings)
  *   2. organizations input + custom-properties-file (same properties for all orgs)
@@ -160,11 +163,19 @@ export function parseOrganizations(organizationsInput, organizationsFile, custom
   if (organizationsFile) {
     const orgConfigs = parseOrganizationsFile(organizationsFile);
 
-    // Merge base properties with per-org overrides
-    if (baseCustomProperties) {
-      for (const orgConfig of orgConfigs) {
-        orgConfig.customProperties = mergeCustomProperties(baseCustomProperties, orgConfig.customProperties || []);
+    for (const orgConfig of orgConfigs) {
+      // Per-org custom-properties-file overrides the base for this org
+      const orgBase = orgConfig.customPropertiesFile
+        ? parseCustomPropertiesFile(orgConfig.customPropertiesFile)
+        : baseCustomProperties;
+
+      if (orgBase) {
+        // Inline custom-properties layer on top of the base (per-org file or global file)
+        orgConfig.customProperties = mergeCustomProperties(orgBase, orgConfig.customProperties || []);
       }
+
+      // Clean up the intermediate field
+      delete orgConfig.customPropertiesFile;
     }
 
     return orgConfigs;
@@ -234,6 +245,10 @@ export function parseOrganizationsFile(filePath) {
     validateOrgConfig(orgConfig, orgConfig.org);
 
     const result = { org: orgConfig.org };
+
+    if (orgConfig['custom-properties-file']) {
+      result.customPropertiesFile = orgConfig['custom-properties-file'];
+    }
 
     if (orgConfig['custom-properties']) {
       result.customProperties = normalizeCustomProperties(orgConfig['custom-properties']);

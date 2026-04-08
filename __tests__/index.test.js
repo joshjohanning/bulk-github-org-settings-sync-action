@@ -326,7 +326,7 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
     });
 
     test('should parse organizations file', () => {
-      const samplePath = path.join(__dirname, '..', 'sample-configuration', 'org-settings.yml');
+      const samplePath = path.join(__dirname, '..', 'sample-configuration', 'orgs.yml');
       const result = parseOrganizations('', samplePath, '');
 
       expect(result).toHaveLength(2);
@@ -351,7 +351,7 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
     });
 
     test('should merge base custom-properties-file with per-org overrides in organizations-file', () => {
-      const samplePath = path.join(__dirname, '..', 'sample-configuration', 'org-settings.yml');
+      const samplePath = path.join(__dirname, '..', 'sample-configuration', 'orgs.yml');
       const cpPath = path.join(__dirname, '..', 'sample-configuration', 'custom-properties.yml');
       const result = parseOrganizations('', samplePath, cpPath);
 
@@ -374,7 +374,7 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
     });
 
     test('should parse the sample config', () => {
-      const samplePath = path.join(__dirname, '..', 'sample-configuration', 'org-settings.yml');
+      const samplePath = path.join(__dirname, '..', 'sample-configuration', 'orgs.yml');
       const result = parseOrganizationsFile(samplePath);
 
       expect(result).toHaveLength(2);
@@ -672,7 +672,7 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
     });
 
     test('should process orgs file and set outputs', async () => {
-      const samplePath = path.join(__dirname, '..', 'sample-configuration', 'org-settings.yml');
+      const samplePath = path.join(__dirname, '..', 'sample-configuration', 'orgs.yml');
       const cpPath = path.join(__dirname, '..', 'sample-configuration', 'custom-properties.yml');
 
       mockCore.getInput.mockImplementation(name => {

@@ -1,5 +1,5 @@
 # Organization settings configuration for bulk-github-org-settings-sync-action
-# Use with: organizations-file: './org-settings.yml'
+# Use with: organizations-file: './orgs.yml'
 #
 # Base custom properties can be defined in a separate custom-properties.yml file
 # and provided via the custom-properties-file input. Per-org overrides below
@@ -9,7 +9,7 @@ orgs:
   # Org that inherits all base properties from custom-properties-file as-is
   - org: my-org
 
-  # Org with per-org overrides (adds extra allowed values for "team")
+  # Org with per-org inline overrides (layers on top of base custom-properties-file)
   - org: my-other-org
     custom-properties:
       - name: team

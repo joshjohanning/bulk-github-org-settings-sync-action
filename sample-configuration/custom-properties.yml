@@ -2,7 +2,7 @@
 # Use with: custom-properties-file: './custom-properties.yml'
 #
 # These are the base properties applied to all organizations.
-# Per-org overrides in org-settings.yml layer on top (same name = override).
+# Per-org overrides in orgs.yml layer on top (same name = override).
 
 # Single-select property for team ownership
 - name: team

@@ -39,14 +39,56 @@ Please refer to the [release page](https://github.com/joshjohanning/bulk-github-
 
 ---
 
+## Authentication
+
+### GitHub App (Recommended)
+
+For stronger security and higher rate limits, use a GitHub App:
+
+1. Create a GitHub App with the following permissions:
+   - **Organization Custom Properties**: Admin (required for managing custom property definitions)
+   - **Administration**: Read and write (required for managing organization settings)
+2. Install it to your organization(s)
+3. Add `APP_ID` and `APP_PRIVATE_KEY` as repository secrets
+
+```yml
+- name: Generate GitHub App Token
+  id: app-token
+  uses: actions/create-github-app-token@v3
+  with:
+    app-id: ${{ secrets.APP_ID }}
+    private-key: ${{ secrets.APP_PRIVATE_KEY }}
+    owner: ${{ github.repository_owner }}
+
+- name: Sync Organization Settings
+  uses: joshjohanning/bulk-github-org-settings-sync-action@v1
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    # ... other inputs
+```
+
+### Personal Access Token
+
+Alternatively, use a PAT with `admin:org` scope:
+
+```yml
+- name: Sync Organization Settings
+  uses: joshjohanning/bulk-github-org-settings-sync-action@v1
+  with:
+    github-token: ${{ secrets.ORG_ADMIN_TOKEN }}
+    # ... other inputs
+```
+
+---
+
 ## Organization Selection Methods
 
 This action supports two approaches for selecting which organizations to manage. Choose based on your needs:
 
-| Approach                                                                         | Best For                                                 | Configuration File                           |
-| -------------------------------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------- |
-| [**Option 1: Organization List**](#option-1-organization-list)                   | Simple setup, same settings applied to all orgs          | `custom-properties.yml`                      |
-| [**Option 2: Organizations File**](#option-2-organizations-file-org-settingsyml) | Per-org overrides, different settings for different orgs | `org-settings.yml` + `custom-properties.yml` |
+| Approach                                                                 | Best For                                                 | Configuration File                   |
+| ------------------------------------------------------------------------ | -------------------------------------------------------- | ------------------------------------ |
+| [**Option 1: Organization List**](#option-1-organization-list)           | Simple setup, same settings applied to all orgs          | `custom-properties.yml`              |
+| [**Option 2: Organizations File**](#option-2-organizations-file-orgsyml) | Per-org overrides, different settings for different orgs | `orgs.yml` + `custom-properties.yml` |
 
 ---
 
@@ -67,16 +109,16 @@ List organizations directly via the `organizations` input. All orgs receive the 
 
 ---
 
-### Option 2: Organizations File (`org-settings.yml`)
+### Option 2: Organizations File (`orgs.yml`)
 
 Define organizations in a YAML file with optional per-org setting overrides. Common settings can still be defined via `custom-properties-file` — per-org overrides layer on top (same pattern as [`bulk-github-repo-settings-sync-action`](https://github.com/joshjohanning/bulk-github-repo-settings-sync-action) where action inputs define global defaults and the YAML file provides per-item overrides).
 
 **Best for:** Managing multiple orgs with different settings, or when specific orgs need additional/different custom properties.
 
 > [!TIP]
-> 📄 **See full example:** [sample-configuration/org-settings.yml](sample-configuration/org-settings.yml)
+> 📄 **See full example:** [sample-configuration/orgs.yml](sample-configuration/orgs.yml)
 
-Create an `org-settings.yml` file:
+Create an `orgs.yml` file:
 
 ```yaml
 orgs:
@@ -84,6 +126,7 @@ orgs:
     # No custom-properties → inherits all base properties from custom-properties-file
 
   - org: my-other-org
+    custom-properties-file: './config/custom-properties/other-org.yml' # Override base file for this org
     custom-properties:
       # Override "team" to add extra allowed values for this org
       - name: team
@@ -105,8 +148,8 @@ Use in workflow:
   uses: joshjohanning/bulk-github-org-settings-sync-action@v1
   with:
     github-token: ${{ secrets.ORG_ADMIN_TOKEN }}
-    organizations-file: './org-settings.yml'
-    custom-properties-file: './custom-properties.yml' # Base properties for all orgs
+    organizations-file: './orgs.yml'
+    custom-properties-file: './config/custom-properties/base.yml' # Base properties for all orgs
 ```
 
 **Settings Merging:**
@@ -115,16 +158,16 @@ When using both `custom-properties-file` (base) and per-org `custom-properties` 
 
 ```yaml
 # custom-properties.yml (base):
-- name: team            # → applied to all orgs
-- name: cost-center     # → applied to all orgs
+- name: team             # → applied to all orgs
+- name: cost-center      # → applied to all orgs
 
-# org-settings.yml:
+# orgs.yml:
 orgs:
   - org: my-org          # gets: team + cost-center (base only)
   - org: my-other-org
     custom-properties:
       - name: team       # overrides base "team" with different allowed-values
-                          # gets: team (overridden) + cost-center (from base)
+                         # gets: team (overridden) + cost-center (from base)
 ```
 
 ---
@@ -241,7 +284,8 @@ By default, syncing custom properties will create or update the specified proper
 | `delete-unmanaged-properties` | Delete custom properties not defined in the configuration file                      | No       | `false`                 |
 | `dry-run`                     | Preview changes without applying them                                               | No       | `false`                 |
 
-> **Note:** You must provide either `organizations` or `organizations-file`. The `custom-properties-file` input provides base properties for all orgs and can be combined with either approach. Per-org overrides in `organizations-file` layer on top of the base.
+> [!NOTE]
+> You must provide either `organizations` or `organizations-file`. The `custom-properties-file` input provides base properties for all orgs and can be combined with either approach. Per-org overrides in `organizations-file` layer on top of the base.
 
 ## Action Outputs
 
@@ -253,12 +297,6 @@ By default, syncing custom properties will create or update the specified proper
 | `failed-organizations`    | Number of organizations that failed to update                        |
 | `warning-organizations`   | Number of organizations that emitted warnings                        |
 | `results`                 | JSON array of update results for each organization                   |
-
-## Permissions
-
-This action requires a token with **`admin:org`** scope (classic PAT) or equivalent fine-grained permissions for managing organization custom properties.
-
-When using a **GitHub App**, the app needs the `Organization Custom Properties` permission set to **Read & Write**.
 
 ## Dry-Run Mode
 
@@ -298,3 +336,18 @@ env 'INPUT_GITHUB-TOKEN=ghp_xxx' \
     'INPUT_DRY-RUN=true' \
     node "$(pwd)/src/index.js"
 ```
+
+## Working Example
+
+For a complete working example of this action in use, see the [sync-github-org-settings](https://github.com/joshjohanning/sync-github-org-settings) repository.
+
+## Important Notes
+
+- Settings not specified will remain unchanged
+- Custom properties that already match the config are skipped (no unnecessary API calls)
+- Failed updates are logged as warnings but don't fail the action
+- With `delete-unmanaged-properties: true`, properties not in the config are **deleted** from the organization
+
+## Contributing
+
+Contributions are welcome! See the [Development](#development) section for setup instructions.
