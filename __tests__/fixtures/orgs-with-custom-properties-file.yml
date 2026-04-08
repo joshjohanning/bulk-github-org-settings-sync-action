@@ -1,0 +1,17 @@
+orgs:
+  - org: my-org
+    # Inherits base from action input custom-properties-file
+
+  - org: my-other-org
+    custom-properties-file: './__tests__/fixtures/alt-custom-properties.yml'
+    custom-properties:
+      - name: department
+        value-type: single_select
+        required: true
+        description: 'Department that owns this repository'
+        allowed-values:
+          - engineering
+          - marketing
+          - sales
+          - data-science
+        values-editable-by: org_actors

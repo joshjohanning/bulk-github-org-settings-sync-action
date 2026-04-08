@@ -36,7 +36,7 @@ function getBooleanInput(name) {
  * Known keys for organization config entries in the YAML file.
  * Used to warn about typos or unknown keys.
  */
-const KNOWN_ORG_CONFIG_KEYS = new Set(['org', 'custom-properties']);
+const KNOWN_ORG_CONFIG_KEYS = new Set(['org', 'custom-properties', 'custom-properties-file']);
 
 /**
  * Known keys for custom property definitions in the YAML file.
@@ -142,6 +142,9 @@ function formatSubResultSummary(subResult) {
  * merged with per-org overrides from organizations-file. Per-org properties override
  * base properties with the same name; base properties not overridden are preserved.
  *
+ * Per-org custom-properties-file in the organizations file overrides the base
+ * custom-properties-file from the action input for that org.
+ *
  * Modes:
  *   1. organizations-file (optionally combined with custom-properties-file for base settings)
  *   2. organizations input + custom-properties-file (same properties for all orgs)
@@ -160,11 +163,27 @@ export function parseOrganizations(organizationsInput, organizationsFile, custom
   if (organizationsFile) {
     const orgConfigs = parseOrganizationsFile(organizationsFile);
 
-    // Merge base properties with per-org overrides
-    if (baseCustomProperties) {
-      for (const orgConfig of orgConfigs) {
-        orgConfig.customProperties = mergeCustomProperties(baseCustomProperties, orgConfig.customProperties || []);
+    for (const orgConfig of orgConfigs) {
+      // Per-org custom-properties-file overrides the base for this org
+      let orgBase = baseCustomProperties;
+      if (orgConfig.customPropertiesFile) {
+        try {
+          orgBase = parseCustomPropertiesFile(orgConfig.customPropertiesFile);
+        } catch (error) {
+          throw new Error(
+            `Failed to parse custom properties file "${orgConfig.customPropertiesFile}" for organization "${orgConfig.org}"`,
+            { cause: error }
+          );
+        }
       }
+
+      if (orgBase) {
+        // Inline custom-properties layer on top of the base (per-org file or global file)
+        orgConfig.customProperties = mergeCustomProperties(orgBase, orgConfig.customProperties || []);
+      }
+
+      // Clean up the intermediate field
+      delete orgConfig.customPropertiesFile;
     }
 
     return orgConfigs;
@@ -212,7 +231,7 @@ export function mergeCustomProperties(baseProperties, orgProperties) {
 /**
  * Parse the organizations YAML config file.
  * @param {string} filePath - Path to the YAML file
- * @returns {Array<{ org: string, customProperties?: Array }>}
+ * @returns {Array<{ org: string, customPropertiesFile?: string, customProperties?: Array }>}
  */
 export function parseOrganizationsFile(filePath) {
   if (!fs.existsSync(filePath)) {
@@ -234,6 +253,14 @@ export function parseOrganizationsFile(filePath) {
     validateOrgConfig(orgConfig, orgConfig.org);
 
     const result = { org: orgConfig.org };
+
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'custom-properties-file')) {
+      const cpFile = orgConfig['custom-properties-file'];
+      if (typeof cpFile !== 'string' || cpFile.trim() === '') {
+        throw new Error(`Invalid "custom-properties-file" for org "${orgConfig.org}": expected a non-empty string`);
+      }
+      result.customPropertiesFile = cpFile.trim();
+    }
 
     if (orgConfig['custom-properties']) {
       result.customProperties = normalizeCustomProperties(orgConfig['custom-properties']);
