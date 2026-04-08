@@ -254,7 +254,7 @@ export function parseOrganizationsFile(filePath) {
 
     const result = { org: orgConfig.org };
 
-    if (orgConfig['custom-properties-file']) {
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'custom-properties-file')) {
       const cpFile = orgConfig['custom-properties-file'];
       if (typeof cpFile !== 'string' || cpFile.trim() === '') {
         throw new Error(`Invalid "custom-properties-file" for org "${orgConfig.org}": expected a non-empty string`);
