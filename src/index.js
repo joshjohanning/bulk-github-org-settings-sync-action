@@ -165,9 +165,17 @@ export function parseOrganizations(organizationsInput, organizationsFile, custom
 
     for (const orgConfig of orgConfigs) {
       // Per-org custom-properties-file overrides the base for this org
-      const orgBase = orgConfig.customPropertiesFile
-        ? parseCustomPropertiesFile(orgConfig.customPropertiesFile)
-        : baseCustomProperties;
+      let orgBase = baseCustomProperties;
+      if (orgConfig.customPropertiesFile) {
+        try {
+          orgBase = parseCustomPropertiesFile(orgConfig.customPropertiesFile);
+        } catch (error) {
+          throw new Error(
+            `Failed to parse custom properties file "${orgConfig.customPropertiesFile}" for organization "${orgConfig.org}"`,
+            { cause: error }
+          );
+        }
+      }
 
       if (orgBase) {
         // Inline custom-properties layer on top of the base (per-org file or global file)
@@ -247,7 +255,11 @@ export function parseOrganizationsFile(filePath) {
     const result = { org: orgConfig.org };
 
     if (orgConfig['custom-properties-file']) {
-      result.customPropertiesFile = orgConfig['custom-properties-file'];
+      const cpFile = orgConfig['custom-properties-file'];
+      if (typeof cpFile !== 'string' || cpFile.trim() === '') {
+        throw new Error(`Invalid "custom-properties-file" for org "${orgConfig.org}": expected a non-empty string`);
+      }
+      result.customPropertiesFile = cpFile.trim();
     }
 
     if (orgConfig['custom-properties']) {
