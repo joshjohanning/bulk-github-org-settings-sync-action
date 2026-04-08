@@ -223,7 +223,7 @@ export function mergeCustomProperties(baseProperties, orgProperties) {
 /**
  * Parse the organizations YAML config file.
  * @param {string} filePath - Path to the YAML file
- * @returns {Array<{ org: string, customProperties?: Array }>}
+ * @returns {Array<{ org: string, customPropertiesFile?: string, customProperties?: Array }>}
  */
 export function parseOrganizationsFile(filePath) {
   if (!fs.existsSync(filePath)) {

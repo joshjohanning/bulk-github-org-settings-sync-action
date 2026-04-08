@@ -345,7 +345,7 @@ For a complete working example of this action in use, see the [sync-github-org-s
 
 - Settings not specified will remain unchanged
 - Custom properties that already match the config are skipped (no unnecessary API calls)
-- Failed updates are logged as warnings but don't fail the action
+- Failed updates are logged as warnings but don't fail the action; if one or more organizations fail entirely, the action is marked as failed
 - With `delete-unmanaged-properties: true`, properties not in the config are **deleted** from the organization
 
 ## Contributing
