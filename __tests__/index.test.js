@@ -364,6 +364,26 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
       const teamProp = result[1].customProperties.find(p => p.property_name === 'team');
       expect(teamProp.allowed_values).toContain('data-science');
     });
+
+    test('should use per-org custom-properties-file to override global base', () => {
+      const orgsPath = path.join(__dirname, 'fixtures', 'orgs-with-custom-properties-file.yml');
+      const globalCpPath = path.join(__dirname, '..', 'sample-configuration', 'custom-properties.yml');
+      const result = parseOrganizations('', orgsPath, globalCpPath);
+
+      expect(result).toHaveLength(2);
+      // my-org: no per-org file → uses global base (4 properties)
+      expect(result[0].customProperties.length).toBe(4);
+      expect(result[0].customProperties.find(p => p.property_name === 'team')).toBeDefined();
+
+      // my-other-org: per-org file has 1 property (department), inline overrides it
+      // Result should be department only (from per-org file), not the global base
+      expect(result[1].customProperties.find(p => p.property_name === 'team')).toBeUndefined();
+      const deptProp = result[1].customProperties.find(p => p.property_name === 'department');
+      expect(deptProp).toBeDefined();
+      // Inline override added data-science to allowed_values
+      expect(deptProp.allowed_values).toContain('data-science');
+      expect(deptProp.allowed_values).toContain('engineering');
+    });
   });
 
   // ─── parseOrganizationsFile ─────────────────────────────────────────────

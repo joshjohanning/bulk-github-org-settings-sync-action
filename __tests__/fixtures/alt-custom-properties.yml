@@ -1,0 +1,10 @@
+# Alternative custom properties file for testing per-org custom-properties-file override
+- name: department
+  value-type: single_select
+  required: true
+  description: 'Department that owns this repository'
+  allowed-values:
+    - engineering
+    - marketing
+    - sales
+  values-editable-by: org_actors

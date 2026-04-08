@@ -11,6 +11,7 @@ orgs:
 
   # Org with per-org inline overrides (layers on top of base custom-properties-file)
   - org: my-other-org
+    # custom-properties-file: './config/custom-properties/other-org.yml' # Use a different base file for this org
     custom-properties:
       - name: team
         value-type: single_select
