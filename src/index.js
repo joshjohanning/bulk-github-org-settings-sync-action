@@ -36,7 +36,12 @@ function getBooleanInput(name) {
  * Known keys for organization config entries in the YAML file.
  * Used to warn about typos or unknown keys.
  */
-const KNOWN_ORG_CONFIG_KEYS = new Set(['org', 'custom-properties', 'custom-properties-file']);
+const KNOWN_ORG_CONFIG_KEYS = new Set([
+  'org',
+  'custom-properties',
+  'custom-properties-file',
+  'delete-unmanaged-properties'
+]);
 
 /**
  * Known keys for custom property definitions in the YAML file.
@@ -231,7 +236,7 @@ export function mergeCustomProperties(baseProperties, orgProperties) {
 /**
  * Parse the organizations YAML config file.
  * @param {string} filePath - Path to the YAML file
- * @returns {Array<{ org: string, customPropertiesFile?: string, customProperties?: Array }>}
+ * @returns {Array<{ org: string, customPropertiesFile?: string, customProperties?: Array, deleteUnmanagedProperties?: boolean }>}
  */
 export function parseOrganizationsFile(filePath) {
   if (!fs.existsSync(filePath)) {
@@ -264,6 +269,14 @@ export function parseOrganizationsFile(filePath) {
 
     if (orgConfig['custom-properties']) {
       result.customProperties = normalizeCustomProperties(orgConfig['custom-properties']);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'delete-unmanaged-properties')) {
+      const val = orgConfig['delete-unmanaged-properties'];
+      if (typeof val !== 'boolean') {
+        throw new Error(`Invalid "delete-unmanaged-properties" for org "${orgConfig.org}": expected a boolean`);
+      }
+      result.deleteUnmanagedProperties = val;
     }
 
     return result;
@@ -613,7 +626,7 @@ export async function run() {
             octokit,
             org,
             orgConfig.customProperties,
-            deleteUnmanagedProperties,
+            orgConfig.deleteUnmanagedProperties ?? deleteUnmanagedProperties,
             dryRun
           );
           result.subResults.push(...cpResult.subResults);

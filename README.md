@@ -127,6 +127,7 @@ orgs:
 
   - org: my-other-org
     custom-properties-file: './config/custom-properties/other-org.yml' # Override base file for this org
+    delete-unmanaged-properties: true # Override the action input for this org
     custom-properties:
       # Override "team" to add extra allowed values for this org
       - name: team
