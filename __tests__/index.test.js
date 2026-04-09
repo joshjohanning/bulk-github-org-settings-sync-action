@@ -384,6 +384,17 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
       expect(deptProp.allowed_values).toContain('data-science');
       expect(deptProp.allowed_values).toContain('engineering');
     });
+
+    test('should parse per-org delete-unmanaged-properties override', () => {
+      const orgsPath = path.join(__dirname, 'fixtures', 'orgs-with-delete-unmanaged.yml');
+      const result = parseOrganizations('', orgsPath, '');
+
+      expect(result).toHaveLength(2);
+      // my-org: no override → deleteUnmanagedProperties not set
+      expect(result[0].deleteUnmanagedProperties).toBeUndefined();
+      // my-other-org: override set to true
+      expect(result[1].deleteUnmanagedProperties).toBe(true);
+    });
   });
 
   // ─── parseOrganizationsFile ─────────────────────────────────────────────
