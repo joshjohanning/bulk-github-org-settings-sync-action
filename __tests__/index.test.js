@@ -1338,6 +1338,8 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
       expect(result.subResults).toHaveLength(1);
       expect(result.subResults[0].kind).toBe('ruleset-create');
       expect(result.subResults[0].status).toBe('changed');
+      // Verify paginate is used for listing (not request)
+      expect(mockPaginate).toHaveBeenCalledWith('GET /orgs/{org}/rulesets', { org: 'my-org' });
       expect(mockRequest).toHaveBeenCalledWith(
         'POST /orgs/{org}/rulesets',
         expect.objectContaining({
