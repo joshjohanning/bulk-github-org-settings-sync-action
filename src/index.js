@@ -733,21 +733,31 @@ function deepEqual(a, b) {
 }
 
 /**
- * Supported fields for org ruleset create/update requests.
- * Strips read-only/API-only fields from exported rulesets.
+ * Read-only fields returned by GET that should be stripped before POST/PUT.
+ * Using a blocklist (instead of whitelist) so new fields GitHub adds are
+ * passed through without requiring an action update.
  */
-const RULESET_REQUEST_FIELDS = ['name', 'target', 'enforcement', 'bypass_actors', 'conditions', 'rules'];
+const RULESET_READONLY_FIELDS = new Set([
+  'id',
+  'node_id',
+  'source',
+  'source_type',
+  'created_at',
+  'updated_at',
+  '_links',
+  'current_user_can_bypass'
+]);
 
 /**
- * Pick only supported request fields from a ruleset config.
- * @param {Object} config - Full ruleset configuration
- * @returns {Object} Filtered config with only supported fields
+ * Strip read-only fields from a ruleset config for create/update requests.
+ * @param {Object} config - Full ruleset configuration (possibly exported from API)
+ * @returns {Object} Config with read-only fields removed
  */
-function pickRulesetRequestFields(config) {
+function stripRulesetReadonlyFields(config) {
   const result = {};
-  for (const key of RULESET_REQUEST_FIELDS) {
-    if (config[key] !== undefined) {
-      result[key] = config[key];
+  for (const [key, value] of Object.entries(config)) {
+    if (!RULESET_READONLY_FIELDS.has(key)) {
+      result[key] = value;
     }
   }
   return result;
@@ -882,7 +892,7 @@ export async function syncOrgRulesets(octokit, org, rulesetFilePaths, deleteUnma
             await octokit.request('PUT /orgs/{org}/rulesets/{ruleset_id}', {
               org,
               ruleset_id: existingRuleset.id,
-              ...pickRulesetRequestFields(rulesetConfig)
+              ...stripRulesetReadonlyFields(rulesetConfig)
             });
           } catch (error) {
             core.warning(`  ⚠️  Failed to update ruleset "${rulesetName}": ${error.message}`);
@@ -906,7 +916,7 @@ export async function syncOrgRulesets(octokit, org, rulesetFilePaths, deleteUnma
         try {
           const { data: newRuleset } = await octokit.request('POST /orgs/{org}/rulesets', {
             org,
-            ...pickRulesetRequestFields(rulesetConfig)
+            ...stripRulesetReadonlyFields(rulesetConfig)
           });
           core.info(`  📋 Created ruleset "${rulesetName}" (ID: ${newRuleset.id})`);
         } catch (error) {
