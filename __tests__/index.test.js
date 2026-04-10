@@ -973,6 +973,143 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
       expect(result.subResults[0].status).toBe('warning');
       expect(result.subResults[0].message).toContain('Failed');
     });
+
+    test('should support multiple rulesets in an array', async () => {
+      // Create a temp file with an array of rulesets
+      const tmpPath = '/tmp/test-multi-rulesets.json';
+      const multiRulesets = [
+        {
+          name: 'branch-protection',
+          target: 'branch',
+          enforcement: 'active',
+          rules: [{ type: 'deletion' }]
+        },
+        {
+          name: 'tag-protection',
+          target: 'tag',
+          enforcement: 'active',
+          rules: [{ type: 'deletion' }]
+        }
+      ];
+      (await import('fs')).writeFileSync(tmpPath, JSON.stringify(multiRulesets));
+
+      // Mock: no existing rulesets
+      mockRequest.mockResolvedValueOnce({ data: [] });
+      // Mock: successful POST for first ruleset
+      mockRequest.mockResolvedValueOnce({ data: { id: 100 } });
+      // Mock: successful POST for second ruleset
+      mockRequest.mockResolvedValueOnce({ data: { id: 200 } });
+
+      const result = await syncOrgRulesets(mockOctokit, 'my-org', tmpPath, false, false);
+
+      expect(result.subResults).toHaveLength(2);
+      expect(result.subResults[0].kind).toBe('ruleset-create');
+      expect(result.subResults[0].message).toContain('branch-protection');
+      expect(result.subResults[1].kind).toBe('ruleset-create');
+      expect(result.subResults[1].message).toContain('tag-protection');
+    });
+
+    test('should delete unmanaged rulesets preserving all managed names', async () => {
+      // Create a temp file with two managed rulesets
+      const tmpPath = '/tmp/test-multi-rulesets-delete.json';
+      const multiRulesets = [
+        {
+          name: 'branch-protection',
+          target: 'branch',
+          enforcement: 'active',
+          rules: [{ type: 'deletion' }]
+        },
+        {
+          name: 'tag-protection',
+          target: 'tag',
+          enforcement: 'active',
+          rules: [{ type: 'deletion' }]
+        }
+      ];
+      (await import('fs')).writeFileSync(tmpPath, JSON.stringify(multiRulesets));
+
+      // Mock: existing rulesets include both managed + one unmanaged
+      mockRequest.mockResolvedValueOnce({
+        data: [
+          { id: 100, name: 'branch-protection' },
+          { id: 200, name: 'tag-protection' },
+          { id: 999, name: 'old-ruleset' }
+        ]
+      });
+      // Mock: full details for branch-protection (matches)
+      mockRequest.mockResolvedValueOnce({
+        data: {
+          id: 100,
+          name: 'branch-protection',
+          target: 'branch',
+          enforcement: 'active',
+          rules: [{ type: 'deletion' }]
+        }
+      });
+      // Mock: full details for tag-protection (matches)
+      mockRequest.mockResolvedValueOnce({
+        data: { id: 200, name: 'tag-protection', target: 'tag', enforcement: 'active', rules: [{ type: 'deletion' }] }
+      });
+      // Mock: successful DELETE of unmanaged
+      mockRequest.mockResolvedValueOnce({ data: {} });
+
+      const result = await syncOrgRulesets(mockOctokit, 'my-org', tmpPath, true, false);
+
+      // Only the delete should be a sub-result (both managed are unchanged)
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('ruleset-delete');
+      expect(result.subResults[0].message).toContain('old-ruleset');
+      expect(mockRequest).toHaveBeenCalledWith('DELETE /orgs/{org}/rulesets/{ruleset_id}', {
+        org: 'my-org',
+        ruleset_id: 999
+      });
+    });
+
+    test('should handle mixed create and update with multiple rulesets', async () => {
+      const tmpPath = '/tmp/test-multi-rulesets-mixed.json';
+      const multiRulesets = [
+        {
+          name: 'existing-ruleset',
+          target: 'branch',
+          enforcement: 'active',
+          rules: [{ type: 'deletion' }, { type: 'non_fast_forward' }]
+        },
+        {
+          name: 'new-ruleset',
+          target: 'tag',
+          enforcement: 'evaluate',
+          rules: [{ type: 'deletion' }]
+        }
+      ];
+      (await import('fs')).writeFileSync(tmpPath, JSON.stringify(multiRulesets));
+
+      // Mock: one existing ruleset with different config
+      mockRequest.mockResolvedValueOnce({
+        data: [{ id: 100, name: 'existing-ruleset' }]
+      });
+      // Mock: full details (different enforcement)
+      mockRequest.mockResolvedValueOnce({
+        data: {
+          id: 100,
+          name: 'existing-ruleset',
+          target: 'branch',
+          enforcement: 'disabled',
+          rules: [{ type: 'deletion' }]
+        }
+      });
+      // Mock: successful PUT for update
+      mockRequest.mockResolvedValueOnce({ data: {} });
+      // Mock: successful POST for new
+      mockRequest.mockResolvedValueOnce({ data: { id: 200 } });
+
+      const result = await syncOrgRulesets(mockOctokit, 'my-org', tmpPath, false, false);
+
+      expect(result.subResults).toHaveLength(2);
+      expect(result.subResults[0].kind).toBe('ruleset-update');
+      expect(result.subResults[0].message).toContain('existing-ruleset');
+      expect(result.subResults[1].kind).toBe('ruleset-create');
+      expect(result.subResults[1].message).toContain('new-ruleset');
+    });
   });
 
   // ─── parseOrganizations with rulesets ─────────────────────────────────

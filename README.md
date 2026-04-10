@@ -278,70 +278,95 @@ By default, syncing custom properties will create or update the specified proper
 
 ## Syncing Organization Rulesets
 
-Sync organization-level rulesets across organizations. Rulesets define rules that apply to repositories within the organization (e.g., branch protection rules, tag rules).
+Sync organization-level rulesets across organizations. Rulesets define rules that apply to repositories within the organization (e.g., branch protection rules, tag rules). The JSON file supports both a single ruleset object and an array of multiple rulesets.
 
 > [!TIP]
 > 📄 **See full example:** [sample-configuration/rulesets.json](sample-configuration/rulesets.json)
 
-Create a `rulesets.json` file:
+Create a `rulesets.json` file with one or more rulesets:
 
 ```json
-{
-  "name": "org-branch-protection",
-  "target": "branch",
-  "enforcement": "active",
-  "bypass_actors": [
-    {
-      "actor_id": 5,
-      "actor_type": "RepositoryRole",
-      "bypass_mode": "always"
-    }
-  ],
-  "conditions": {
-    "ref_name": {
-      "include": ["~DEFAULT_BRANCH"],
-      "exclude": []
-    },
-    "repository_name": {
-      "include": ["~ALL"],
-      "exclude": []
-    }
-  },
-  "rules": [
-    {
-      "type": "deletion"
-    },
-    {
-      "type": "non_fast_forward"
-    },
-    {
-      "type": "pull_request",
-      "parameters": {
-        "required_approving_review_count": 1,
-        "dismiss_stale_reviews_on_push": true,
-        "require_code_owner_review": false,
-        "require_last_push_approval": false,
-        "required_review_thread_resolution": false,
-        "automatic_copilot_code_review_enabled": false
+[
+  {
+    "name": "org-branch-protection",
+    "target": "branch",
+    "enforcement": "active",
+    "bypass_actors": [
+      {
+        "actor_id": 5,
+        "actor_type": "RepositoryRole",
+        "bypass_mode": "always"
       }
-    }
-  ]
-}
+    ],
+    "conditions": {
+      "ref_name": {
+        "include": ["~DEFAULT_BRANCH"],
+        "exclude": []
+      },
+      "repository_name": {
+        "include": ["~ALL"],
+        "exclude": []
+      }
+    },
+    "rules": [
+      {
+        "type": "deletion"
+      },
+      {
+        "type": "non_fast_forward"
+      },
+      {
+        "type": "pull_request",
+        "parameters": {
+          "required_approving_review_count": 1,
+          "dismiss_stale_reviews_on_push": true,
+          "require_code_owner_review": false,
+          "require_last_push_approval": false,
+          "required_review_thread_resolution": false,
+          "automatic_copilot_code_review_enabled": false
+        }
+      }
+    ]
+  },
+  {
+    "name": "org-tag-protection",
+    "target": "tag",
+    "enforcement": "active",
+    "conditions": {
+      "ref_name": {
+        "include": ["~ALL"],
+        "exclude": []
+      },
+      "repository_name": {
+        "include": ["~ALL"],
+        "exclude": []
+      }
+    },
+    "rules": [
+      {
+        "type": "deletion"
+      },
+      {
+        "type": "non_fast_forward"
+      }
+    ]
+  }
+]
 ```
 
 > [!TIP]
-> The JSON format matches the [GitHub REST API for organization rulesets](https://docs.github.com/en/rest/orgs/rules). You can export an existing ruleset from your organization via the API and use it as-is.
+> The JSON format matches the [GitHub REST API for organization rulesets](https://docs.github.com/en/rest/orgs/rules). You can export an existing ruleset from your organization via the API and use it as-is. A single ruleset object (without the array wrapper) is also accepted.
 
 **Behavior:**
 
 - If a ruleset with the same name doesn't exist, it is created
 - If it exists but differs from the config, it is updated
 - If content is identical, no changes are made
-- With `delete-unmanaged-rulesets: true`, rulesets not matching the managed name are deleted
+- With `delete-unmanaged-rulesets: true`, rulesets not matching any managed name are deleted
 
 ### Delete Unmanaged Rulesets
 
-By default, syncing rulesets will create or update the specified ruleset, but will not delete other rulesets that may exist in the organization. To delete all other rulesets besides the one being synced, use `delete-unmanaged-rulesets`:
+By default, syncing rulesets will create or update the specified rulesets, but will not delete other rulesets that may exist in the organization. To delete all other rulesets besides those being synced, use `delete-unmanaged-rulesets`:
 
 ```yml
 - name: Sync Organization Settings
@@ -357,24 +382,24 @@ By default, syncing rulesets will create or update the specified ruleset, but wi
 
 - Creates rulesets that don't exist
 - Updates rulesets that differ from the config
-- **Deletes all other rulesets not matching the managed ruleset name**
+- **Deletes all other rulesets not matching any managed ruleset name**
 - In dry-run mode, shows which rulesets would be deleted without actually deleting them
 
 ---
 
 ## Action Inputs
 
-| Input                         | Description                                                                         | Required | Default                 |
-| ----------------------------- | ----------------------------------------------------------------------------------- | -------- | ----------------------- |
-| `github-token`                | GitHub token for API access (requires `admin:org` scope)                            | Yes      |                         |
-| `github-api-url`              | GitHub API URL (e.g., `https://api.github.com` or `https://ghes.domain.com/api/v3`) | No       | `${{ github.api_url }}` |
-| `organizations`               | Comma-separated list of organization names                                          | No       |                         |
-| `organizations-file`          | Path to YAML file containing organization settings configuration                    | No       |                         |
-| `custom-properties-file`      | Path to a YAML file defining custom property schemas                                | No       |                         |
-| `delete-unmanaged-properties` | Delete custom properties not defined in the configuration file                      | No       | `false`                 |
-| `rulesets-file`               | Path to a JSON file containing organization ruleset configuration                   | No       |                         |
-| `delete-unmanaged-rulesets`   | Delete all other rulesets besides the one being synced                              | No       | `false`                 |
-| `dry-run`                     | Preview changes without applying them                                               | No       | `false`                 |
+| Input                         | Description                                                                                             | Required | Default                 |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------- | -------- | ----------------------- |
+| `github-token`                | GitHub token for API access (requires `admin:org` scope)                                                | Yes      |                         |
+| `github-api-url`              | GitHub API URL (e.g., `https://api.github.com` or `https://ghes.domain.com/api/v3`)                     | No       | `${{ github.api_url }}` |
+| `organizations`               | Comma-separated list of organization names                                                              | No       |                         |
+| `organizations-file`          | Path to YAML file containing organization settings configuration                                        | No       |                         |
+| `custom-properties-file`      | Path to a YAML file defining custom property schemas                                                    | No       |                         |
+| `delete-unmanaged-properties` | Delete custom properties not defined in the configuration file                                          | No       | `false`                 |
+| `rulesets-file`               | Path to a JSON file containing one or more organization ruleset configurations (single object or array) | No       |                         |
+| `delete-unmanaged-rulesets`   | Delete all other rulesets besides those being synced                                                    | No       | `false`                 |
+| `dry-run`                     | Preview changes without applying them                                                                   | No       | `false`                 |
 
 > [!NOTE]
 > You must provide either `organizations` or `organizations-file`. The `custom-properties-file` and `rulesets-file` inputs provide base settings for all orgs and can be combined with either approach. Per-org overrides in `organizations-file` layer on top of the base.

@@ -34,10 +34,10 @@ inputs:
 
   # === Rulesets ===
   rulesets-file:
-    description: 'Path to a JSON file containing organization ruleset configuration to sync to target organizations'
+    description: 'Path to a JSON file containing one or more organization ruleset configurations to sync (single object or array)'
     required: false
   delete-unmanaged-rulesets:
-    description: 'Delete all other rulesets besides the one being synced'
+    description: 'Delete all other rulesets besides those being synced'
     required: false
     default: 'false'
 

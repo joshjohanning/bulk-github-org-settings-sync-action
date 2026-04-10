@@ -572,9 +572,11 @@ export async function syncCustomProperties(octokit, org, desiredProperties, dele
 
 /**
  * Sync organization-level rulesets.
- * Reads a JSON file containing a ruleset configuration, compares with existing
- * rulesets, and creates/updates/deletes as needed (mirroring the repo-level
+ * Reads a JSON file containing one or more ruleset configurations, compares with
+ * existing rulesets, and creates/updates/deletes as needed (mirroring the repo-level
  * rulesets sync in bulk-github-repo-settings-sync-action).
+ *
+ * The JSON file may contain either a single ruleset object or an array of rulesets.
  * @param {Octokit} octokit - Octokit instance
  * @param {string} org - Organization name
  * @param {string} rulesetFilePath - Path to the ruleset JSON file
@@ -587,20 +589,25 @@ export async function syncOrgRulesets(octokit, org, rulesetFilePath, deleteUnman
   const wouldPrefix = dryRun ? 'Would ' : '';
 
   // Read and parse the ruleset JSON file
-  let rulesetConfig;
+  let rulesetConfigs;
   try {
     const fileContent = fs.readFileSync(rulesetFilePath, 'utf8');
-    rulesetConfig = JSON.parse(fileContent);
+    const parsed = JSON.parse(fileContent);
+    // Support both a single ruleset object and an array of rulesets
+    rulesetConfigs = Array.isArray(parsed) ? parsed : [parsed];
   } catch (error) {
     throw new Error(`Failed to read or parse ruleset file at ${rulesetFilePath}: ${error.message}`);
   }
 
-  // Validate that the ruleset has a name
-  if (!rulesetConfig.name) {
-    throw new Error('Ruleset configuration must include a "name" field');
+  // Validate that every ruleset has a name
+  for (const rulesetConfig of rulesetConfigs) {
+    if (!rulesetConfig.name) {
+      throw new Error('Each ruleset configuration must include a "name" field');
+    }
   }
 
-  const rulesetName = rulesetConfig.name;
+  // Collect managed names for delete-unmanaged logic
+  const managedNames = new Set(rulesetConfigs.map(r => r.name));
 
   // Fetch existing org rulesets
   let existingRulesets;
@@ -615,97 +622,100 @@ export async function syncOrgRulesets(octokit, org, rulesetFilePath, deleteUnman
     }
   }
 
-  // Check if a ruleset with the same name already exists
-  const existingRuleset = existingRulesets.find(r => r.name === rulesetName);
+  // Process each desired ruleset
+  for (const rulesetConfig of rulesetConfigs) {
+    const rulesetName = rulesetConfig.name;
+    const existingRuleset = existingRulesets.find(r => r.name === rulesetName);
 
-  if (existingRuleset) {
-    // Fetch full ruleset details to compare
-    const { data: fullRuleset } = await octokit.request('GET /orgs/{org}/rulesets/{ruleset_id}', {
-      org,
-      ruleset_id: existingRuleset.id
-    });
+    if (existingRuleset) {
+      // Fetch full ruleset details to compare
+      const { data: fullRuleset } = await octokit.request('GET /orgs/{org}/rulesets/{ruleset_id}', {
+        org,
+        ruleset_id: existingRuleset.id
+      });
 
-    // Normalize existing config for comparison (remove API-only fields)
-    const existingConfig = {
-      name: fullRuleset.name,
-      target: fullRuleset.target,
-      enforcement: fullRuleset.enforcement,
-      ...(fullRuleset.bypass_actors && { bypass_actors: fullRuleset.bypass_actors }),
-      ...(fullRuleset.conditions && { conditions: fullRuleset.conditions }),
-      rules: fullRuleset.rules
-    };
+      // Normalize existing config for comparison (remove API-only fields)
+      const existingConfig = {
+        name: fullRuleset.name,
+        target: fullRuleset.target,
+        enforcement: fullRuleset.enforcement,
+        ...(fullRuleset.bypass_actors && { bypass_actors: fullRuleset.bypass_actors }),
+        ...(fullRuleset.conditions && { conditions: fullRuleset.conditions }),
+        rules: fullRuleset.rules
+      };
 
-    // Normalize source config for comparison
-    const normalizedSourceConfig = {
-      name: rulesetConfig.name,
-      target: rulesetConfig.target,
-      enforcement: rulesetConfig.enforcement,
-      ...(rulesetConfig.bypass_actors && { bypass_actors: rulesetConfig.bypass_actors }),
-      ...(rulesetConfig.conditions && { conditions: rulesetConfig.conditions }),
-      rules: rulesetConfig.rules
-    };
+      // Normalize source config for comparison
+      const normalizedSourceConfig = {
+        name: rulesetConfig.name,
+        target: rulesetConfig.target,
+        enforcement: rulesetConfig.enforcement,
+        ...(rulesetConfig.bypass_actors && { bypass_actors: rulesetConfig.bypass_actors }),
+        ...(rulesetConfig.conditions && { conditions: rulesetConfig.conditions }),
+        rules: rulesetConfig.rules
+      };
 
-    const configsMatch = JSON.stringify(existingConfig) === JSON.stringify(normalizedSourceConfig);
+      const configsMatch = JSON.stringify(existingConfig) === JSON.stringify(normalizedSourceConfig);
 
-    if (configsMatch) {
-      core.info(`  📋 Ruleset "${rulesetName}" is already up to date`);
+      if (configsMatch) {
+        core.info(`  📋 Ruleset "${rulesetName}" is already up to date`);
+      } else {
+        // Update existing ruleset
+        core.info(`  📋 ${wouldPrefix}Update ruleset: ${rulesetName} (ID: ${existingRuleset.id})`);
+        subResults.push(
+          createSubResult(
+            'ruleset-update',
+            SubResultStatus.CHANGED,
+            `${wouldPrefix}update "${rulesetName}" (ID: ${existingRuleset.id})`
+          )
+        );
+
+        if (!dryRun) {
+          try {
+            await octokit.request('PUT /orgs/{org}/rulesets/{ruleset_id}', {
+              org,
+              ruleset_id: existingRuleset.id,
+              ...rulesetConfig
+            });
+          } catch (error) {
+            core.warning(`  ⚠️  Failed to update ruleset "${rulesetName}": ${error.message}`);
+            subResults[subResults.length - 1] = createSubResult(
+              'ruleset-update',
+              SubResultStatus.WARNING,
+              `Failed to update "${rulesetName}": ${error.message}`
+            );
+          }
+        }
+      }
     } else {
-      // Update existing ruleset
-      core.info(`  📋 ${wouldPrefix}Update ruleset: ${rulesetName} (ID: ${existingRuleset.id})`);
+      // Create new ruleset
+      core.info(`  🆕 ${wouldPrefix}Create ruleset: ${rulesetName}`);
       subResults.push(
-        createSubResult(
-          'ruleset-update',
-          SubResultStatus.CHANGED,
-          `${wouldPrefix}update "${rulesetName}" (ID: ${existingRuleset.id})`
-        )
+        createSubResult('ruleset-create', SubResultStatus.CHANGED, `${wouldPrefix}create "${rulesetName}"`)
       );
 
       if (!dryRun) {
         try {
-          await octokit.request('PUT /orgs/{org}/rulesets/{ruleset_id}', {
+          const { data: newRuleset } = await octokit.request('POST /orgs/{org}/rulesets', {
             org,
-            ruleset_id: existingRuleset.id,
             ...rulesetConfig
           });
+          core.info(`  📋 Created ruleset "${rulesetName}" (ID: ${newRuleset.id})`);
         } catch (error) {
-          core.warning(`  ⚠️  Failed to update ruleset "${rulesetName}": ${error.message}`);
+          core.warning(`  ⚠️  Failed to create ruleset "${rulesetName}": ${error.message}`);
           subResults[subResults.length - 1] = createSubResult(
-            'ruleset-update',
+            'ruleset-create',
             SubResultStatus.WARNING,
-            `Failed to update "${rulesetName}": ${error.message}`
+            `Failed to create "${rulesetName}": ${error.message}`
           );
         }
       }
     }
-  } else {
-    // Create new ruleset
-    core.info(`  🆕 ${wouldPrefix}Create ruleset: ${rulesetName}`);
-    subResults.push(
-      createSubResult('ruleset-create', SubResultStatus.CHANGED, `${wouldPrefix}create "${rulesetName}"`)
-    );
-
-    if (!dryRun) {
-      try {
-        const { data: newRuleset } = await octokit.request('POST /orgs/{org}/rulesets', {
-          org,
-          ...rulesetConfig
-        });
-        core.info(`  📋 Created ruleset "${rulesetName}" (ID: ${newRuleset.id})`);
-      } catch (error) {
-        core.warning(`  ⚠️  Failed to create ruleset "${rulesetName}": ${error.message}`);
-        subResults[subResults.length - 1] = createSubResult(
-          'ruleset-create',
-          SubResultStatus.WARNING,
-          `Failed to create "${rulesetName}": ${error.message}`
-        );
-      }
-    }
   }
 
-  // Delete unmanaged rulesets
+  // Delete unmanaged rulesets (those not in the managed set)
   if (deleteUnmanaged) {
     for (const existing of existingRulesets) {
-      if (existing.name !== rulesetName) {
+      if (!managedNames.has(existing.name)) {
         core.info(`  🗑️ ${wouldPrefix}Delete ruleset: ${existing.name} (ID: ${existing.id})`);
         subResults.push(
           createSubResult(
