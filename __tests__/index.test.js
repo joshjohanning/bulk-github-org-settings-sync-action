@@ -84,11 +84,14 @@ const mockCore = {
 };
 
 // Mock octokit request function
+// Mock octokit request and paginate functions
 const mockRequest = jest.fn();
+const mockPaginate = jest.fn();
 
 // Mock octokit instance
 const mockOctokit = {
-  request: mockRequest
+  request: mockRequest,
+  paginate: mockPaginate
 };
 
 // Mock the modules before importing the main module
@@ -119,6 +122,7 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockRequest.mockReset();
+    mockPaginate.mockReset();
     setupDefaultMocks();
     resetKnownOrgConfigKeysCache();
   });
@@ -1267,7 +1271,7 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
       });
 
       // Mock: no existing rulesets
-      mockRequest.mockResolvedValueOnce({ data: [] });
+      mockPaginate.mockResolvedValueOnce([]);
 
       await run();
 
@@ -1325,7 +1329,7 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
 
     test('should create new ruleset when none exist', async () => {
       // Mock: no existing rulesets
-      mockRequest.mockResolvedValueOnce({ data: [] });
+      mockPaginate.mockResolvedValueOnce([]);
       // Mock: successful POST
       mockRequest.mockResolvedValueOnce({ data: { id: 123 } });
 
@@ -1344,12 +1348,10 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
     });
 
     test('should detect no changes for identical ruleset', async () => {
-      const rulesetConfig = JSON.parse((await import('fs')).readFileSync(rulesetPath, 'utf8'));
+      const rulesetConfig = JSON.parse(mockFs.readFileSync(rulesetPath, 'utf8'));
 
       // Mock: existing ruleset with same name
-      mockRequest.mockResolvedValueOnce({
-        data: [{ id: 123, name: 'test-ruleset' }]
-      });
+      mockPaginate.mockResolvedValueOnce([{ id: 123, name: 'test-ruleset' }]);
       // Mock: full ruleset details matching config
       mockRequest.mockResolvedValueOnce({
         data: {
@@ -1361,15 +1363,13 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
       const result = await syncOrgRulesets(mockOctokit, 'my-org', [rulesetPath], false, false);
 
       expect(result.subResults).toHaveLength(0);
-      // Only GET list + GET detail, no PUT
-      expect(mockRequest).toHaveBeenCalledTimes(2);
+      // Only GET detail (list is via paginate), no PUT
+      expect(mockRequest).toHaveBeenCalledTimes(1);
     });
 
     test('should detect and apply updates when ruleset differs', async () => {
       // Mock: existing ruleset with same name but different enforcement
-      mockRequest.mockResolvedValueOnce({
-        data: [{ id: 123, name: 'test-ruleset' }]
-      });
+      mockPaginate.mockResolvedValueOnce([{ id: 123, name: 'test-ruleset' }]);
       // Mock: full ruleset details with different enforcement
       mockRequest.mockResolvedValueOnce({
         data: {
@@ -1403,14 +1403,12 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
 
     test('should delete unmanaged rulesets when flag is set', async () => {
       // Mock: existing rulesets include unmanaged one
-      mockRequest.mockResolvedValueOnce({
-        data: [
-          { id: 123, name: 'test-ruleset' },
-          { id: 456, name: 'old-ruleset' }
-        ]
-      });
+      mockPaginate.mockResolvedValueOnce([
+        { id: 123, name: 'test-ruleset' },
+        { id: 456, name: 'old-ruleset' }
+      ]);
       // Mock: full details for matching ruleset
-      const rulesetConfig = JSON.parse((await import('fs')).readFileSync(rulesetPath, 'utf8'));
+      const rulesetConfig = JSON.parse(mockFs.readFileSync(rulesetPath, 'utf8'));
       mockRequest.mockResolvedValueOnce({
         data: { id: 123, ...rulesetConfig }
       });
@@ -1430,14 +1428,12 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
 
     test('should not delete unmanaged rulesets when flag is not set', async () => {
       // Mock: existing rulesets include unmanaged one
-      mockRequest.mockResolvedValueOnce({
-        data: [
-          { id: 123, name: 'test-ruleset' },
-          { id: 456, name: 'old-ruleset' }
-        ]
-      });
+      mockPaginate.mockResolvedValueOnce([
+        { id: 123, name: 'test-ruleset' },
+        { id: 456, name: 'old-ruleset' }
+      ]);
       // Mock: full details for matching ruleset
-      const rulesetConfig = JSON.parse((await import('fs')).readFileSync(rulesetPath, 'utf8'));
+      const rulesetConfig = JSON.parse(mockFs.readFileSync(rulesetPath, 'utf8'));
       mockRequest.mockResolvedValueOnce({
         data: { id: 123, ...rulesetConfig }
       });
@@ -1445,12 +1441,12 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
       const result = await syncOrgRulesets(mockOctokit, 'my-org', [rulesetPath], false, false);
 
       expect(result.subResults).toHaveLength(0);
-      // Only GET list + GET detail, no DELETE
-      expect(mockRequest).toHaveBeenCalledTimes(2);
+      // Only GET detail (list is via paginate), no DELETE
+      expect(mockRequest).toHaveBeenCalledTimes(1);
     });
 
     test('should handle dry-run mode for new ruleset', async () => {
-      mockRequest.mockResolvedValueOnce({ data: [] });
+      mockPaginate.mockResolvedValueOnce([]);
 
       const result = await syncOrgRulesets(mockOctokit, 'my-org', [rulesetPath], false, true);
 
@@ -1458,14 +1454,14 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
       expect(result.subResults[0].kind).toBe('ruleset-create');
       expect(result.subResults[0].status).toBe('changed');
       expect(result.subResults[0].message).toContain('Would');
-      // Only GET list, no POST
-      expect(mockRequest).toHaveBeenCalledTimes(1);
+      // No POST in dry-run
+      expect(mockRequest).not.toHaveBeenCalled();
     });
 
     test('should handle 404 on GET as empty rulesets', async () => {
       const error404 = new Error('Not Found');
       error404.status = 404;
-      mockRequest.mockRejectedValueOnce(error404);
+      mockPaginate.mockRejectedValueOnce(error404);
       // Mock: successful POST
       mockRequest.mockResolvedValueOnce({ data: { id: 789 } });
 
@@ -1491,7 +1487,7 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
     });
 
     test('should handle API error on create gracefully', async () => {
-      mockRequest.mockResolvedValueOnce({ data: [] });
+      mockPaginate.mockResolvedValueOnce([]);
       mockRequest.mockRejectedValueOnce(new Error('Forbidden'));
 
       const result = await syncOrgRulesets(mockOctokit, 'my-org', [rulesetPath], false, false);
@@ -1503,7 +1499,7 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
 
     test('should support multiple separate ruleset files', async () => {
       // Mock: no existing rulesets
-      mockRequest.mockResolvedValueOnce({ data: [] });
+      mockPaginate.mockResolvedValueOnce([]);
       // Mock: successful POST for first ruleset
       mockRequest.mockResolvedValueOnce({ data: { id: 100 } });
       // Mock: successful POST for second ruleset
@@ -1519,17 +1515,15 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
     });
 
     test('should delete unmanaged rulesets preserving all managed names from separate files', async () => {
-      const rulesetConfig = JSON.parse((await import('fs')).readFileSync(rulesetPath, 'utf8'));
-      const tagRulesetConfig = JSON.parse((await import('fs')).readFileSync(tagRulesetPath, 'utf8'));
+      const rulesetConfig = JSON.parse(mockFs.readFileSync(rulesetPath, 'utf8'));
+      const tagRulesetConfig = JSON.parse(mockFs.readFileSync(tagRulesetPath, 'utf8'));
 
       // Mock: existing rulesets include both managed + one unmanaged
-      mockRequest.mockResolvedValueOnce({
-        data: [
-          { id: 100, name: 'test-ruleset' },
-          { id: 200, name: 'test-tag-ruleset' },
-          { id: 999, name: 'old-ruleset' }
-        ]
-      });
+      mockPaginate.mockResolvedValueOnce([
+        { id: 100, name: 'test-ruleset' },
+        { id: 200, name: 'test-tag-ruleset' },
+        { id: 999, name: 'old-ruleset' }
+      ]);
       // Mock: full details for test-ruleset (matches)
       mockRequest.mockResolvedValueOnce({
         data: { id: 100, ...rulesetConfig }
@@ -1555,9 +1549,7 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
 
     test('should handle mixed create and update with multiple files', async () => {
       // Mock: one existing ruleset with different config
-      mockRequest.mockResolvedValueOnce({
-        data: [{ id: 100, name: 'test-ruleset' }]
-      });
+      mockPaginate.mockResolvedValueOnce([{ id: 100, name: 'test-ruleset' }]);
       // Mock: full details (different enforcement)
       mockRequest.mockResolvedValueOnce({
         data: {

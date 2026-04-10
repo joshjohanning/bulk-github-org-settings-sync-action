@@ -147,6 +147,17 @@ export function validateOrgConfig(orgConfig, orgName) {
       );
     }
   }
+
+  // Validate delete-unmanaged-rulesets value if present
+  if (Object.prototype.hasOwnProperty.call(orgConfig, 'delete-unmanaged-rulesets')) {
+    const val = orgConfig['delete-unmanaged-rulesets'];
+    if (typeof val !== 'boolean') {
+      core.warning(
+        `⚠️  Invalid "delete-unmanaged-rulesets" value for organization "${orgName}": ` +
+          `expected true or false, got "${val}". This setting will be ignored.`
+      );
+    }
+  }
 }
 
 // ─── SubResult model (mirrors bulk-github-repo-settings-sync-action PR #120) ─
@@ -358,7 +369,10 @@ export function parseOrganizationsFile(filePath) {
     }
 
     if (Object.prototype.hasOwnProperty.call(orgConfig, 'delete-unmanaged-rulesets')) {
-      result.deleteUnmanagedRulesets = orgConfig['delete-unmanaged-rulesets'] === true;
+      const val = orgConfig['delete-unmanaged-rulesets'];
+      if (typeof val === 'boolean') {
+        result.deleteUnmanagedRulesets = val;
+      }
     }
 
     if (Object.prototype.hasOwnProperty.call(orgConfig, 'delete-unmanaged-properties')) {
@@ -696,6 +710,29 @@ export async function syncCustomProperties(octokit, org, desiredProperties, dele
 // ─── Organization Rulesets Sync ─────────────────────────────────────────────────
 
 /**
+ * Deep equality check for objects, insensitive to key insertion order.
+ * @param {*} a - First value
+ * @param {*} b - Second value
+ * @returns {boolean} Whether the values are deeply equal
+ */
+function deepEqual(a, b) {
+  if (a === b) return true;
+  if (a == null || b == null) return a === b;
+  if (typeof a !== typeof b) return false;
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((val, i) => deepEqual(val, b[i]));
+  }
+  if (typeof a === 'object') {
+    const keysA = Object.keys(a).sort();
+    const keysB = Object.keys(b).sort();
+    if (keysA.length !== keysB.length) return false;
+    return keysA.every((key, i) => key === keysB[i] && deepEqual(a[key], b[key]));
+  }
+  return false;
+}
+
+/**
  * Sync organization-level rulesets.
  * Reads one or more JSON files, each containing a single ruleset configuration,
  * compares with existing rulesets, and creates/updates/deletes as needed
@@ -711,6 +748,7 @@ export async function syncCustomProperties(octokit, org, desiredProperties, dele
 export async function syncOrgRulesets(octokit, org, rulesetFilePaths, deleteUnmanaged, dryRun) {
   const subResults = [];
   const wouldPrefix = dryRun ? 'Would ' : '';
+  let hasFailed = false;
 
   // Read and parse each ruleset JSON file
   const rulesetConfigs = [];
@@ -733,11 +771,10 @@ export async function syncOrgRulesets(octokit, org, rulesetFilePaths, deleteUnma
   // Collect managed names for delete-unmanaged logic
   const managedNames = new Set(rulesetConfigs.map(r => r.name));
 
-  // Fetch existing org rulesets
+  // Fetch existing org rulesets (paginate to get the full set)
   let existingRulesets;
   try {
-    const { data } = await octokit.request('GET /orgs/{org}/rulesets', { org });
-    existingRulesets = data;
+    existingRulesets = await octokit.paginate('GET /orgs/{org}/rulesets', { org });
   } catch (error) {
     if (error.status === 404) {
       existingRulesets = [];
@@ -778,7 +815,7 @@ export async function syncOrgRulesets(octokit, org, rulesetFilePaths, deleteUnma
         rules: rulesetConfig.rules
       };
 
-      const configsMatch = JSON.stringify(existingConfig) === JSON.stringify(normalizedSourceConfig);
+      const configsMatch = deepEqual(existingConfig, normalizedSourceConfig);
 
       if (configsMatch) {
         core.info(`  📋 Ruleset "${rulesetName}" is already up to date`);
@@ -807,6 +844,7 @@ export async function syncOrgRulesets(octokit, org, rulesetFilePaths, deleteUnma
               SubResultStatus.WARNING,
               `Failed to update "${rulesetName}": ${error.message}`
             );
+            hasFailed = true;
           }
         }
       }
@@ -831,6 +869,7 @@ export async function syncOrgRulesets(octokit, org, rulesetFilePaths, deleteUnma
             SubResultStatus.WARNING,
             `Failed to create "${rulesetName}": ${error.message}`
           );
+          hasFailed = true;
         }
       }
     }
@@ -862,13 +901,14 @@ export async function syncOrgRulesets(octokit, org, rulesetFilePaths, deleteUnma
               SubResultStatus.WARNING,
               `Failed to delete "${existing.name}": ${error.message}`
             );
+            hasFailed = true;
           }
         }
       }
     }
   }
 
-  return { subResults, failed: false };
+  return { subResults, failed: hasFailed };
 }
 
 // ─── Result helpers ─────────────────────────────────────────────────────────────
