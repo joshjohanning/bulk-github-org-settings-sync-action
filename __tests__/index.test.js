@@ -173,6 +173,38 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
       expect(() => validateOrgConfig(null, 'test')).not.toThrow();
       expect(() => validateOrgConfig('string', 'test')).not.toThrow();
     });
+
+    test('should warn for non-boolean delete-unmanaged-properties value', () => {
+      validateOrgConfig({ org: 'my-org', 'delete-unmanaged-properties': 'yes' }, 'my-org');
+      expect(mockCore.warning).toHaveBeenCalledWith(
+        expect.stringContaining('Invalid "delete-unmanaged-properties" value')
+      );
+    });
+
+    test('should not warn for boolean delete-unmanaged-properties value', () => {
+      validateOrgConfig({ org: 'my-org', 'delete-unmanaged-properties': true }, 'my-org');
+      expect(mockCore.warning).not.toHaveBeenCalled();
+    });
+
+    test('should not warn for action input keys used as per-org overrides', () => {
+      validateOrgConfig(
+        { org: 'my-org', 'custom-properties-file': './props.yml', 'delete-unmanaged-properties': true },
+        'my-org'
+      );
+      expect(mockCore.warning).not.toHaveBeenCalled();
+    });
+
+    test('should warn when action.yml cannot be read', () => {
+      resetKnownOrgConfigKeysCache();
+      mockFs.readFileSync.mockImplementation(filePath => {
+        if (typeof filePath === 'string' && filePath.endsWith('action.yml')) {
+          throw new Error('ENOENT');
+        }
+        return '';
+      });
+      validateOrgConfig({ org: 'my-org', 'dry-run': true }, 'my-org');
+      expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('Could not read action.yml'));
+    });
   });
 
   // ─── normalizeCustomProperties ──────────────────────────────────────────
@@ -661,6 +693,30 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
       expect(teamProp.value_type).toBe('single_select');
       expect(teamProp.required).toBe(true);
       expect(teamProp.allowed_values).toContain('data-science');
+    });
+
+    test('should throw for invalid format (no orgs array)', () => {
+      setMockFileContent('settings: true', '/mock/bad.yml');
+      expect(() => parseOrganizationsFile('/mock/bad.yml')).toThrow('expected a "orgs" array');
+    });
+
+    test('should throw for org entry without org field', () => {
+      setMockFileContent('orgs:\n  - custom-properties: []', '/mock/bad.yml');
+      expect(() => parseOrganizationsFile('/mock/bad.yml')).toThrow('must have an "org" field');
+    });
+
+    test('should throw for invalid custom-properties-file value (non-string)', () => {
+      setMockFileContent('orgs:\n  - org: my-org\n    custom-properties-file: 123', '/mock/bad.yml');
+      expect(() => parseOrganizationsFile('/mock/bad.yml')).toThrow(
+        'Invalid "custom-properties-file" for org "my-org"'
+      );
+    });
+
+    test('should throw for empty custom-properties-file value', () => {
+      setMockFileContent(`orgs:\n  - org: my-org\n    custom-properties-file: ''`, '/mock/bad.yml');
+      expect(() => parseOrganizationsFile('/mock/bad.yml')).toThrow(
+        'Invalid "custom-properties-file" for org "my-org"'
+      );
     });
   });
 

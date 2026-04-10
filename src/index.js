@@ -41,7 +41,9 @@ function getBooleanInput(name) {
  * @returns {Set<string>} Set of valid configuration keys
  */
 function getKnownOrgConfigKeys() {
-  const keys = new Set(['org', 'custom-properties', 'custom-properties-file']);
+  // 'org' is the organization identifier in YAML config
+  // 'custom-properties' is inline property definitions (YAML-only, not an action input)
+  const keys = new Set(['org', 'custom-properties']);
 
   try {
     const __filename = url.fileURLToPath(import.meta.url);
@@ -230,7 +232,7 @@ export function parseOrganizations(organizationsInput, organizationsFile, custom
           orgBase = parseCustomPropertiesFile(orgConfig.customPropertiesFile);
         } catch (error) {
           throw new Error(
-            `Failed to parse custom properties file "${orgConfig.customPropertiesFile}" for organization "${orgConfig.org}"`,
+            `Failed to parse custom properties file "${orgConfig.customPropertiesFile}" for organization "${orgConfig.org}": ${error.message}`,
             { cause: error }
           );
         }
