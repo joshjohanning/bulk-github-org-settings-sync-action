@@ -406,6 +406,14 @@ export function normalizeCustomProperties(properties) {
     };
 
     if (prop['default-value'] !== undefined && prop['default-value'] !== null) {
+      // Validate default-value against select type constraints
+      if (prop['value-type'] === 'single_select' && prop.required !== true) {
+        throw new Error(
+          `Custom property "${prop.name}" with value-type "single_select" cannot have a "default-value" when "required" is false. ` +
+            `Set "required: true" or remove the "default-value".`
+        );
+      }
+
       // multi_select default values must be arrays; other types are strings
       if (prop['value-type'] === 'multi_select') {
         if (Array.isArray(prop['default-value'])) {
@@ -417,6 +425,26 @@ export function normalizeCustomProperties(properties) {
         }
       } else {
         normalized.default_value = String(prop['default-value']);
+      }
+
+      // Validate default-value is in allowed-values for select types
+      if (['single_select', 'multi_select'].includes(prop['value-type']) && prop['allowed-values']) {
+        const allowedStr = prop['allowed-values'].map(v => String(v));
+        if (prop['value-type'] === 'single_select') {
+          if (!allowedStr.includes(normalized.default_value)) {
+            throw new Error(
+              `Custom property "${prop.name}" has default-value "${normalized.default_value}" ` +
+                `which is not in allowed-values: ${allowedStr.join(', ')}`
+            );
+          }
+        } else if (Array.isArray(normalized.default_value)) {
+          const invalid = normalized.default_value.filter(v => !allowedStr.includes(v));
+          if (invalid.length > 0) {
+            throw new Error(
+              `Custom property "${prop.name}" has default-value entries not in allowed-values: ${invalid.join(', ')}`
+            );
+          }
+        }
       }
     } else {
       normalized.default_value = null;

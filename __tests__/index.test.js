@@ -296,6 +296,61 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
         normalizeCustomProperties([{ name: 'test', 'value-type': 'string', 'values-editable-by': 'everyone' }])
       ).toThrow('invalid values-editable-by');
     });
+
+    test('should throw for single_select with default-value when required is false', () => {
+      expect(() =>
+        normalizeCustomProperties([
+          {
+            name: 'repo-type',
+            'value-type': 'single_select',
+            required: false,
+            'default-value': 'unclassified',
+            'allowed-values': ['exercise', 'platform', 'unclassified']
+          }
+        ])
+      ).toThrow('cannot have a "default-value" when "required" is false');
+    });
+
+    test('should allow single_select with default-value when required is true', () => {
+      const result = normalizeCustomProperties([
+        {
+          name: 'environment',
+          'value-type': 'single_select',
+          required: true,
+          'default-value': 'production',
+          'allowed-values': ['production', 'development']
+        }
+      ]);
+      expect(result[0].default_value).toBe('production');
+      expect(result[0].required).toBe(true);
+    });
+
+    test('should throw for default-value not in allowed-values for single_select', () => {
+      expect(() =>
+        normalizeCustomProperties([
+          {
+            name: 'env',
+            'value-type': 'single_select',
+            required: true,
+            'default-value': 'staging',
+            'allowed-values': ['production', 'development']
+          }
+        ])
+      ).toThrow('not in allowed-values');
+    });
+
+    test('should throw for default-value entries not in allowed-values for multi_select', () => {
+      expect(() =>
+        normalizeCustomProperties([
+          {
+            name: 'envs',
+            'value-type': 'multi_select',
+            'default-value': ['production', 'staging'],
+            'allowed-values': ['production', 'development']
+          }
+        ])
+      ).toThrow('not in allowed-values');
+    });
   });
 
   // ─── compareCustomProperty ──────────────────────────────────────────────
