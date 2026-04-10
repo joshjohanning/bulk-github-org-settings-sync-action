@@ -183,8 +183,7 @@ const SYNC_KIND_LABELS = Object.freeze({
   'custom-property-delete': 'custom property (deleted)',
   'ruleset-create': 'ruleset (created)',
   'ruleset-update': 'ruleset (updated)',
-  'ruleset-delete': 'ruleset (deleted)',
-  'ruleset-unchanged': 'ruleset (unchanged)'
+  'ruleset-delete': 'ruleset (deleted)'
 });
 
 /**
@@ -399,6 +398,11 @@ function parseRulesetsFileValue(value, context) {
     return [];
   }
 
+  // Allow empty array to explicitly disable inherited rulesets
+  if (Array.isArray(value) && value.length === 0) {
+    return [];
+  }
+
   const label = context ? ` for org "${context}"` : '';
   let paths;
   if (Array.isArray(value)) {
@@ -415,10 +419,6 @@ function parseRulesetsFileValue(value, context) {
       .filter(p => p.length > 0);
   } else {
     throw new Error(`Invalid "rulesets-file"${label}: expected a string, comma-separated string, or array of strings`);
-  }
-
-  if (paths.length === 0) {
-    throw new Error(`Invalid "rulesets-file"${label}: no file paths provided`);
   }
 
   return paths;
@@ -733,6 +733,27 @@ function deepEqual(a, b) {
 }
 
 /**
+ * Supported fields for org ruleset create/update requests.
+ * Strips read-only/API-only fields from exported rulesets.
+ */
+const RULESET_REQUEST_FIELDS = ['name', 'target', 'enforcement', 'bypass_actors', 'conditions', 'rules'];
+
+/**
+ * Pick only supported request fields from a ruleset config.
+ * @param {Object} config - Full ruleset configuration
+ * @returns {Object} Filtered config with only supported fields
+ */
+function pickRulesetRequestFields(config) {
+  const result = {};
+  for (const key of RULESET_REQUEST_FIELDS) {
+    if (config[key] !== undefined) {
+      result[key] = config[key];
+    }
+  }
+  return result;
+}
+
+/**
  * Sync organization-level rulesets.
  * Reads one or more JSON files, each containing a single ruleset configuration,
  * compares with existing rulesets, and creates/updates/deletes as needed
@@ -835,7 +856,7 @@ export async function syncOrgRulesets(octokit, org, rulesetFilePaths, deleteUnma
             await octokit.request('PUT /orgs/{org}/rulesets/{ruleset_id}', {
               org,
               ruleset_id: existingRuleset.id,
-              ...rulesetConfig
+              ...pickRulesetRequestFields(rulesetConfig)
             });
           } catch (error) {
             core.warning(`  ⚠️  Failed to update ruleset "${rulesetName}": ${error.message}`);
@@ -859,7 +880,7 @@ export async function syncOrgRulesets(octokit, org, rulesetFilePaths, deleteUnma
         try {
           const { data: newRuleset } = await octokit.request('POST /orgs/{org}/rulesets', {
             org,
-            ...rulesetConfig
+            ...pickRulesetRequestFields(rulesetConfig)
           });
           core.info(`  📋 Created ruleset "${rulesetName}" (ID: ${newRuleset.id})`);
         } catch (error) {

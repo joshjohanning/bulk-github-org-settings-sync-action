@@ -374,7 +374,7 @@ Sync both rulesets using comma-separated paths:
 ```
 
 > [!TIP]
-> The JSON format matches the [GitHub REST API for organization rulesets](https://docs.github.com/en/rest/orgs/rules). You can export an existing ruleset from your organization via the API and use it as-is.
+> The JSON format matches the [GitHub REST API for organization rulesets](https://docs.github.com/en/rest/orgs/rules). You can export an existing ruleset from your organization via the API as a starting point, but exported responses may include read-only fields (e.g., `id`, `source`, `node_id`) that are automatically stripped before create/update operations.
 
 **Behavior:**
 
