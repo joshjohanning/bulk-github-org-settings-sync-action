@@ -852,25 +852,9 @@ export async function syncOrgRulesets(octokit, org, rulesetFilePaths, deleteUnma
         continue;
       }
 
-      // Normalize existing config for comparison (remove API-only fields)
-      const existingConfig = {
-        name: fullRuleset.name,
-        target: fullRuleset.target,
-        enforcement: fullRuleset.enforcement,
-        ...(fullRuleset.bypass_actors && { bypass_actors: fullRuleset.bypass_actors }),
-        ...(fullRuleset.conditions && { conditions: fullRuleset.conditions }),
-        rules: fullRuleset.rules
-      };
-
-      // Normalize source config for comparison
-      const normalizedSourceConfig = {
-        name: rulesetConfig.name,
-        target: rulesetConfig.target,
-        enforcement: rulesetConfig.enforcement,
-        ...(rulesetConfig.bypass_actors && { bypass_actors: rulesetConfig.bypass_actors }),
-        ...(rulesetConfig.conditions && { conditions: rulesetConfig.conditions }),
-        rules: rulesetConfig.rules
-      };
+      // Strip read-only fields from both sides for comparison
+      const existingConfig = stripRulesetReadonlyFields(fullRuleset);
+      const normalizedSourceConfig = stripRulesetReadonlyFields(rulesetConfig);
 
       const configsMatch = deepEqual(existingConfig, normalizedSourceConfig);
 
