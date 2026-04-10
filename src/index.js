@@ -312,17 +312,23 @@ export function parseOrganizationsFile(filePath) {
 
 /**
  * Parse a rulesets-file value into an array of file paths.
- * Accepts a single string (comma-separated), or a YAML array of strings.
+ * Accepts a single string (comma-separated), a YAML array of strings,
+ * or an empty/falsy value (returns empty array).
  * @param {string|string[]} value - The rulesets-file value from config
- * @param {string} orgName - Org name for error messages
+ * @param {string} [context] - Context for error messages (e.g., org name)
  * @returns {string[]} Array of trimmed, non-empty file paths
  */
-function parseRulesetsFileValue(value, orgName) {
+function parseRulesetsFileValue(value, context) {
+  if (!value || (typeof value === 'string' && value.trim() === '')) {
+    return [];
+  }
+
+  const label = context ? ` for org "${context}"` : '';
   let paths;
   if (Array.isArray(value)) {
     paths = value.map(v => {
       if (typeof v !== 'string' || v.trim() === '') {
-        throw new Error(`Invalid entry in "rulesets-file" array for org "${orgName}": expected non-empty strings`);
+        throw new Error(`Invalid entry in "rulesets-file" array${label}: expected non-empty strings`);
       }
       return v.trim();
     });
@@ -332,13 +338,11 @@ function parseRulesetsFileValue(value, orgName) {
       .map(p => p.trim())
       .filter(p => p.length > 0);
   } else {
-    throw new Error(
-      `Invalid "rulesets-file" for org "${orgName}": expected a string, comma-separated string, or array of strings`
-    );
+    throw new Error(`Invalid "rulesets-file"${label}: expected a string, comma-separated string, or array of strings`);
   }
 
   if (paths.length === 0) {
-    throw new Error(`Invalid "rulesets-file" for org "${orgName}": no file paths provided`);
+    throw new Error(`Invalid "rulesets-file"${label}: no file paths provided`);
   }
 
   return paths;
@@ -803,12 +807,7 @@ export async function run() {
     const customPropertiesFile = core.getInput('custom-properties-file');
     const deleteUnmanagedProperties = getBooleanInput('delete-unmanaged-properties') ?? false;
     const rulesetsFileInput = core.getInput('rulesets-file');
-    const rulesetsFiles = rulesetsFileInput
-      ? rulesetsFileInput
-          .split(',')
-          .map(p => p.trim())
-          .filter(p => p.length > 0)
-      : [];
+    const rulesetsFiles = parseRulesetsFileValue(rulesetsFileInput);
     const deleteUnmanagedRulesets = getBooleanInput('delete-unmanaged-rulesets') ?? false;
     const dryRun = getBooleanInput('dry-run') ?? false;
 
