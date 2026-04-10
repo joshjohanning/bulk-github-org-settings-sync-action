@@ -132,6 +132,7 @@ orgs:
       - './config/rulesets/branch-protection.json'
       - './config/rulesets/tag-protection.json'
     delete-unmanaged-rulesets: true # Delete rulesets not in the config for this org
+    delete-unmanaged-properties: true # Override the action input for this org
     custom-properties:
       # Override "team" to add extra allowed values for this org
       - name: team
@@ -490,7 +491,48 @@ env 'INPUT_GITHUB-TOKEN=ghp_xxx' \
 
 ## Working Example
 
-For a complete working example of this action in use, see the [sync-github-org-settings](https://github.com/joshjohanning/sync-github-org-settings) repository.
+For a complete working example of this action in use, see the [sync-github-org-settings](https://github.com/joshjohanning/sync-github-org-settings) repository:
+
+- **[orgs.yml](https://github.com/joshjohanning/sync-github-org-settings/blob/main/orgs.yml)** - Example configuration file with per-org overrides
+- **[sync-github-org-settings.yml](https://github.com/joshjohanning/sync-github-org-settings/blob/main/.github/workflows/sync-github-org-settings.yml)** - Example workflow using a GitHub App token
+
+**Example workflow:**
+
+```yml
+name: sync-github-org-settings
+
+on:
+  push:
+    branches: ['main']
+  pull_request:
+    branches: ['main']
+  workflow_dispatch:
+
+jobs:
+  sync-github-org-settings:
+    runs-on: ubuntu-latest
+    if: github.actor != 'dependabot[bot]'
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          app-id: ${{ vars.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Sync Organization Settings
+        uses: joshjohanning/bulk-github-org-settings-sync-action@v1
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          organizations-file: 'orgs.yml'
+          custom-properties-file: './config/custom-properties/base.yml'
+          dry-run: ${{ github.event_name == 'pull_request' }} # dry run if PR
+```
 
 ## Important Notes
 

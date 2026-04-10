@@ -21,6 +21,7 @@ orgs:
     #   - './config/rulesets/branch-protection.json'
     #   - './config/rulesets/tag-protection.json'
     # delete-unmanaged-rulesets: true             # Delete rulesets not in the config for this org
+    # delete-unmanaged-properties: true # Override the action input for this org
     custom-properties:
       - name: team
         value-type: single_select
