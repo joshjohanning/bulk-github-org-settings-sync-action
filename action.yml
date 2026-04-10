@@ -32,6 +32,15 @@ inputs:
     required: false
     default: 'false'
 
+  # === Rulesets ===
+  rulesets-file:
+    description: 'Path to a JSON file containing organization ruleset configuration to sync to target organizations'
+    required: false
+  delete-unmanaged-rulesets:
+    description: 'Delete all other rulesets besides the one being synced'
+    required: false
+    default: 'false'
+
   # === Execution Options ===
   dry-run:
     description: 'Preview changes without applying them (logs what would be changed)'

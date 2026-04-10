@@ -49,6 +49,7 @@ const {
   normalizeCustomProperties,
   compareCustomProperty,
   syncCustomProperties,
+  syncOrgRulesets,
   mergeCustomProperties,
   validateOrgConfig
 } = await import('../src/index.js');
@@ -752,6 +753,253 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
       expect(mockCore.setFailed).toHaveBeenCalledWith('1 organization(s) failed to update');
       expect(mockCore.setOutput).toHaveBeenCalledWith('failed-organizations', '1');
       expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('Failed to update my-org'));
+    });
+
+    test('should process organizations with rulesets-file input', async () => {
+      const rulesetPath = path.join(__dirname, 'fixtures', 'test-ruleset.json');
+
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          'github-api-url': 'https://api.github.com',
+          organizations: 'my-org',
+          'organizations-file': '',
+          'custom-properties-file': '',
+          'rulesets-file': rulesetPath,
+          'delete-unmanaged-properties': 'false',
+          'delete-unmanaged-rulesets': 'false',
+          'dry-run': 'true'
+        };
+        return inputs[name] ?? '';
+      });
+      mockCore.getBooleanInput.mockImplementation(name => {
+        if (name === 'dry-run') return true;
+        if (name === 'delete-unmanaged-properties') return false;
+        if (name === 'delete-unmanaged-rulesets') return false;
+        return false;
+      });
+
+      // Mock: no existing rulesets
+      mockRequest.mockResolvedValueOnce({ data: [] });
+
+      await run();
+
+      expect(mockCore.setFailed).not.toHaveBeenCalled();
+      expect(mockCore.setOutput).toHaveBeenCalledWith('updated-organizations', '1');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-organizations', '1');
+    });
+  });
+
+  // ─── syncOrgRulesets ────────────────────────────────────────────────────
+
+  describe('syncOrgRulesets', () => {
+    const rulesetPath = path.join(__dirname, 'fixtures', 'test-ruleset.json');
+
+    test('should create new ruleset when none exist', async () => {
+      // Mock: no existing rulesets
+      mockRequest.mockResolvedValueOnce({ data: [] });
+      // Mock: successful POST
+      mockRequest.mockResolvedValueOnce({ data: { id: 123 } });
+
+      const result = await syncOrgRulesets(mockOctokit, 'my-org', rulesetPath, false, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('ruleset-create');
+      expect(result.subResults[0].status).toBe('changed');
+      expect(mockRequest).toHaveBeenCalledWith(
+        'POST /orgs/{org}/rulesets',
+        expect.objectContaining({
+          org: 'my-org',
+          name: 'test-ruleset'
+        })
+      );
+    });
+
+    test('should detect no changes for identical ruleset', async () => {
+      const rulesetConfig = JSON.parse((await import('fs')).readFileSync(rulesetPath, 'utf8'));
+
+      // Mock: existing ruleset with same name
+      mockRequest.mockResolvedValueOnce({
+        data: [{ id: 123, name: 'test-ruleset' }]
+      });
+      // Mock: full ruleset details matching config
+      mockRequest.mockResolvedValueOnce({
+        data: {
+          id: 123,
+          ...rulesetConfig
+        }
+      });
+
+      const result = await syncOrgRulesets(mockOctokit, 'my-org', rulesetPath, false, false);
+
+      expect(result.subResults).toHaveLength(0);
+      // Only GET list + GET detail, no PUT
+      expect(mockRequest).toHaveBeenCalledTimes(2);
+    });
+
+    test('should detect and apply updates when ruleset differs', async () => {
+      // Mock: existing ruleset with same name but different enforcement
+      mockRequest.mockResolvedValueOnce({
+        data: [{ id: 123, name: 'test-ruleset' }]
+      });
+      // Mock: full ruleset details with different enforcement
+      mockRequest.mockResolvedValueOnce({
+        data: {
+          id: 123,
+          name: 'test-ruleset',
+          target: 'branch',
+          enforcement: 'disabled',
+          conditions: {
+            ref_name: { include: ['~DEFAULT_BRANCH'], exclude: [] },
+            repository_name: { include: ['~ALL'], exclude: [] }
+          },
+          rules: [{ type: 'deletion' }]
+        }
+      });
+      // Mock: successful PUT
+      mockRequest.mockResolvedValueOnce({ data: {} });
+
+      const result = await syncOrgRulesets(mockOctokit, 'my-org', rulesetPath, false, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('ruleset-update');
+      expect(result.subResults[0].status).toBe('changed');
+      expect(mockRequest).toHaveBeenCalledWith(
+        'PUT /orgs/{org}/rulesets/{ruleset_id}',
+        expect.objectContaining({
+          org: 'my-org',
+          ruleset_id: 123
+        })
+      );
+    });
+
+    test('should delete unmanaged rulesets when flag is set', async () => {
+      // Mock: existing rulesets include unmanaged one
+      mockRequest.mockResolvedValueOnce({
+        data: [
+          { id: 123, name: 'test-ruleset' },
+          { id: 456, name: 'old-ruleset' }
+        ]
+      });
+      // Mock: full details for matching ruleset
+      const rulesetConfig = JSON.parse((await import('fs')).readFileSync(rulesetPath, 'utf8'));
+      mockRequest.mockResolvedValueOnce({
+        data: { id: 123, ...rulesetConfig }
+      });
+      // Mock: successful DELETE
+      mockRequest.mockResolvedValueOnce({ data: {} });
+
+      const result = await syncOrgRulesets(mockOctokit, 'my-org', rulesetPath, true, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('ruleset-delete');
+      expect(result.subResults[0].status).toBe('changed');
+      expect(mockRequest).toHaveBeenCalledWith('DELETE /orgs/{org}/rulesets/{ruleset_id}', {
+        org: 'my-org',
+        ruleset_id: 456
+      });
+    });
+
+    test('should not delete unmanaged rulesets when flag is not set', async () => {
+      // Mock: existing rulesets include unmanaged one
+      mockRequest.mockResolvedValueOnce({
+        data: [
+          { id: 123, name: 'test-ruleset' },
+          { id: 456, name: 'old-ruleset' }
+        ]
+      });
+      // Mock: full details for matching ruleset
+      const rulesetConfig = JSON.parse((await import('fs')).readFileSync(rulesetPath, 'utf8'));
+      mockRequest.mockResolvedValueOnce({
+        data: { id: 123, ...rulesetConfig }
+      });
+
+      const result = await syncOrgRulesets(mockOctokit, 'my-org', rulesetPath, false, false);
+
+      expect(result.subResults).toHaveLength(0);
+      // Only GET list + GET detail, no DELETE
+      expect(mockRequest).toHaveBeenCalledTimes(2);
+    });
+
+    test('should handle dry-run mode for new ruleset', async () => {
+      mockRequest.mockResolvedValueOnce({ data: [] });
+
+      const result = await syncOrgRulesets(mockOctokit, 'my-org', rulesetPath, false, true);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('ruleset-create');
+      expect(result.subResults[0].status).toBe('changed');
+      expect(result.subResults[0].message).toContain('Would');
+      // Only GET list, no POST
+      expect(mockRequest).toHaveBeenCalledTimes(1);
+    });
+
+    test('should handle 404 on GET as empty rulesets', async () => {
+      const error404 = new Error('Not Found');
+      error404.status = 404;
+      mockRequest.mockRejectedValueOnce(error404);
+      // Mock: successful POST
+      mockRequest.mockResolvedValueOnce({ data: { id: 789 } });
+
+      const result = await syncOrgRulesets(mockOctokit, 'my-org', rulesetPath, false, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('ruleset-create');
+    });
+
+    test('should throw for missing ruleset file', async () => {
+      await expect(syncOrgRulesets(mockOctokit, 'my-org', '/nonexistent/file.json', false, false)).rejects.toThrow(
+        'Failed to read or parse ruleset file'
+      );
+    });
+
+    test('should throw for ruleset without name', async () => {
+      // Create a temp file without name field
+      const tmpPath = '/tmp/test-ruleset-no-name.json';
+      (await import('fs')).writeFileSync(tmpPath, JSON.stringify({ target: 'branch' }));
+
+      await expect(syncOrgRulesets(mockOctokit, 'my-org', tmpPath, false, false)).rejects.toThrow(
+        'must include a "name" field'
+      );
+    });
+
+    test('should handle API error on create gracefully', async () => {
+      mockRequest.mockResolvedValueOnce({ data: [] });
+      mockRequest.mockRejectedValueOnce(new Error('Forbidden'));
+
+      const result = await syncOrgRulesets(mockOctokit, 'my-org', rulesetPath, false, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].status).toBe('warning');
+      expect(result.subResults[0].message).toContain('Failed');
+    });
+  });
+
+  // ─── parseOrganizations with rulesets ─────────────────────────────────
+
+  describe('parseOrganizations with rulesets', () => {
+    test('should include rulesetsFile when provided', () => {
+      const result = parseOrganizations('org1', '', '', '/path/to/rulesets.json', false);
+      expect(result).toHaveLength(1);
+      expect(result[0].rulesetsFile).toBe('/path/to/rulesets.json');
+      expect(result[0].deleteUnmanagedRulesets).toBe(false);
+    });
+
+    test('should not include rulesetsFile when not provided', () => {
+      const result = parseOrganizations('org1', '', '', '', false);
+      expect(result).toHaveLength(1);
+      expect(result[0].rulesetsFile).toBeUndefined();
+    });
+
+    test('should propagate rulesetsFile to orgs from organizations-file', () => {
+      const samplePath = path.join(__dirname, '..', 'sample-configuration', 'orgs.yml');
+      const result = parseOrganizations('', samplePath, '', '/path/to/rulesets.json', true);
+
+      expect(result).toHaveLength(2);
+      expect(result[0].rulesetsFile).toBe('/path/to/rulesets.json');
+      expect(result[0].deleteUnmanagedRulesets).toBe(true);
+      expect(result[1].rulesetsFile).toBe('/path/to/rulesets.json');
+      expect(result[1].deleteUnmanagedRulesets).toBe(true);
     });
   });
 });

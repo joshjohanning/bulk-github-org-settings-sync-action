@@ -16,6 +16,7 @@ Please refer to the [release page](https://github.com/joshjohanning/bulk-github-
 ## Features
 
 - 🏷️ Sync custom property definitions across organizations
+- 📋 Sync organization-level rulesets across organizations
 - ✅ Support for all custom property types: `string`, `single_select`, `multi_select`, `true_false`, `url`
 - 🔍 Dry-run mode with change preview and intelligent change detection
 - 📋 Per-organization overrides via YAML configuration
@@ -47,7 +48,7 @@ For stronger security and higher rate limits, use a GitHub App:
 
 1. Create a GitHub App with the following permissions:
    - **Organization Custom Properties**: Admin (required for managing custom property definitions)
-   - **Administration**: Read and write (required for managing organization settings)
+   - **Organization Administration**: Read and write (required for managing organization settings and rulesets)
 2. Install it to your organization(s)
 3. Add `APP_ID` and `APP_PRIVATE_KEY` as repository secrets
 
@@ -127,6 +128,8 @@ orgs:
 
   - org: my-other-org
     custom-properties-file: './config/custom-properties/other-org.yml' # Override base file for this org
+    rulesets-file: './config/rulesets/other-org.json' # Override base rulesets file for this org
+    delete-unmanaged-rulesets: true # Delete rulesets not in the config for this org
     custom-properties:
       # Override "team" to add extra allowed values for this org
       - name: team
@@ -150,6 +153,7 @@ Use in workflow:
     github-token: ${{ secrets.ORG_ADMIN_TOKEN }}
     organizations-file: './orgs.yml'
     custom-properties-file: './config/custom-properties/base.yml' # Base properties for all orgs
+    rulesets-file: './config/rulesets/base.json' # Base rulesets for all orgs
 ```
 
 **Settings Merging:**
@@ -272,6 +276,92 @@ By default, syncing custom properties will create or update the specified proper
 
 ---
 
+## Syncing Organization Rulesets
+
+Sync organization-level rulesets across organizations. Rulesets define rules that apply to repositories within the organization (e.g., branch protection rules, tag rules).
+
+> [!TIP]
+> 📄 **See full example:** [sample-configuration/rulesets.json](sample-configuration/rulesets.json)
+
+Create a `rulesets.json` file:
+
+```json
+{
+  "name": "org-branch-protection",
+  "target": "branch",
+  "enforcement": "active",
+  "bypass_actors": [
+    {
+      "actor_id": 5,
+      "actor_type": "RepositoryRole",
+      "bypass_mode": "always"
+    }
+  ],
+  "conditions": {
+    "ref_name": {
+      "include": ["~DEFAULT_BRANCH"],
+      "exclude": []
+    },
+    "repository_name": {
+      "include": ["~ALL"],
+      "exclude": []
+    }
+  },
+  "rules": [
+    {
+      "type": "deletion"
+    },
+    {
+      "type": "non_fast_forward"
+    },
+    {
+      "type": "pull_request",
+      "parameters": {
+        "required_approving_review_count": 1,
+        "dismiss_stale_reviews_on_push": true,
+        "require_code_owner_review": false,
+        "require_last_push_approval": false,
+        "required_review_thread_resolution": false,
+        "automatic_copilot_code_review_enabled": false
+      }
+    }
+  ]
+}
+```
+
+> [!TIP]
+> The JSON format matches the [GitHub REST API for organization rulesets](https://docs.github.com/en/rest/orgs/rules). You can export an existing ruleset from your organization via the API and use it as-is.
+
+**Behavior:**
+
+- If a ruleset with the same name doesn't exist, it is created
+- If it exists but differs from the config, it is updated
+- If content is identical, no changes are made
+- With `delete-unmanaged-rulesets: true`, rulesets not matching the managed name are deleted
+
+### Delete Unmanaged Rulesets
+
+By default, syncing rulesets will create or update the specified ruleset, but will not delete other rulesets that may exist in the organization. To delete all other rulesets besides the one being synced, use `delete-unmanaged-rulesets`:
+
+```yml
+- name: Sync Organization Settings
+  uses: joshjohanning/bulk-github-org-settings-sync-action@v1
+  with:
+    github-token: ${{ secrets.ORG_ADMIN_TOKEN }}
+    organizations: 'my-org'
+    rulesets-file: './rulesets.json'
+    delete-unmanaged-rulesets: true
+```
+
+**Behavior with `delete-unmanaged-rulesets: true`:**
+
+- Creates rulesets that don't exist
+- Updates rulesets that differ from the config
+- **Deletes all other rulesets not matching the managed ruleset name**
+- In dry-run mode, shows which rulesets would be deleted without actually deleting them
+
+---
+
 ## Action Inputs
 
 | Input                         | Description                                                                         | Required | Default                 |
@@ -282,10 +372,12 @@ By default, syncing custom properties will create or update the specified proper
 | `organizations-file`          | Path to YAML file containing organization settings configuration                    | No       |                         |
 | `custom-properties-file`      | Path to a YAML file defining custom property schemas                                | No       |                         |
 | `delete-unmanaged-properties` | Delete custom properties not defined in the configuration file                      | No       | `false`                 |
+| `rulesets-file`               | Path to a JSON file containing organization ruleset configuration                   | No       |                         |
+| `delete-unmanaged-rulesets`   | Delete all other rulesets besides the one being synced                              | No       | `false`                 |
 | `dry-run`                     | Preview changes without applying them                                               | No       | `false`                 |
 
 > [!NOTE]
-> You must provide either `organizations` or `organizations-file`. The `custom-properties-file` input provides base properties for all orgs and can be combined with either approach. Per-org overrides in `organizations-file` layer on top of the base.
+> You must provide either `organizations` or `organizations-file`. The `custom-properties-file` and `rulesets-file` inputs provide base settings for all orgs and can be combined with either approach. Per-org overrides in `organizations-file` layer on top of the base.
 
 ## Action Outputs
 

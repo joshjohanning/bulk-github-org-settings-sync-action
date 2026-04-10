@@ -4,6 +4,9 @@
 # Base custom properties can be defined in a separate custom-properties.yml file
 # and provided via the custom-properties-file input. Per-org overrides below
 # layer on top — properties with the same name override the base definition.
+#
+# Rulesets can be defined in a separate rulesets.json file and provided via the
+# rulesets-file input. Per-org rulesets-file overrides the base for that org.
 
 orgs:
   # Org that inherits all base properties from custom-properties-file as-is
@@ -12,6 +15,8 @@ orgs:
   # Org with per-org inline overrides (layers on top of base custom-properties-file)
   - org: my-other-org
     # custom-properties-file: './config/custom-properties/other-org.yml' # Use a different base file for this org
+    # rulesets-file: './config/rulesets/other-org.json' # Use a different rulesets file for this org
+    # delete-unmanaged-rulesets: true # Delete rulesets not in the config for this org
     custom-properties:
       - name: team
         value-type: single_select
