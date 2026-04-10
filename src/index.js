@@ -734,7 +734,7 @@ export async function syncOrgRulesets(octokit, org, rulesetFilePath, deleteUnman
     }
   }
 
-  return { subResults, failed: subResults.some(s => s.status === SubResultStatus.WARNING) };
+  return { subResults, failed: false };
 }
 
 // ─── Result helpers ─────────────────────────────────────────────────────────────
@@ -863,7 +863,8 @@ export async function run() {
           result.subResults.push(...rsResult.subResults);
 
           if (rsResult.failed) {
-            result.hasWarnings = true;
+            result.success = false;
+            result.error = result.error ? `${result.error}; Rulesets sync failed` : 'Rulesets sync failed';
           }
         }
 
