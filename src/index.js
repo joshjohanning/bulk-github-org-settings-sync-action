@@ -774,7 +774,7 @@ export async function syncOrgRulesets(octokit, org, rulesetFilePaths, deleteUnma
   // Fetch existing org rulesets (paginate to get the full set)
   let existingRulesets;
   try {
-    existingRulesets = await octokit.paginate('GET /orgs/{org}/rulesets', { org });
+    existingRulesets = await octokit.paginate('GET /orgs/{org}/rulesets', { org, per_page: 100 });
   } catch (error) {
     if (error.status === 404) {
       existingRulesets = [];
