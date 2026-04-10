@@ -3,11 +3,68 @@
  */
 
 import { jest } from '@jest/globals';
-import * as path from 'path';
-import { fileURLToPath } from 'url';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// ─── Mock fs module ─────────────────────────────────────────────────────────────
+
+const mockFs = {
+  readFileSync: jest.fn(),
+  existsSync: jest.fn()
+};
+// CJS modules expose named exports and a default that mirrors them
+mockFs.default = mockFs;
+
+// Mock action.yml content so getKnownOrgConfigKeys() works under mocked fs
+const mockActionYmlContent = `
+name: 'Bulk GitHub Organization Settings Sync'
+inputs:
+  github-token:
+    description: 'GitHub token'
+  github-api-url:
+    description: 'GitHub API URL'
+  organizations:
+    description: 'Comma-separated list of organization names'
+  organizations-file:
+    description: 'Path to YAML file'
+  custom-properties-file:
+    description: 'Custom properties file'
+  delete-unmanaged-properties:
+    description: 'Delete unmanaged properties'
+  dry-run:
+    description: 'Dry run mode'
+`;
+
+// Per-test mock file content and YAML results
+let testMockFiles = {};
+
+/**
+ * Reset fs mock implementations to defaults.
+ * action.yml is always available; other files are controlled via setMockFileContent.
+ */
+function setupDefaultMocks() {
+  testMockFiles = {};
+
+  mockFs.existsSync.mockImplementation(filePath => {
+    if (typeof filePath === 'string' && filePath.endsWith('action.yml')) return true;
+    return filePath in testMockFiles;
+  });
+
+  mockFs.readFileSync.mockImplementation((filePath, _encoding) => {
+    if (typeof filePath === 'string' && filePath.endsWith('action.yml')) {
+      return mockActionYmlContent;
+    }
+    if (testMockFiles[filePath] !== undefined) return testMockFiles[filePath];
+    throw new Error(`ENOENT: no such file or directory, open '${filePath}'`);
+  });
+}
+
+/**
+ * Register mock file content for a given path.
+ * @param {string} content - Raw YAML string the mock readFileSync will return
+ * @param {string} filePath - The path that readFileSync / existsSync should match
+ */
+function setMockFileContent(content, filePath) {
+  testMockFiles[filePath] = content;
+}
 
 // Mock the @actions/core module
 const mockCore = {
@@ -35,10 +92,13 @@ const mockOctokit = {
 };
 
 // Mock the modules before importing the main module
+jest.unstable_mockModule('fs', () => mockFs);
 jest.unstable_mockModule('@actions/core', () => mockCore);
 jest.unstable_mockModule('@octokit/rest', () => ({
   Octokit: jest.fn(() => mockOctokit)
 }));
+
+setupDefaultMocks();
 
 // Import the main module and helper functions after mocking
 const {
@@ -50,13 +110,16 @@ const {
   compareCustomProperty,
   syncCustomProperties,
   mergeCustomProperties,
-  validateOrgConfig
+  validateOrgConfig,
+  resetKnownOrgConfigKeysCache
 } = await import('../src/index.js');
 
 describe('Bulk GitHub Organization Settings Sync Action', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockRequest.mockReset();
+    setupDefaultMocks();
+    resetKnownOrgConfigKeysCache();
   });
 
   // ─── validateOrgConfig ───────────────────────────────────────────────
@@ -109,6 +172,38 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
     test('should handle null/non-object gracefully', () => {
       expect(() => validateOrgConfig(null, 'test')).not.toThrow();
       expect(() => validateOrgConfig('string', 'test')).not.toThrow();
+    });
+
+    test('should warn for non-boolean delete-unmanaged-properties value', () => {
+      validateOrgConfig({ org: 'my-org', 'delete-unmanaged-properties': 'yes' }, 'my-org');
+      expect(mockCore.warning).toHaveBeenCalledWith(
+        expect.stringContaining('Invalid "delete-unmanaged-properties" value')
+      );
+    });
+
+    test('should not warn for boolean delete-unmanaged-properties value', () => {
+      validateOrgConfig({ org: 'my-org', 'delete-unmanaged-properties': true }, 'my-org');
+      expect(mockCore.warning).not.toHaveBeenCalled();
+    });
+
+    test('should not warn for action input keys used as per-org overrides', () => {
+      validateOrgConfig(
+        { org: 'my-org', 'custom-properties-file': './props.yml', 'delete-unmanaged-properties': true },
+        'my-org'
+      );
+      expect(mockCore.warning).not.toHaveBeenCalled();
+    });
+
+    test('should warn when action.yml cannot be read', () => {
+      resetKnownOrgConfigKeysCache();
+      mockFs.readFileSync.mockImplementation(filePath => {
+        if (typeof filePath === 'string' && filePath.endsWith('action.yml')) {
+          throw new Error('ENOENT');
+        }
+        return '';
+      });
+      validateOrgConfig({ org: 'my-org', 'dry-run': true }, 'my-org');
+      expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('Could not read action.yml'));
     });
   });
 
@@ -326,8 +421,23 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
     });
 
     test('should parse organizations file', () => {
-      const samplePath = path.join(__dirname, '..', 'sample-configuration', 'orgs.yml');
-      const result = parseOrganizations('', samplePath, '');
+      const orgsYaml = `orgs:
+  - org: my-org
+  - org: my-other-org
+    custom-properties:
+      - name: team
+        value-type: single_select
+        required: true
+        description: 'The team that owns this repository'
+        allowed-values:
+          - platform
+          - frontend
+          - backend
+          - data-science
+        values-editable-by: org_actors
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+      const result = parseOrganizations('', '/mock/orgs.yml', '');
 
       expect(result).toHaveLength(2);
       expect(result[0].org).toBe('my-org');
@@ -340,8 +450,40 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
     });
 
     test('should parse organizations with custom-properties-file', () => {
-      const cpPath = path.join(__dirname, '..', 'sample-configuration', 'custom-properties.yml');
-      const result = parseOrganizations('my-org', '', cpPath);
+      const cpYaml = `- name: team
+  value-type: single_select
+  required: true
+  description: 'The team that owns this repository'
+  allowed-values:
+    - platform
+    - frontend
+    - backend
+    - devops
+    - security
+  values-editable-by: org_actors
+- name: environment
+  value-type: multi_select
+  required: false
+  description: 'Deployment environments for this repository'
+  allowed-values:
+    - production
+    - staging
+    - development
+  values-editable-by: org_and_repo_actors
+- name: is-production
+  value-type: true_false
+  required: false
+  default-value: 'false'
+  description: 'Whether this repository is used in production'
+  values-editable-by: org_actors
+- name: cost-center
+  value-type: string
+  required: false
+  description: 'Cost center code for billing'
+  values-editable-by: org_actors
+`;
+      setMockFileContent(cpYaml, '/mock/custom-properties.yml');
+      const result = parseOrganizations('my-org', '', '/mock/custom-properties.yml');
 
       expect(result).toHaveLength(1);
       expect(result[0].org).toBe('my-org');
@@ -351,9 +493,56 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
     });
 
     test('should merge base custom-properties-file with per-org overrides in organizations-file', () => {
-      const samplePath = path.join(__dirname, '..', 'sample-configuration', 'orgs.yml');
-      const cpPath = path.join(__dirname, '..', 'sample-configuration', 'custom-properties.yml');
-      const result = parseOrganizations('', samplePath, cpPath);
+      const orgsYaml = `orgs:
+  - org: my-org
+  - org: my-other-org
+    custom-properties:
+      - name: team
+        value-type: single_select
+        required: true
+        description: 'The team that owns this repository'
+        allowed-values:
+          - platform
+          - frontend
+          - backend
+          - data-science
+        values-editable-by: org_actors
+`;
+      const cpYaml = `- name: team
+  value-type: single_select
+  required: true
+  description: 'The team that owns this repository'
+  allowed-values:
+    - platform
+    - frontend
+    - backend
+    - devops
+    - security
+  values-editable-by: org_actors
+- name: environment
+  value-type: multi_select
+  required: false
+  description: 'Deployment environments for this repository'
+  allowed-values:
+    - production
+    - staging
+    - development
+  values-editable-by: org_and_repo_actors
+- name: is-production
+  value-type: true_false
+  required: false
+  default-value: 'false'
+  description: 'Whether this repository is used in production'
+  values-editable-by: org_actors
+- name: cost-center
+  value-type: string
+  required: false
+  description: 'Cost center code for billing'
+  values-editable-by: org_actors
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+      setMockFileContent(cpYaml, '/mock/custom-properties.yml');
+      const result = parseOrganizations('', '/mock/orgs.yml', '/mock/custom-properties.yml');
 
       expect(result).toHaveLength(2);
       // my-org: no inline overrides → gets all 4 base properties
@@ -366,9 +555,69 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
     });
 
     test('should use per-org custom-properties-file to override global base', () => {
-      const orgsPath = path.join(__dirname, 'fixtures', 'orgs-with-custom-properties-file.yml');
-      const globalCpPath = path.join(__dirname, '..', 'sample-configuration', 'custom-properties.yml');
-      const result = parseOrganizations('', orgsPath, globalCpPath);
+      const altCpYaml = `- name: department
+  value-type: single_select
+  required: true
+  description: 'Department'
+  allowed-values:
+    - engineering
+    - marketing
+    - sales
+  values-editable-by: org_actors
+`;
+      const orgsYaml = `orgs:
+  - org: my-org
+  - org: my-other-org
+    custom-properties-file: '/mock/alt-custom-properties.yml'
+    custom-properties:
+      - name: department
+        value-type: single_select
+        required: true
+        description: 'Department'
+        allowed-values:
+          - engineering
+          - marketing
+          - sales
+          - data-science
+        values-editable-by: org_actors
+`;
+      const globalCpYaml = `- name: team
+  value-type: single_select
+  required: true
+  description: 'The team that owns this repository'
+  allowed-values:
+    - platform
+    - frontend
+    - backend
+    - devops
+    - security
+  values-editable-by: org_actors
+- name: environment
+  value-type: multi_select
+  required: false
+  description: 'Deployment environments for this repository'
+  allowed-values:
+    - production
+    - staging
+    - development
+  values-editable-by: org_and_repo_actors
+- name: is-production
+  value-type: true_false
+  required: false
+  default-value: 'false'
+  description: 'Whether this repository is used in production'
+  values-editable-by: org_actors
+- name: cost-center
+  value-type: string
+  required: false
+  description: 'Cost center code for billing'
+  values-editable-by: org_actors
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+      setMockFileContent(altCpYaml, '/mock/alt-custom-properties.yml');
+      setMockFileContent(globalCpYaml, '/mock/custom-properties.yml');
+
+      const result = parseOrganizations('', '/mock/orgs.yml', '/mock/custom-properties.yml');
 
       expect(result).toHaveLength(2);
       // my-org: no per-org file → uses global base (4 properties)
@@ -376,13 +625,34 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
       expect(result[0].customProperties.find(p => p.property_name === 'team')).toBeDefined();
 
       // my-other-org: per-org file has 1 property (department), inline overrides it
-      // Result should be department only (from per-org file), not the global base
       expect(result[1].customProperties.find(p => p.property_name === 'team')).toBeUndefined();
       const deptProp = result[1].customProperties.find(p => p.property_name === 'department');
       expect(deptProp).toBeDefined();
-      // Inline override added data-science to allowed_values
       expect(deptProp.allowed_values).toContain('data-science');
       expect(deptProp.allowed_values).toContain('engineering');
+    });
+
+    test('should parse per-org delete-unmanaged-properties override', () => {
+      const orgsYaml = `orgs:
+  - org: my-org
+    custom-properties:
+      - name: team
+        value-type: string
+        required: false
+  - org: my-other-org
+    delete-unmanaged-properties: true
+    custom-properties:
+      - name: team
+        value-type: string
+        required: false
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+
+      const result = parseOrganizations('', '/mock/orgs.yml', '');
+
+      expect(result).toHaveLength(2);
+      expect(result[0].deleteUnmanagedProperties).toBeUndefined();
+      expect(result[1].deleteUnmanagedProperties).toBe(true);
     });
   });
 
@@ -394,8 +664,23 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
     });
 
     test('should parse the sample config', () => {
-      const samplePath = path.join(__dirname, '..', 'sample-configuration', 'orgs.yml');
-      const result = parseOrganizationsFile(samplePath);
+      const orgsYaml = `orgs:
+  - org: my-org
+  - org: my-other-org
+    custom-properties:
+      - name: team
+        value-type: single_select
+        required: true
+        description: 'The team that owns this repository'
+        allowed-values:
+          - platform
+          - frontend
+          - backend
+          - data-science
+        values-editable-by: org_actors
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+      const result = parseOrganizationsFile('/mock/orgs.yml');
 
       expect(result).toHaveLength(2);
       expect(result[0].org).toBe('my-org');
@@ -409,6 +694,30 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
       expect(teamProp.required).toBe(true);
       expect(teamProp.allowed_values).toContain('data-science');
     });
+
+    test('should throw for invalid format (no orgs array)', () => {
+      setMockFileContent('settings: true', '/mock/bad.yml');
+      expect(() => parseOrganizationsFile('/mock/bad.yml')).toThrow('expected a "orgs" array');
+    });
+
+    test('should throw for org entry without org field', () => {
+      setMockFileContent('orgs:\n  - custom-properties: []', '/mock/bad.yml');
+      expect(() => parseOrganizationsFile('/mock/bad.yml')).toThrow('must have an "org" field');
+    });
+
+    test('should throw for invalid custom-properties-file value (non-string)', () => {
+      setMockFileContent('orgs:\n  - org: my-org\n    custom-properties-file: 123', '/mock/bad.yml');
+      expect(() => parseOrganizationsFile('/mock/bad.yml')).toThrow(
+        'Invalid "custom-properties-file" for org "my-org"'
+      );
+    });
+
+    test('should throw for empty custom-properties-file value', () => {
+      setMockFileContent(`orgs:\n  - org: my-org\n    custom-properties-file: ''`, '/mock/bad.yml');
+      expect(() => parseOrganizationsFile('/mock/bad.yml')).toThrow(
+        'Invalid "custom-properties-file" for org "my-org"'
+      );
+    });
   });
 
   // ─── parseCustomPropertiesFile ──────────────────────────────────────────
@@ -419,8 +728,40 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
     });
 
     test('should parse the sample custom properties file', () => {
-      const cpPath = path.join(__dirname, '..', 'sample-configuration', 'custom-properties.yml');
-      const result = parseCustomPropertiesFile(cpPath);
+      const cpYaml = `- name: team
+  value-type: single_select
+  required: true
+  description: 'The team that owns this repository'
+  allowed-values:
+    - platform
+    - frontend
+    - backend
+    - devops
+    - security
+  values-editable-by: org_actors
+- name: environment
+  value-type: multi_select
+  required: false
+  description: 'Deployment environments for this repository'
+  allowed-values:
+    - production
+    - staging
+    - development
+  values-editable-by: org_and_repo_actors
+- name: is-production
+  value-type: true_false
+  required: false
+  default-value: 'false'
+  description: 'Whether this repository is used in production'
+  values-editable-by: org_actors
+- name: cost-center
+  value-type: string
+  required: false
+  description: 'Cost center code for billing'
+  values-editable-by: org_actors
+`;
+      setMockFileContent(cpYaml, '/mock/custom-properties.yml');
+      const result = parseCustomPropertiesFile('/mock/custom-properties.yml');
 
       expect(result).toHaveLength(4);
       expect(result[0].property_name).toBe('team');
@@ -692,16 +1033,63 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
     });
 
     test('should process orgs file and set outputs', async () => {
-      const samplePath = path.join(__dirname, '..', 'sample-configuration', 'orgs.yml');
-      const cpPath = path.join(__dirname, '..', 'sample-configuration', 'custom-properties.yml');
+      const orgsYaml = `orgs:
+  - org: my-org
+  - org: my-other-org
+    custom-properties:
+      - name: team
+        value-type: single_select
+        required: true
+        description: 'The team that owns this repository'
+        allowed-values:
+          - platform
+          - frontend
+          - backend
+          - data-science
+        values-editable-by: org_actors
+`;
+      const cpYaml = `- name: team
+  value-type: single_select
+  required: true
+  description: 'The team that owns this repository'
+  allowed-values:
+    - platform
+    - frontend
+    - backend
+    - devops
+    - security
+  values-editable-by: org_actors
+- name: environment
+  value-type: multi_select
+  required: false
+  description: 'Deployment environments for this repository'
+  allowed-values:
+    - production
+    - staging
+    - development
+  values-editable-by: org_and_repo_actors
+- name: is-production
+  value-type: true_false
+  required: false
+  default-value: 'false'
+  description: 'Whether this repository is used in production'
+  values-editable-by: org_actors
+- name: cost-center
+  value-type: string
+  required: false
+  description: 'Cost center code for billing'
+  values-editable-by: org_actors
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+      setMockFileContent(cpYaml, '/mock/custom-properties.yml');
 
       mockCore.getInput.mockImplementation(name => {
         const inputs = {
           'github-token': 'test-token',
           'github-api-url': 'https://api.github.com',
           organizations: '',
-          'organizations-file': samplePath,
-          'custom-properties-file': cpPath,
+          'organizations-file': '/mock/orgs.yml',
+          'custom-properties-file': '/mock/custom-properties.yml',
           'delete-unmanaged-properties': 'false',
           'dry-run': 'true'
         };
@@ -726,13 +1114,47 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
     });
 
     test('should handle org processing failure gracefully', async () => {
+      const cpYaml = `- name: team
+  value-type: single_select
+  required: true
+  description: 'The team that owns this repository'
+  allowed-values:
+    - platform
+    - frontend
+    - backend
+    - devops
+    - security
+  values-editable-by: org_actors
+- name: environment
+  value-type: multi_select
+  required: false
+  description: 'Deployment environments for this repository'
+  allowed-values:
+    - production
+    - staging
+    - development
+  values-editable-by: org_and_repo_actors
+- name: is-production
+  value-type: true_false
+  required: false
+  default-value: 'false'
+  description: 'Whether this repository is used in production'
+  values-editable-by: org_actors
+- name: cost-center
+  value-type: string
+  required: false
+  description: 'Cost center code for billing'
+  values-editable-by: org_actors
+`;
+      setMockFileContent(cpYaml, '/mock/custom-properties.yml');
+
       mockCore.getInput.mockImplementation(name => {
         const inputs = {
           'github-token': 'test-token',
           'github-api-url': 'https://api.github.com',
           organizations: 'my-org',
           'organizations-file': '',
-          'custom-properties-file': path.join(__dirname, '..', 'sample-configuration', 'custom-properties.yml'),
+          'custom-properties-file': '/mock/custom-properties.yml',
           'delete-unmanaged-properties': 'false',
           'dry-run': 'false'
         };

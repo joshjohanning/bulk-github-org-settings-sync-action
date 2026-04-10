@@ -13,6 +13,8 @@
 import * as core from '@actions/core';
 import { Octokit } from '@octokit/rest';
 import * as fs from 'fs';
+import * as path from 'path';
+import * as url from 'url';
 import * as yaml from 'js-yaml';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────────
@@ -33,10 +35,56 @@ function getBooleanInput(name) {
 // ─── YAML key validation ────────────────────────────────────────────────────────
 
 /**
- * Known keys for organization config entries in the YAML file.
- * Used to warn about typos or unknown keys.
+ * Build the set of known org config keys by reading action.yml inputs.
+ * This ensures per-org overrides in orgs.yml stay in sync with action inputs
+ * without maintaining a separate hardcoded list.
+ * @returns {Set<string>} Set of valid configuration keys
  */
-const KNOWN_ORG_CONFIG_KEYS = new Set(['org', 'custom-properties', 'custom-properties-file']);
+function getKnownOrgConfigKeys() {
+  // 'org' is the organization identifier in YAML config
+  // 'custom-properties' is inline property definitions (YAML-only, not an action input)
+  const keys = new Set(['org', 'custom-properties']);
+
+  try {
+    const __filename = url.fileURLToPath(import.meta.url);
+    const __dirname = path.dirname(__filename);
+
+    const actionYmlPath = path.join(__dirname, '..', 'action.yml');
+    const actionYmlContent = fs.readFileSync(actionYmlPath, 'utf8');
+    const actionConfig = yaml.load(actionYmlContent);
+
+    if (actionConfig?.inputs) {
+      for (const inputName of Object.keys(actionConfig.inputs)) {
+        keys.add(inputName);
+      }
+    }
+  } catch (error) {
+    core.warning(`Could not read action.yml to determine valid configuration keys: ${error.message}`);
+  }
+
+  return keys;
+}
+
+let _knownOrgConfigKeys = null;
+
+/**
+ * Get cached known configuration keys.
+ * @returns {Set<string>} Set of valid configuration keys
+ */
+function getCachedKnownOrgConfigKeys() {
+  if (_knownOrgConfigKeys === null) {
+    _knownOrgConfigKeys = getKnownOrgConfigKeys();
+  }
+  return _knownOrgConfigKeys;
+}
+
+/**
+ * Reset the known org config keys cache.
+ * Exported for testing purposes to ensure test isolation.
+ */
+export function resetKnownOrgConfigKeysCache() {
+  _knownOrgConfigKeys = null;
+}
 
 /**
  * Known keys for custom property definitions in the YAML file.
@@ -62,8 +110,10 @@ export function validateOrgConfig(orgConfig, orgName) {
     return;
   }
 
+  const knownKeys = getCachedKnownOrgConfigKeys();
+
   for (const key of Object.keys(orgConfig)) {
-    if (!KNOWN_ORG_CONFIG_KEYS.has(key)) {
+    if (!knownKeys.has(key)) {
       core.warning(
         `⚠️  Unknown configuration key "${key}" found for organization "${orgName}". ` +
           `This setting may not exist, may not be available in this version, or may have a typo.`
@@ -84,6 +134,17 @@ export function validateOrgConfig(orgConfig, orgName) {
           );
         }
       }
+    }
+  }
+
+  // Validate delete-unmanaged-properties value if present
+  if (Object.prototype.hasOwnProperty.call(orgConfig, 'delete-unmanaged-properties')) {
+    const val = orgConfig['delete-unmanaged-properties'];
+    if (typeof val !== 'boolean') {
+      core.warning(
+        `⚠️  Invalid "delete-unmanaged-properties" value for organization "${orgName}": ` +
+          `expected true or false, got "${val}". This setting will be ignored.`
+      );
     }
   }
 }
@@ -171,7 +232,7 @@ export function parseOrganizations(organizationsInput, organizationsFile, custom
           orgBase = parseCustomPropertiesFile(orgConfig.customPropertiesFile);
         } catch (error) {
           throw new Error(
-            `Failed to parse custom properties file "${orgConfig.customPropertiesFile}" for organization "${orgConfig.org}"`,
+            `Failed to parse custom properties file "${orgConfig.customPropertiesFile}" for organization "${orgConfig.org}": ${error.message}`,
             { cause: error }
           );
         }
@@ -231,7 +292,7 @@ export function mergeCustomProperties(baseProperties, orgProperties) {
 /**
  * Parse the organizations YAML config file.
  * @param {string} filePath - Path to the YAML file
- * @returns {Array<{ org: string, customPropertiesFile?: string, customProperties?: Array }>}
+ * @returns {Array<{ org: string, customPropertiesFile?: string, customProperties?: Array, deleteUnmanagedProperties?: boolean }>}
  */
 export function parseOrganizationsFile(filePath) {
   if (!fs.existsSync(filePath)) {
@@ -264,6 +325,13 @@ export function parseOrganizationsFile(filePath) {
 
     if (orgConfig['custom-properties']) {
       result.customProperties = normalizeCustomProperties(orgConfig['custom-properties']);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'delete-unmanaged-properties')) {
+      const val = orgConfig['delete-unmanaged-properties'];
+      if (typeof val === 'boolean') {
+        result.deleteUnmanagedProperties = val;
+      }
     }
 
     return result;
@@ -613,7 +681,7 @@ export async function run() {
             octokit,
             org,
             orgConfig.customProperties,
-            deleteUnmanagedProperties,
+            orgConfig.deleteUnmanagedProperties ?? deleteUnmanagedProperties,
             dryRun
           );
           result.subResults.push(...cpResult.subResults);
