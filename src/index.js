@@ -162,15 +162,15 @@ function formatSubResultSummary(subResult) {
  * @param {string} organizationsInput - Comma-separated org names
  * @param {string} organizationsFile - Path to YAML config file
  * @param {string} customPropertiesFile - Path to custom properties YAML file
- * @param {string} [rulesetsFile] - Path to rulesets JSON file (base for all orgs)
+ * @param {string[]} [rulesetsFiles] - Paths to ruleset JSON files (base for all orgs)
  * @param {boolean} [deleteUnmanagedRulesets] - Whether to delete rulesets not in config
- * @returns {Array<{ org: string, customProperties?: Array, rulesetsFile?: string, deleteUnmanagedRulesets?: boolean }>} Parsed org configs
+ * @returns {Array<{ org: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean }>} Parsed org configs
  */
 export function parseOrganizations(
   organizationsInput,
   organizationsFile,
   customPropertiesFile,
-  rulesetsFile,
+  rulesetsFiles,
   deleteUnmanagedRulesets
 ) {
   // Load base custom properties from separate file (applies to all orgs)
@@ -205,8 +205,8 @@ export function parseOrganizations(
       delete orgConfig.customPropertiesFile;
 
       // Per-org rulesets-file overrides the base for this org
-      if (!orgConfig.rulesetsFile && rulesetsFile) {
-        orgConfig.rulesetsFile = rulesetsFile;
+      if (!orgConfig.rulesetsFiles && rulesetsFiles && rulesetsFiles.length > 0) {
+        orgConfig.rulesetsFiles = rulesetsFiles;
       }
 
       // Per-org delete-unmanaged-rulesets overrides the base for this org
@@ -234,7 +234,7 @@ export function parseOrganizations(
   return orgs.map(org => ({
     org,
     ...(baseCustomProperties ? { customProperties: baseCustomProperties } : {}),
-    ...(rulesetsFile ? { rulesetsFile } : {}),
+    ...(rulesetsFiles && rulesetsFiles.length > 0 ? { rulesetsFiles } : {}),
     ...(deleteUnmanagedRulesets !== undefined ? { deleteUnmanagedRulesets } : {})
   }));
 }
@@ -262,7 +262,7 @@ export function mergeCustomProperties(baseProperties, orgProperties) {
 /**
  * Parse the organizations YAML config file.
  * @param {string} filePath - Path to the YAML file
- * @returns {Array<{ org: string, customPropertiesFile?: string, customProperties?: Array, rulesetsFile?: string, deleteUnmanagedRulesets?: boolean }>}
+ * @returns {Array<{ org: string, customPropertiesFile?: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean }>}
  */
 export function parseOrganizationsFile(filePath) {
   if (!fs.existsSync(filePath)) {
@@ -299,10 +299,7 @@ export function parseOrganizationsFile(filePath) {
 
     if (Object.prototype.hasOwnProperty.call(orgConfig, 'rulesets-file')) {
       const rsFile = orgConfig['rulesets-file'];
-      if (typeof rsFile !== 'string' || rsFile.trim() === '') {
-        throw new Error(`Invalid "rulesets-file" for org "${orgConfig.org}": expected a non-empty string`);
-      }
-      result.rulesetsFile = rsFile.trim();
+      result.rulesetsFiles = parseRulesetsFileValue(rsFile, orgConfig.org);
     }
 
     if (Object.prototype.hasOwnProperty.call(orgConfig, 'delete-unmanaged-rulesets')) {
@@ -311,6 +308,40 @@ export function parseOrganizationsFile(filePath) {
 
     return result;
   });
+}
+
+/**
+ * Parse a rulesets-file value into an array of file paths.
+ * Accepts a single string (comma-separated), or a YAML array of strings.
+ * @param {string|string[]} value - The rulesets-file value from config
+ * @param {string} orgName - Org name for error messages
+ * @returns {string[]} Array of trimmed, non-empty file paths
+ */
+function parseRulesetsFileValue(value, orgName) {
+  let paths;
+  if (Array.isArray(value)) {
+    paths = value.map(v => {
+      if (typeof v !== 'string' || v.trim() === '') {
+        throw new Error(`Invalid entry in "rulesets-file" array for org "${orgName}": expected non-empty strings`);
+      }
+      return v.trim();
+    });
+  } else if (typeof value === 'string') {
+    paths = value
+      .split(',')
+      .map(p => p.trim())
+      .filter(p => p.length > 0);
+  } else {
+    throw new Error(
+      `Invalid "rulesets-file" for org "${orgName}": expected a string, comma-separated string, or array of strings`
+    );
+  }
+
+  if (paths.length === 0) {
+    throw new Error(`Invalid "rulesets-file" for org "${orgName}": no file paths provided`);
+  }
+
+  return paths;
 }
 
 /**
@@ -572,38 +603,37 @@ export async function syncCustomProperties(octokit, org, desiredProperties, dele
 
 /**
  * Sync organization-level rulesets.
- * Reads a JSON file containing one or more ruleset configurations, compares with
- * existing rulesets, and creates/updates/deletes as needed (mirroring the repo-level
- * rulesets sync in bulk-github-repo-settings-sync-action).
+ * Reads one or more JSON files, each containing a single ruleset configuration,
+ * compares with existing rulesets, and creates/updates/deletes as needed
+ * (mirroring the repo-level rulesets sync in bulk-github-repo-settings-sync-action).
  *
- * The JSON file may contain either a single ruleset object or an array of rulesets.
  * @param {Octokit} octokit - Octokit instance
  * @param {string} org - Organization name
- * @param {string} rulesetFilePath - Path to the ruleset JSON file
+ * @param {string[]} rulesetFilePaths - Paths to ruleset JSON files (one ruleset per file)
  * @param {boolean} deleteUnmanaged - Whether to delete rulesets not in config
  * @param {boolean} dryRun - Preview mode
  * @returns {Promise<Object>} Result object with subResults
  */
-export async function syncOrgRulesets(octokit, org, rulesetFilePath, deleteUnmanaged, dryRun) {
+export async function syncOrgRulesets(octokit, org, rulesetFilePaths, deleteUnmanaged, dryRun) {
   const subResults = [];
   const wouldPrefix = dryRun ? 'Would ' : '';
 
-  // Read and parse the ruleset JSON file
-  let rulesetConfigs;
-  try {
-    const fileContent = fs.readFileSync(rulesetFilePath, 'utf8');
-    const parsed = JSON.parse(fileContent);
-    // Support both a single ruleset object and an array of rulesets
-    rulesetConfigs = Array.isArray(parsed) ? parsed : [parsed];
-  } catch (error) {
-    throw new Error(`Failed to read or parse ruleset file at ${rulesetFilePath}: ${error.message}`);
-  }
-
-  // Validate that every ruleset has a name
-  for (const rulesetConfig of rulesetConfigs) {
-    if (!rulesetConfig.name) {
-      throw new Error('Each ruleset configuration must include a "name" field');
+  // Read and parse each ruleset JSON file
+  const rulesetConfigs = [];
+  for (const filePath of rulesetFilePaths) {
+    let rulesetConfig;
+    try {
+      const fileContent = fs.readFileSync(filePath, 'utf8');
+      rulesetConfig = JSON.parse(fileContent);
+    } catch (error) {
+      throw new Error(`Failed to read or parse ruleset file at ${filePath}: ${error.message}`);
     }
+
+    if (!rulesetConfig.name) {
+      throw new Error(`Ruleset file "${filePath}" must include a "name" field`);
+    }
+
+    rulesetConfigs.push(rulesetConfig);
   }
 
   // Collect managed names for delete-unmanaged logic
@@ -772,7 +802,13 @@ export async function run() {
     const organizationsFile = core.getInput('organizations-file');
     const customPropertiesFile = core.getInput('custom-properties-file');
     const deleteUnmanagedProperties = getBooleanInput('delete-unmanaged-properties') ?? false;
-    const rulesetsFile = core.getInput('rulesets-file');
+    const rulesetsFileInput = core.getInput('rulesets-file');
+    const rulesetsFiles = rulesetsFileInput
+      ? rulesetsFileInput
+          .split(',')
+          .map(p => p.trim())
+          .filter(p => p.length > 0)
+      : [];
     const deleteUnmanagedRulesets = getBooleanInput('delete-unmanaged-rulesets') ?? false;
     const dryRun = getBooleanInput('dry-run') ?? false;
 
@@ -791,13 +827,13 @@ export async function run() {
       organizationsInput,
       organizationsFile,
       customPropertiesFile,
-      rulesetsFile,
+      rulesetsFiles,
       deleteUnmanagedRulesets
     );
 
     // Check that at least one setting type is specified
     const hasCustomProperties = orgList.some(o => o.customProperties && o.customProperties.length > 0);
-    const hasRulesets = orgList.some(o => o.rulesetsFile);
+    const hasRulesets = orgList.some(o => o.rulesetsFiles && o.rulesetsFiles.length > 0);
     if (!hasCustomProperties && !hasRulesets) {
       throw new Error(
         'At least one setting must be specified. Provide custom properties via ' +
@@ -861,12 +897,12 @@ export async function run() {
         }
 
         // Sync rulesets
-        if (orgConfig.rulesetsFile) {
-          core.info(`  📋 Syncing rulesets from ${orgConfig.rulesetsFile}...`);
+        if (orgConfig.rulesetsFiles && orgConfig.rulesetsFiles.length > 0) {
+          core.info(`  📋 Syncing rulesets from ${orgConfig.rulesetsFiles.length} file(s)...`);
           const rsResult = await syncOrgRulesets(
             octokit,
             org,
-            orgConfig.rulesetsFile,
+            orgConfig.rulesetsFiles,
             orgConfig.deleteUnmanagedRulesets ?? false,
             dryRun
           );
