@@ -789,6 +789,15 @@ export async function syncOrgRulesets(octokit, org, rulesetFilePaths, deleteUnma
     rulesetConfigs.push(rulesetConfig);
   }
 
+  // Detect duplicate ruleset names across files
+  const seenNames = new Set();
+  for (const config of rulesetConfigs) {
+    if (seenNames.has(config.name)) {
+      throw new Error(`Duplicate ruleset name "${config.name}" found across ruleset files`);
+    }
+    seenNames.add(config.name);
+  }
+
   // Collect managed names for delete-unmanaged logic
   const managedNames = new Set(rulesetConfigs.map(r => r.name));
 
@@ -811,10 +820,27 @@ export async function syncOrgRulesets(octokit, org, rulesetFilePaths, deleteUnma
 
     if (existingRuleset) {
       // Fetch full ruleset details to compare
-      const { data: fullRuleset } = await octokit.request('GET /orgs/{org}/rulesets/{ruleset_id}', {
-        org,
-        ruleset_id: existingRuleset.id
-      });
+      let fullRuleset;
+      try {
+        const { data } = await octokit.request('GET /orgs/{org}/rulesets/{ruleset_id}', {
+          org,
+          ruleset_id: existingRuleset.id
+        });
+        fullRuleset = data;
+      } catch (error) {
+        core.warning(
+          `  ⚠️  Failed to fetch ruleset details for "${rulesetName}" (ID: ${existingRuleset.id}): ${error.message}`
+        );
+        subResults.push(
+          createSubResult(
+            'ruleset-update',
+            SubResultStatus.WARNING,
+            `Failed to fetch details for "${rulesetName}" (ID: ${existingRuleset.id}): ${error.message}`
+          )
+        );
+        hasFailed = true;
+        continue;
+      }
 
       // Normalize existing config for comparison (remove API-only fields)
       const existingConfig = {
