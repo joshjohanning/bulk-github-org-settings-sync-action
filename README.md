@@ -147,6 +147,20 @@ orgs:
         values-editable-by: org_actors
 ```
 
+**Optional: `base-path`**
+
+Use the `base-path` top-level property to avoid repeating a common directory prefix for all file-path settings (`custom-properties-file`, `rulesets-file`). Relative paths in per-org overrides are resolved relative to `base-path`. Absolute paths are left unchanged.
+
+```yaml
+base-path: './config/'
+orgs:
+  - org: my-org
+    custom-properties-file: 'custom-properties/base.yml' # resolved to ./config/custom-properties/base.yml
+    rulesets-file: 'rulesets/branch-protection.json' # resolved to ./config/rulesets/branch-protection.json
+  - org: my-other-org
+    custom-properties-file: 'custom-properties/other-org.yml'
+```
+
 Use in workflow:
 
 ```yml
