@@ -401,11 +401,11 @@ export function parseOrganizationsFile(filePath) {
 
   // Read optional base-path for file path resolution
   const rawBasePath = config['base-path'];
-  const basePath = typeof rawBasePath === 'string' ? rawBasePath.trim() : rawBasePath;
-  if (basePath !== undefined && basePath !== null && basePath !== '') {
-    if (typeof basePath !== 'string') {
-      throw new Error(`'base-path' must be a string, got ${typeof basePath}`);
-    }
+  if (rawBasePath !== undefined && rawBasePath !== null && typeof rawBasePath !== 'string') {
+    throw new Error(`'base-path' must be a string, got ${typeof rawBasePath}`);
+  }
+  const basePath = typeof rawBasePath === 'string' ? rawBasePath.trim() : undefined;
+  if (basePath) {
     core.info(`Resolving file paths relative to base-path: ${basePath}`);
   }
 
