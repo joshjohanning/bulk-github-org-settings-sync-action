@@ -5,6 +5,10 @@
 # and provided via the custom-properties-file input. Per-org overrides below
 # layer on top — properties with the same name override the base definition.
 #
+# Base issue types can be defined in a separate issue-types.yml file
+# and provided via the issue-types-file input. Per-org overrides below
+# layer on top — issue types with the same name override the base definition.
+#
 # Rulesets can be defined in separate JSON files (one ruleset per file) and
 # provided via the rulesets-file input (comma-separated paths). Per-org
 # rulesets-file overrides the base for that org. In the YAML config, you can
@@ -17,11 +21,13 @@ orgs:
   # Org with per-org inline overrides (layers on top of base custom-properties-file)
   - org: my-other-org
     # custom-properties-file: './config/custom-properties/other-org.yml' # Use a different base file for this org
+    # issue-types-file: './config/issue-types/other-org.yml'             # Use a different issue types file for this org
     # rulesets-file:                              # Override rulesets for this org (YAML array)
     #   - './config/rulesets/branch-protection.json'
     #   - './config/rulesets/tag-protection.json'
     # delete-unmanaged-rulesets: true             # Delete rulesets not in the config for this org
     # delete-unmanaged-properties: true # Override the action input for this org
+    # delete-unmanaged-issue-types: true # Override the action input for this org
     custom-properties:
       - name: team
         value-type: single_select
@@ -33,6 +39,16 @@ orgs:
           - backend
           - data-science
         values-editable-by: org_actors
+    issue-types:
+      - name: Bug
+        description: 'Something is broken'
+        color: 'ff0000'
+      - name: Feature
+        description: 'A new feature request'
+        color: '0e8a16'
+      - name: Task
+        description: 'A unit of work'
+        color: 'fbca04'
 
 # ---
 # Alternative: fully self-contained (no base custom-properties-file needed)
