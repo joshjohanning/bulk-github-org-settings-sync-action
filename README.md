@@ -193,12 +193,11 @@ members-can-fork-private-repositories: false
 
 # orgs.yml:
 orgs:
-  - org: my-org # gets: read + no fork (base only)
+  - org: my-org          # gets: read + no fork (base only)
   - org: my-other-org
     member-privileges:
-      members-can-fork-private-repositories:
-        true # override → fork allowed
-        # gets: read (from base) + fork allowed (overridden)
+      members-can-fork-private-repositories: true  # override → fork allowed
+                         # gets: read (from base) + fork allowed (overridden)
 ```
 
 ---
