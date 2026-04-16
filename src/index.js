@@ -43,7 +43,8 @@ function getBooleanInput(name) {
 function getKnownOrgConfigKeys() {
   // 'org' is the organization identifier in YAML config
   // 'custom-properties' is inline property definitions (YAML-only, not an action input)
-  const keys = new Set(['org', 'custom-properties']);
+  // 'member-privileges' is inline member privilege overrides (YAML-only, not an action input)
+  const keys = new Set(['org', 'custom-properties', 'member-privileges']);
 
   try {
     const __filename = url.fileURLToPath(import.meta.url);
@@ -98,6 +99,38 @@ const KNOWN_CUSTOM_PROPERTY_KEYS = new Set([
   'default-value',
   'allowed-values',
   'values-editable-by'
+]);
+
+/**
+ * Supported member privilege settings.
+ * Maps YAML key (hyphenated) to API key (snake_case) and expected type.
+ * @type {Map<string, { apiKey: string, type: string, validValues?: string[] }>}
+ */
+export const MEMBER_PRIVILEGE_SETTINGS = new Map([
+  [
+    'default-repository-permission',
+    { apiKey: 'default_repository_permission', type: 'string', validValues: ['read', 'write', 'admin', 'none'] }
+  ],
+  ['members-can-create-public-repositories', { apiKey: 'members_can_create_public_repositories', type: 'boolean' }],
+  ['members-can-create-private-repositories', { apiKey: 'members_can_create_private_repositories', type: 'boolean' }],
+  ['members-can-create-internal-repositories', { apiKey: 'members_can_create_internal_repositories', type: 'boolean' }],
+  ['members-can-fork-private-repositories', { apiKey: 'members_can_fork_private_repositories', type: 'boolean' }],
+  ['members-can-create-pages', { apiKey: 'members_can_create_pages', type: 'boolean' }],
+  ['members-can-create-public-pages', { apiKey: 'members_can_create_public_pages', type: 'boolean' }],
+  ['members-can-create-private-pages', { apiKey: 'members_can_create_private_pages', type: 'boolean' }],
+  ['members-can-invite-outside-collaborators', { apiKey: 'members_can_invite_outside_collaborators', type: 'boolean' }],
+  ['members-can-create-teams', { apiKey: 'members_can_create_teams', type: 'boolean' }],
+  ['members-can-delete-repositories', { apiKey: 'members_can_delete_repositories', type: 'boolean' }],
+  ['members-can-change-repo-visibility', { apiKey: 'members_can_change_repo_visibility', type: 'boolean' }],
+  ['members-can-delete-issues', { apiKey: 'members_can_delete_issues', type: 'boolean' }],
+  ['default-repository-branch', { apiKey: 'default_repository_branch', type: 'string' }],
+  ['deploy-keys-enabled-for-repositories', { apiKey: 'deploy_keys_enabled_for_repositories', type: 'boolean' }],
+  ['readers-can-create-discussions', { apiKey: 'readers_can_create_discussions', type: 'boolean' }],
+  ['members-can-view-dependency-insights', { apiKey: 'members_can_view_dependency_insights', type: 'boolean' }],
+  [
+    'display-commenter-full-name-setting-enabled',
+    { apiKey: 'display_commenter_full_name_setting_enabled', type: 'boolean' }
+  ]
 ]);
 
 /**
@@ -158,6 +191,18 @@ export function validateOrgConfig(orgConfig, orgName) {
       );
     }
   }
+
+  // Validate member-privileges keys if present
+  if (orgConfig['member-privileges'] && typeof orgConfig['member-privileges'] === 'object') {
+    for (const key of Object.keys(orgConfig['member-privileges'])) {
+      if (!MEMBER_PRIVILEGE_SETTINGS.has(key)) {
+        core.warning(
+          `⚠️  Unknown member privilege key "${key}" found for organization "${orgName}". ` +
+            `This setting may not exist or may have a typo.`
+        );
+      }
+    }
+  }
 }
 
 // ─── SubResult model (mirrors bulk-github-repo-settings-sync-action PR #120) ─
@@ -181,6 +226,7 @@ const SYNC_KIND_LABELS = Object.freeze({
   'custom-property-create': 'custom property (created)',
   'custom-property-update': 'custom property (updated)',
   'custom-property-delete': 'custom property (deleted)',
+  'member-privileges-update': 'member privileges (updated)',
   'ruleset-create': 'ruleset (created)',
   'ruleset-update': 'ruleset (updated)',
   'ruleset-delete': 'ruleset (deleted)'
@@ -214,7 +260,7 @@ function formatSubResultSummary(subResult) {
  * Supports two modes:
  *   1. organizations-file: YAML file with full org + settings config
  * Supports layering: base settings from action inputs (custom-properties-file,
- * rulesets-file) are merged with per-org overrides from organizations-file.
+ * rulesets-file, member-privileges-file) are merged with per-org overrides from organizations-file.
  * Per-org properties override base properties with the same name; base properties
  * not overridden are preserved.
  *
@@ -222,26 +268,34 @@ function formatSubResultSummary(subResult) {
  * overrides the corresponding base file from the action input for that org.
  *
  * Modes:
- *   1. organizations-file (optionally combined with custom-properties-file / rulesets-file for base settings)
- *   2. organizations input + custom-properties-file / rulesets-file (same properties for all orgs)
+ *   1. organizations-file (optionally combined with custom-properties-file / rulesets-file / member-privileges-file for base settings)
+ *   2. organizations input + custom-properties-file / rulesets-file / member-privileges-file (same properties for all orgs)
  * @param {string} organizationsInput - Comma-separated org names
  * @param {string} organizationsFile - Path to YAML config file
  * @param {string} customPropertiesFile - Path to custom properties YAML file
  * @param {string[]} [rulesetsFiles] - Paths to ruleset JSON files (base for all orgs)
  * @param {boolean} [deleteUnmanagedRulesets] - Whether to delete rulesets not in config
- * @returns {Array<{ org: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean }>} Parsed org configs
+ * @param {string} [memberPrivilegesFile] - Path to member privileges YAML file (base for all orgs)
+ * @returns {Array<{ org: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, memberPrivileges?: Object }>} Parsed org configs
  */
 export function parseOrganizations(
   organizationsInput,
   organizationsFile,
   customPropertiesFile,
   rulesetsFiles,
-  deleteUnmanagedRulesets
+  deleteUnmanagedRulesets,
+  memberPrivilegesFile
 ) {
   // Load base custom properties from separate file (applies to all orgs)
   let baseCustomProperties = null;
   if (customPropertiesFile) {
     baseCustomProperties = parseCustomPropertiesFile(customPropertiesFile);
+  }
+
+  // Load base member privileges from separate file (applies to all orgs)
+  let baseMemberPrivileges = null;
+  if (memberPrivilegesFile) {
+    baseMemberPrivileges = parseMemberPrivilegesFile(memberPrivilegesFile);
   }
 
   if (organizationsFile) {
@@ -278,6 +332,14 @@ export function parseOrganizations(
       if (orgConfig.deleteUnmanagedRulesets === undefined && deleteUnmanagedRulesets !== undefined) {
         orgConfig.deleteUnmanagedRulesets = deleteUnmanagedRulesets;
       }
+
+      // Per-org member-privileges layer on top of base member privileges
+      if (baseMemberPrivileges || orgConfig.memberPrivileges) {
+        orgConfig.memberPrivileges = mergeMemberPrivileges(
+          baseMemberPrivileges || {},
+          orgConfig.memberPrivileges || {}
+        );
+      }
     }
 
     return orgConfigs;
@@ -300,7 +362,8 @@ export function parseOrganizations(
     org,
     ...(baseCustomProperties ? { customProperties: baseCustomProperties } : {}),
     ...(rulesetsFiles && rulesetsFiles.length > 0 ? { rulesetsFiles } : {}),
-    ...(deleteUnmanagedRulesets !== undefined ? { deleteUnmanagedRulesets } : {})
+    ...(deleteUnmanagedRulesets !== undefined ? { deleteUnmanagedRulesets } : {}),
+    ...(baseMemberPrivileges ? { memberPrivileges: baseMemberPrivileges } : {})
   }));
 }
 
@@ -325,9 +388,21 @@ export function mergeCustomProperties(baseProperties, orgProperties) {
 }
 
 /**
+ * Merge base member privileges with per-org overrides.
+ * Per-org settings override base settings with the same key.
+ * Base settings not overridden are preserved.
+ * @param {Object} basePrivileges - Base member privilege settings (API-keyed)
+ * @param {Object} orgPrivileges - Per-org member privilege overrides (API-keyed)
+ * @returns {Object} Merged privileges
+ */
+export function mergeMemberPrivileges(basePrivileges, orgPrivileges) {
+  return { ...basePrivileges, ...orgPrivileges };
+}
+
+/**
  * Parse the organizations YAML config file.
  * @param {string} filePath - Path to the YAML file
- * @returns {Array<{ org: string, customPropertiesFile?: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, deleteUnmanagedProperties?: boolean }>}
+ * @returns {Array<{ org: string, customPropertiesFile?: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, deleteUnmanagedProperties?: boolean, memberPrivileges?: Object }>}
  */
 export function parseOrganizationsFile(filePath) {
   if (!fs.existsSync(filePath)) {
@@ -379,6 +454,10 @@ export function parseOrganizationsFile(filePath) {
       if (typeof val === 'boolean') {
         result.deleteUnmanagedProperties = val;
       }
+    }
+
+    if (orgConfig['member-privileges']) {
+      result.memberPrivileges = parseMemberPrivileges(orgConfig['member-privileges'], orgConfig.org);
     }
 
     return result;
@@ -544,6 +623,75 @@ export function normalizeCustomProperties(properties) {
   });
 }
 
+// ─── Member Privileges Parsing ──────────────────────────────────────────────────
+
+/**
+ * Parse and validate a member privileges YAML config object (inline or from file).
+ * Converts YAML keys (hyphenated) to API keys (snake_case) and validates types.
+ * @param {Object} config - Raw key-value map from YAML
+ * @param {string} [context] - Context for error messages (e.g., org name)
+ * @returns {Object} Normalized privileges with API keys
+ */
+export function parseMemberPrivileges(config, context) {
+  if (typeof config !== 'object' || config === null || Array.isArray(config)) {
+    const label = context ? ` for org "${context}"` : '';
+    throw new Error(`Invalid member-privileges${label}: expected a key-value map`);
+  }
+
+  const normalized = {};
+  const label = context ? ` for org "${context}"` : '';
+
+  for (const [yamlKey, value] of Object.entries(config)) {
+    const setting = MEMBER_PRIVILEGE_SETTINGS.get(yamlKey);
+    if (!setting) {
+      throw new Error(
+        `Unknown member privilege key "${yamlKey}"${label}. ` +
+          `Valid keys: ${Array.from(MEMBER_PRIVILEGE_SETTINGS.keys()).join(', ')}`
+      );
+    }
+
+    if (setting.type === 'boolean') {
+      if (typeof value !== 'boolean') {
+        throw new Error(`Member privilege "${yamlKey}"${label} must be a boolean (true/false), got "${value}"`);
+      }
+    } else if (setting.type === 'string') {
+      if (typeof value !== 'string' || value.trim() === '') {
+        throw new Error(`Member privilege "${yamlKey}"${label} must be a non-empty string`);
+      }
+      if (setting.validValues && !setting.validValues.includes(value)) {
+        throw new Error(
+          `Member privilege "${yamlKey}"${label} has invalid value "${value}". ` +
+            `Valid values: ${setting.validValues.join(', ')}`
+        );
+      }
+    }
+
+    normalized[setting.apiKey] = value;
+  }
+
+  return normalized;
+}
+
+/**
+ * Parse a standalone member privileges YAML file.
+ * @param {string} filePath - Path to the YAML file
+ * @returns {Object} Normalized privileges with API keys
+ */
+export function parseMemberPrivilegesFile(filePath) {
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`Member privileges file not found: ${filePath}`);
+  }
+
+  const content = fs.readFileSync(filePath, 'utf8');
+  const config = yaml.load(content);
+
+  if (typeof config !== 'object' || config === null || Array.isArray(config)) {
+    throw new Error(`Invalid member privileges file format: expected a key-value map in ${filePath}`);
+  }
+
+  return parseMemberPrivileges(config);
+}
+
 // ─── Custom Properties Sync ─────────────────────────────────────────────────────
 
 /**
@@ -701,6 +849,107 @@ export async function syncCustomProperties(octokit, org, desiredProperties, dele
           }
         }
       }
+    }
+  }
+
+  return { subResults, failed: false };
+}
+
+// ─── Member Privileges Sync ─────────────────────────────────────────────────────
+
+/**
+ * Build a reverse lookup from API key to YAML key for human-readable logging.
+ * @returns {Map<string, string>}
+ */
+function buildApiToYamlKeyMap() {
+  const map = new Map();
+  for (const [yamlKey, setting] of MEMBER_PRIVILEGE_SETTINGS) {
+    map.set(setting.apiKey, yamlKey);
+  }
+  return map;
+}
+
+const API_TO_YAML_KEY = buildApiToYamlKeyMap();
+
+/**
+ * Sync member privilege settings for an organization.
+ * Fetches current org settings via GET, compares with desired values,
+ * and applies a single PATCH if any settings differ.
+ *
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} org - Organization name
+ * @param {Object} desiredSettings - Desired member privilege settings (API-keyed)
+ * @param {boolean} dryRun - Preview mode
+ * @returns {Promise<Object>} Result object with subResults
+ */
+export async function syncMemberPrivileges(octokit, org, desiredSettings, dryRun) {
+  const subResults = [];
+  const wouldPrefix = dryRun ? 'Would ' : '';
+
+  // Fetch current organization settings
+  let currentOrg;
+  try {
+    const { data } = await octokit.request('GET /orgs/{org}', { org });
+    currentOrg = data;
+  } catch (error) {
+    core.warning(`  ⚠️  Failed to fetch organization settings: ${error.message}`);
+    subResults.push(
+      createSubResult(
+        'member-privileges-update',
+        SubResultStatus.WARNING,
+        `Failed to fetch organization settings: ${error.message}`
+      )
+    );
+    return { subResults, failed: true };
+  }
+
+  // Compare each desired setting with current
+  const patch = {};
+  const changes = [];
+
+  for (const [apiKey, desiredValue] of Object.entries(desiredSettings)) {
+    const currentValue = currentOrg[apiKey];
+    const yamlKey = API_TO_YAML_KEY.get(apiKey) || apiKey;
+
+    if (currentValue !== desiredValue) {
+      patch[apiKey] = desiredValue;
+      changes.push(`${yamlKey}: ${currentValue} → ${desiredValue}`);
+    }
+  }
+
+  if (changes.length === 0) {
+    core.info(`  ✅ Member privileges unchanged`);
+    return { subResults, failed: false };
+  }
+
+  // Log changes
+  for (const change of changes) {
+    core.info(`  🔧 ${wouldPrefix}Update ${change}`);
+  }
+
+  subResults.push(
+    createSubResult(
+      'member-privileges-update',
+      SubResultStatus.CHANGED,
+      `${wouldPrefix}update ${changes.length} setting(s): ${changes.join(', ')}`
+    )
+  );
+
+  // Apply the patch
+  if (!dryRun) {
+    try {
+      await octokit.request('PATCH /orgs/{org}', {
+        org,
+        ...patch
+      });
+    } catch (error) {
+      core.warning(`  ⚠️  Failed to update member privileges: ${error.message}`);
+      subResults[subResults.length - 1] = createSubResult(
+        'member-privileges-update',
+        SubResultStatus.WARNING,
+        `Failed to update member privileges: ${error.message}`
+      );
+      return { subResults, failed: true };
     }
   }
 
@@ -980,6 +1229,7 @@ export async function run() {
     const rulesetsFileInput = core.getInput('rulesets-file');
     const rulesetsFiles = parseRulesetsFileValue(rulesetsFileInput);
     const deleteUnmanagedRulesets = getBooleanInput('delete-unmanaged-rulesets') ?? false;
+    const memberPrivilegesFile = core.getInput('member-privileges-file');
     const dryRun = getBooleanInput('dry-run') ?? false;
 
     core.info('Starting Bulk GitHub Organization Settings Sync Action...');
@@ -998,17 +1248,19 @@ export async function run() {
       organizationsFile,
       customPropertiesFile,
       rulesetsFiles,
-      deleteUnmanagedRulesets
+      deleteUnmanagedRulesets,
+      memberPrivilegesFile
     );
 
     // Check that at least one setting type is specified
     const hasCustomProperties = orgList.some(o => o.customProperties && o.customProperties.length > 0);
     const hasRulesets = orgList.some(o => o.rulesetsFiles && o.rulesetsFiles.length > 0);
-    if (!hasCustomProperties && !hasRulesets) {
+    const hasMemberPrivileges = orgList.some(o => o.memberPrivileges && Object.keys(o.memberPrivileges).length > 0);
+    if (!hasCustomProperties && !hasRulesets && !hasMemberPrivileges) {
       throw new Error(
         'At least one setting must be specified. Provide custom properties via ' +
           '"organizations-file" or via "organizations" + "custom-properties-file" inputs, ' +
-          'or provide rulesets via "rulesets-file".'
+          'provide rulesets via "rulesets-file", or provide member privileges via "member-privileges-file".'
       );
     }
 
@@ -1081,6 +1333,21 @@ export async function run() {
           if (rsResult.failed) {
             result.success = false;
             result.error = result.error ? `${result.error}; Rulesets sync failed` : 'Rulesets sync failed';
+          }
+        }
+
+        // Sync member privileges
+        if (orgConfig.memberPrivileges && Object.keys(orgConfig.memberPrivileges).length > 0) {
+          const settingCount = Object.keys(orgConfig.memberPrivileges).length;
+          core.info(`  🔧 Syncing member privileges (${settingCount} setting(s))...`);
+          const mpResult = await syncMemberPrivileges(octokit, org, orgConfig.memberPrivileges, dryRun);
+          result.subResults.push(...mpResult.subResults);
+
+          if (mpResult.failed) {
+            result.success = false;
+            result.error = result.error
+              ? `${result.error}; Member privileges sync failed`
+              : 'Member privileges sync failed';
           }
         }
 
