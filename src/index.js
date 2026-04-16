@@ -682,7 +682,7 @@ export function normalizeIssueTypes(issueTypes) {
 
     const normalized = {
       name: it.name,
-      is_enabled: it['is-enabled'] !== false,
+      is_enabled: it['is-enabled'] === undefined ? true : Boolean(it['is-enabled']),
       description: it.description || null,
       color: it.color || null
     };
@@ -700,11 +700,16 @@ export function normalizeIssueTypes(issueTypes) {
 export function compareIssueType(existing, desired) {
   const changes = [];
 
-  if ((existing.description || null) !== (desired.description || null)) {
+  // Normalize empty strings to null for consistent comparison
+  const existingDesc = existing.description || null;
+  const desiredDesc = desired.description || null;
+  if (existingDesc !== desiredDesc) {
     changes.push(`description updated`);
   }
-  if ((existing.color || null) !== (desired.color || null)) {
-    changes.push(`color: ${existing.color || 'none'} → ${desired.color || 'none'}`);
+  const existingColor = existing.color || null;
+  const desiredColor = desired.color || null;
+  if (existingColor !== desiredColor) {
+    changes.push(`color: ${existingColor || 'none'} → ${desiredColor || 'none'}`);
   }
   if (Boolean(existing.is_enabled) !== Boolean(desired.is_enabled)) {
     changes.push(`is_enabled: ${existing.is_enabled} → ${desired.is_enabled}`);
@@ -1308,7 +1313,7 @@ export async function run() {
       throw new Error(
         'At least one setting must be specified. Provide custom properties via ' +
           '"organizations-file" or via "organizations" + "custom-properties-file" inputs, ' +
-          'provide rulesets via "rulesets-file", or provide issue types via "issue-types-file".'
+          'rulesets via "rulesets-file", or issue types via "issue-types-file".'
       );
     }
 
