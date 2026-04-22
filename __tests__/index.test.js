@@ -29,6 +29,12 @@ inputs:
     description: 'Custom properties file'
   delete-unmanaged-properties:
     description: 'Delete unmanaged properties'
+  member-privileges-file:
+    description: 'Member privileges file'
+  rulesets-file:
+    description: 'Rulesets file'
+  delete-unmanaged-rulesets:
+    description: 'Delete unmanaged rulesets'
   dry-run:
     description: 'Dry run mode'
 `;
@@ -114,6 +120,11 @@ const {
   syncCustomProperties,
   syncOrgRulesets,
   mergeCustomProperties,
+  mergeMemberPrivileges,
+  parseMemberPrivileges,
+  parseMemberPrivilegesFile,
+  syncMemberPrivileges,
+  MEMBER_PRIVILEGE_SETTINGS,
   validateOrgConfig,
   resetKnownOrgConfigKeysCache
 } = await import('../src/index.js');
@@ -1616,6 +1627,449 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
       expect(result[0].deleteUnmanagedRulesets).toBe(true);
       expect(result[1].rulesetsFiles).toEqual(['/path/to/rulesets.json']);
       expect(result[1].deleteUnmanagedRulesets).toBe(true);
+    });
+  });
+
+  // ─── parseMemberPrivileges ───────────────────────────────────────────────
+
+  describe('parseMemberPrivileges', () => {
+    test('should parse valid boolean settings', () => {
+      const result = parseMemberPrivileges({
+        'members-can-fork-private-repositories': false,
+        'members-can-create-public-repositories': true
+      });
+
+      expect(result).toEqual({
+        members_can_fork_private_repositories: false,
+        members_can_create_public_repositories: true
+      });
+    });
+
+    test('should parse valid string settings', () => {
+      const result = parseMemberPrivileges({
+        'default-repository-permission': 'read',
+        'default-repository-branch': 'main'
+      });
+
+      expect(result).toEqual({
+        default_repository_permission: 'read',
+        default_repository_branch: 'main'
+      });
+    });
+
+    test('should throw for unknown key', () => {
+      expect(() => parseMemberPrivileges({ 'invalid-key': true })).toThrow('Unknown member privilege key');
+    });
+
+    test('should throw for invalid boolean type', () => {
+      expect(() => parseMemberPrivileges({ 'members-can-fork-private-repositories': 'yes' })).toThrow(
+        'must be a boolean'
+      );
+    });
+
+    test('should throw for invalid string type', () => {
+      expect(() => parseMemberPrivileges({ 'default-repository-permission': true })).toThrow(
+        'must be a non-empty string'
+      );
+    });
+
+    test('should throw for invalid enum value', () => {
+      expect(() => parseMemberPrivileges({ 'default-repository-permission': 'superadmin' })).toThrow(
+        'has invalid value'
+      );
+    });
+
+    test('should throw for non-object config', () => {
+      expect(() => parseMemberPrivileges('string-value')).toThrow('expected a key-value map');
+      expect(() => parseMemberPrivileges(null)).toThrow('expected a key-value map');
+      expect(() => parseMemberPrivileges([1, 2])).toThrow('expected a key-value map');
+    });
+
+    test('should include org context in error messages', () => {
+      expect(() => parseMemberPrivileges({ 'invalid-key': true }, 'my-org')).toThrow('for org "my-org"');
+    });
+
+    test('should parse all supported settings', () => {
+      const config = {
+        'default-repository-permission': 'read',
+        'members-can-create-public-repositories': true,
+        'members-can-create-private-repositories': true,
+        'members-can-create-internal-repositories': false,
+        'members-can-fork-private-repositories': false,
+        'members-can-create-pages': true,
+        'members-can-create-public-pages': true,
+        'members-can-create-private-pages': true,
+        'members-can-invite-outside-collaborators': true,
+        'members-can-create-teams': true,
+        'members-can-delete-repositories': false,
+        'members-can-change-repo-visibility': false,
+        'members-can-delete-issues': false,
+        'default-repository-branch': 'main',
+        'deploy-keys-enabled-for-repositories': true,
+        'readers-can-create-discussions': true,
+        'members-can-view-dependency-insights': true,
+        'display-commenter-full-name-setting-enabled': false
+      };
+
+      const result = parseMemberPrivileges(config);
+      expect(Object.keys(result)).toHaveLength(18);
+      expect(result.default_repository_permission).toBe('read');
+      expect(result.members_can_fork_private_repositories).toBe(false);
+      expect(result.default_repository_branch).toBe('main');
+    });
+  });
+
+  // ─── parseMemberPrivilegesFile ───────────────────────────────────────────
+
+  describe('parseMemberPrivilegesFile', () => {
+    test('should parse a valid YAML file', () => {
+      const yamlContent = `
+default-repository-permission: read
+members-can-fork-private-repositories: false
+members-can-create-public-repositories: true
+`;
+      setMockFileContent(yamlContent, '/mock/member-privileges.yml');
+      const result = parseMemberPrivilegesFile('/mock/member-privileges.yml');
+
+      expect(result).toEqual({
+        default_repository_permission: 'read',
+        members_can_fork_private_repositories: false,
+        members_can_create_public_repositories: true
+      });
+    });
+
+    test('should throw for missing file', () => {
+      expect(() => parseMemberPrivilegesFile('/nonexistent/file.yml')).toThrow('not found');
+    });
+
+    test('should throw for non-object YAML content', () => {
+      setMockFileContent('- item1\n- item2', '/mock/bad.yml');
+      expect(() => parseMemberPrivilegesFile('/mock/bad.yml')).toThrow('expected a key-value map');
+    });
+
+    test('should throw for invalid values in file', () => {
+      setMockFileContent('default-repository-permission: superadmin', '/mock/invalid.yml');
+      expect(() => parseMemberPrivilegesFile('/mock/invalid.yml')).toThrow('has invalid value');
+    });
+  });
+
+  // ─── mergeMemberPrivileges ───────────────────────────────────────────────
+
+  describe('mergeMemberPrivileges', () => {
+    test('should merge base and override settings', () => {
+      const base = {
+        default_repository_permission: 'read',
+        members_can_fork_private_repositories: false
+      };
+      const overrides = {
+        members_can_fork_private_repositories: true,
+        members_can_create_teams: true
+      };
+
+      const result = mergeMemberPrivileges(base, overrides);
+      expect(result).toEqual({
+        default_repository_permission: 'read',
+        members_can_fork_private_repositories: true,
+        members_can_create_teams: true
+      });
+    });
+
+    test('should return base when overrides are empty', () => {
+      const base = { default_repository_permission: 'read' };
+      const result = mergeMemberPrivileges(base, {});
+      expect(result).toEqual(base);
+    });
+
+    test('should return overrides when base is empty', () => {
+      const overrides = { members_can_fork_private_repositories: false };
+      const result = mergeMemberPrivileges({}, overrides);
+      expect(result).toEqual(overrides);
+    });
+  });
+
+  // ─── syncMemberPrivileges ────────────────────────────────────────────────
+
+  describe('syncMemberPrivileges', () => {
+    test('should detect and apply changes', async () => {
+      // Mock: current org settings
+      mockRequest.mockResolvedValueOnce({
+        data: {
+          default_repository_permission: 'write',
+          members_can_fork_private_repositories: true
+        }
+      });
+      // Mock: successful PATCH
+      mockRequest.mockResolvedValueOnce({ data: {} });
+
+      const desired = {
+        default_repository_permission: 'read',
+        members_can_fork_private_repositories: false
+      };
+
+      const result = await syncMemberPrivileges(mockOctokit, 'my-org', desired, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('member-privileges-update');
+      expect(result.subResults[0].status).toBe('changed');
+      expect(result.subResults[0].message).toContain('2 setting(s)');
+      expect(result.failed).toBe(false);
+
+      // Verify PATCH was called with only changed settings
+      expect(mockRequest).toHaveBeenCalledWith('PATCH /orgs/{org}', {
+        org: 'my-org',
+        default_repository_permission: 'read',
+        members_can_fork_private_repositories: false
+      });
+    });
+
+    test('should detect no changes for identical settings', async () => {
+      mockRequest.mockResolvedValueOnce({
+        data: {
+          default_repository_permission: 'read',
+          members_can_fork_private_repositories: false
+        }
+      });
+
+      const desired = {
+        default_repository_permission: 'read',
+        members_can_fork_private_repositories: false
+      };
+
+      const result = await syncMemberPrivileges(mockOctokit, 'my-org', desired, false);
+
+      expect(result.subResults).toHaveLength(0);
+      expect(result.failed).toBe(false);
+      // Only GET, no PATCH
+      expect(mockRequest).toHaveBeenCalledTimes(1);
+    });
+
+    test('should handle dry-run mode without making API changes', async () => {
+      mockRequest.mockResolvedValueOnce({
+        data: {
+          default_repository_permission: 'write'
+        }
+      });
+
+      const desired = { default_repository_permission: 'read' };
+
+      const result = await syncMemberPrivileges(mockOctokit, 'my-org', desired, true);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].status).toBe('changed');
+      expect(result.subResults[0].message).toContain('Would');
+      // Only GET, no PATCH in dry-run
+      expect(mockRequest).toHaveBeenCalledTimes(1);
+    });
+
+    test('should handle GET API error gracefully', async () => {
+      mockRequest.mockRejectedValueOnce(new Error('Forbidden'));
+
+      const desired = { default_repository_permission: 'read' };
+
+      const result = await syncMemberPrivileges(mockOctokit, 'my-org', desired, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].status).toBe('warning');
+      expect(result.subResults[0].message).toContain('Failed to fetch');
+      expect(result.failed).toBe(true);
+    });
+
+    test('should handle PATCH API error gracefully', async () => {
+      mockRequest.mockResolvedValueOnce({
+        data: { default_repository_permission: 'write' }
+      });
+      mockRequest.mockRejectedValueOnce(new Error('Validation Failed'));
+
+      const desired = { default_repository_permission: 'read' };
+
+      const result = await syncMemberPrivileges(mockOctokit, 'my-org', desired, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].status).toBe('warning');
+      expect(result.subResults[0].message).toContain('Failed to update');
+      expect(result.failed).toBe(true);
+    });
+
+    test('should only PATCH settings that differ', async () => {
+      mockRequest.mockResolvedValueOnce({
+        data: {
+          default_repository_permission: 'read',
+          members_can_fork_private_repositories: true,
+          members_can_create_pages: true
+        }
+      });
+      mockRequest.mockResolvedValueOnce({ data: {} });
+
+      const desired = {
+        default_repository_permission: 'read',
+        members_can_fork_private_repositories: false,
+        members_can_create_pages: true
+      };
+
+      const result = await syncMemberPrivileges(mockOctokit, 'my-org', desired, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].message).toContain('1 setting(s)');
+
+      // PATCH should only include the changed setting
+      expect(mockRequest).toHaveBeenCalledWith('PATCH /orgs/{org}', {
+        org: 'my-org',
+        members_can_fork_private_repositories: false
+      });
+    });
+  });
+
+  // ─── validateOrgConfig with member-privileges ────────────────────────────
+
+  describe('validateOrgConfig with member-privileges', () => {
+    test('should not warn for valid member privilege keys', () => {
+      validateOrgConfig(
+        {
+          org: 'my-org',
+          'member-privileges': {
+            'default-repository-permission': 'read',
+            'members-can-fork-private-repositories': false
+          }
+        },
+        'my-org'
+      );
+      expect(mockCore.warning).not.toHaveBeenCalled();
+    });
+
+    test('should warn for unknown member privilege key', () => {
+      validateOrgConfig(
+        {
+          org: 'my-org',
+          'member-privileges': {
+            'invalid-privilege-key': true
+          }
+        },
+        'my-org'
+      );
+      expect(mockCore.warning).toHaveBeenCalledWith(
+        expect.stringContaining('Unknown member privilege key "invalid-privilege-key"')
+      );
+    });
+  });
+
+  // ─── parseOrganizations with member privileges ───────────────────────────
+
+  describe('parseOrganizations with member privileges', () => {
+    test('should include memberPrivileges from base file', () => {
+      const mpYaml = `
+default-repository-permission: read
+members-can-fork-private-repositories: false
+`;
+      setMockFileContent(mpYaml, '/mock/member-privileges.yml');
+
+      const result = parseOrganizations('org1', '', '', [], false, '/mock/member-privileges.yml');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].memberPrivileges).toEqual({
+        default_repository_permission: 'read',
+        members_can_fork_private_repositories: false
+      });
+    });
+
+    test('should merge base and per-org member privileges from orgs.yml', () => {
+      const mpYaml = `
+default-repository-permission: read
+members-can-fork-private-repositories: false
+`;
+      setMockFileContent(mpYaml, '/mock/member-privileges.yml');
+
+      const orgsYaml = `orgs:
+  - org: my-org
+  - org: my-other-org
+    member-privileges:
+      members-can-fork-private-repositories: true
+      members-can-create-teams: true
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+
+      const result = parseOrganizations('', '/mock/orgs.yml', '', [], false, '/mock/member-privileges.yml');
+
+      expect(result).toHaveLength(2);
+      // my-org inherits base
+      expect(result[0].memberPrivileges).toEqual({
+        default_repository_permission: 'read',
+        members_can_fork_private_repositories: false
+      });
+      // my-other-org overrides fork and adds teams
+      expect(result[1].memberPrivileges).toEqual({
+        default_repository_permission: 'read',
+        members_can_fork_private_repositories: true,
+        members_can_create_teams: true
+      });
+    });
+
+    test('should support per-org only member privileges without base file', () => {
+      const orgsYaml = `orgs:
+  - org: my-org
+    member-privileges:
+      default-repository-permission: none
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+
+      const result = parseOrganizations('', '/mock/orgs.yml', '');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].memberPrivileges).toEqual({
+        default_repository_permission: 'none'
+      });
+    });
+
+    test('should not include memberPrivileges when not specified', () => {
+      const result = parseOrganizations('org1', '', '');
+      expect(result[0].memberPrivileges).toBeUndefined();
+    });
+  });
+
+  // ─── parseOrganizationsFile with member-privileges ───────────────────────
+
+  describe('parseOrganizationsFile with member-privileges', () => {
+    test('should parse inline member-privileges', () => {
+      const orgsYaml = `orgs:
+  - org: my-org
+    member-privileges:
+      default-repository-permission: read
+      members-can-fork-private-repositories: false
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+      const result = parseOrganizationsFile('/mock/orgs.yml');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].memberPrivileges).toEqual({
+        default_repository_permission: 'read',
+        members_can_fork_private_repositories: false
+      });
+    });
+
+    test('should not include memberPrivileges when not specified', () => {
+      const orgsYaml = `orgs:
+  - org: my-org
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+      const result = parseOrganizationsFile('/mock/orgs.yml');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].memberPrivileges).toBeUndefined();
+    });
+  });
+
+  // ─── MEMBER_PRIVILEGE_SETTINGS ───────────────────────────────────────────
+
+  describe('MEMBER_PRIVILEGE_SETTINGS', () => {
+    test('should have 18 settings defined', () => {
+      expect(MEMBER_PRIVILEGE_SETTINGS.size).toBe(18);
+    });
+
+    test('should have unique API keys', () => {
+      const apiKeys = new Set();
+      for (const [, setting] of MEMBER_PRIVILEGE_SETTINGS) {
+        expect(apiKeys.has(setting.apiKey)).toBe(false);
+        apiKeys.add(setting.apiKey);
+      }
     });
   });
 });

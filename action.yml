@@ -32,6 +32,11 @@ inputs:
     required: false
     default: 'false'
 
+  # === Member Privileges ===
+  member-privileges-file:
+    description: 'Path to a YAML file defining organization member privilege settings to sync'
+    required: false
+
   # === Rulesets ===
   rulesets-file:
     description: 'Comma-separated paths to JSON files, each containing a single organization ruleset configuration to sync'
