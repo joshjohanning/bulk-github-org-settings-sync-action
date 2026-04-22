@@ -115,7 +115,9 @@ const {
   syncOrgRulesets,
   mergeCustomProperties,
   validateOrgConfig,
-  resetKnownOrgConfigKeysCache
+  resetKnownOrgConfigKeysCache,
+  resolveFilePath,
+  applyBasePathToOrgConfig
 } = await import('../src/index.js');
 
 describe('Bulk GitHub Organization Settings Sync Action', () => {
@@ -777,6 +779,139 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
       expect(() => parseOrganizationsFile('/mock/bad.yml')).toThrow(
         'Invalid "custom-properties-file" for org "my-org"'
       );
+    });
+
+    test('should resolve file paths with base-path', () => {
+      const orgsYaml = `base-path: './config/'
+orgs:
+  - org: my-org
+    custom-properties-file: 'custom-properties/base.yml'
+    rulesets-file: 'rulesets/branch-protection.json'
+  - org: my-other-org
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+      const result = parseOrganizationsFile('/mock/orgs.yml');
+
+      expect(result).toHaveLength(2);
+      expect(result[0].customPropertiesFile).toBe('config/custom-properties/base.yml');
+      expect(result[0].rulesetsFiles).toEqual(['config/rulesets/branch-protection.json']);
+      // Org without file paths should be unaffected
+      expect(result[1].customPropertiesFile).toBeUndefined();
+      expect(result[1].rulesetsFiles).toBeUndefined();
+    });
+
+    test('should not modify absolute paths when base-path is set', () => {
+      const orgsYaml = `base-path: './config/'
+orgs:
+  - org: my-org
+    custom-properties-file: '/absolute/path/custom-properties.yml'
+    rulesets-file: 'relative/ruleset.json'
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+      const result = parseOrganizationsFile('/mock/orgs.yml');
+
+      expect(result[0].customPropertiesFile).toBe('/absolute/path/custom-properties.yml');
+      expect(result[0].rulesetsFiles).toEqual(['config/relative/ruleset.json']);
+    });
+
+    test('should not modify paths when base-path is not set', () => {
+      const orgsYaml = `orgs:
+  - org: my-org
+    custom-properties-file: 'custom-properties/base.yml'
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+      const result = parseOrganizationsFile('/mock/orgs.yml');
+
+      expect(result[0].customPropertiesFile).toBe('custom-properties/base.yml');
+    });
+
+    test('should resolve base-path with comma-separated rulesets-file', () => {
+      const orgsYaml = `base-path: './config/'
+orgs:
+  - org: my-org
+    rulesets-file: 'rulesets/a.json, rulesets/b.json'
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+      const result = parseOrganizationsFile('/mock/orgs.yml');
+
+      expect(result[0].rulesetsFiles).toEqual(['config/rulesets/a.json', 'config/rulesets/b.json']);
+    });
+
+    test('should resolve base-path with array-format rulesets-file', () => {
+      const orgsYaml = `base-path: './config/'
+orgs:
+  - org: my-org
+    rulesets-file:
+      - 'rulesets/branch-protection.json'
+      - 'rulesets/tag-protection.json'
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+      const result = parseOrganizationsFile('/mock/orgs.yml');
+
+      expect(result[0].rulesetsFiles).toEqual([
+        'config/rulesets/branch-protection.json',
+        'config/rulesets/tag-protection.json'
+      ]);
+    });
+
+    test('should reject non-string base-path', () => {
+      const orgsYaml = `base-path: 123
+orgs:
+  - org: my-org
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+      expect(() => parseOrganizationsFile('/mock/orgs.yml')).toThrow(`'base-path' must be a string`);
+    });
+
+    test('should treat whitespace-only base-path as no-op', () => {
+      const orgsYaml = `base-path: '   '
+orgs:
+  - org: my-org
+    custom-properties-file: './custom-properties.yml'
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+      const result = parseOrganizationsFile('/mock/orgs.yml');
+
+      expect(result[0].customPropertiesFile).toBe('./custom-properties.yml');
+    });
+  });
+
+  // ─── resolveFilePath ──────────────────────────────────────────────────────
+
+  describe('resolveFilePath', () => {
+    test('should join base path with relative file path', () => {
+      expect(resolveFilePath('./base/', 'file.txt')).toBe('base/file.txt');
+    });
+
+    test('should not modify absolute paths', () => {
+      expect(resolveFilePath('./base/', '/absolute/file.txt')).toBe('/absolute/file.txt');
+    });
+
+    test('should return non-string values unchanged', () => {
+      expect(resolveFilePath('./base/', null)).toBeNull();
+      expect(resolveFilePath('./base/', undefined)).toBeUndefined();
+      expect(resolveFilePath('./base/', '')).toBe('');
+    });
+  });
+
+  // ─── applyBasePathToOrgConfig ─────────────────────────────────────────────
+
+  describe('applyBasePathToOrgConfig', () => {
+    test('should return config unchanged when basePath is empty', () => {
+      const config = { org: 'my-org', 'custom-properties-file': 'file.yml' };
+      expect(applyBasePathToOrgConfig(config, '')).toEqual(config);
+    });
+
+    test('should not modify non-file-path keys', () => {
+      const config = { org: 'my-org', 'delete-unmanaged-rulesets': true };
+      const result = applyBasePathToOrgConfig(config, './base/');
+      expect(result).toEqual({ org: 'my-org', 'delete-unmanaged-rulesets': true });
+    });
+
+    test('should resolve array values for rulesets-file', () => {
+      const config = { org: 'my-org', 'rulesets-file': ['a.json', 'b.json'] };
+      const result = applyBasePathToOrgConfig(config, './base/');
+      expect(result['rulesets-file']).toEqual(['base/a.json', 'base/b.json']);
     });
   });
 

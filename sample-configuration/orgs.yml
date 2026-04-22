@@ -1,6 +1,9 @@
 # Organization settings configuration for bulk-github-org-settings-sync-action
 # Use with: organizations-file: './orgs.yml'
 #
+# Optional: set a base path for all file-path settings (paths are resolved relative to this)
+# base-path: './config/'
+#
 # Base custom properties can be defined in a separate custom-properties.yml file
 # and provided via the custom-properties-file input. Per-org overrides below
 # layer on top — properties with the same name override the base definition.
