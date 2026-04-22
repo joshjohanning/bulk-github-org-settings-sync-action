@@ -29,6 +29,10 @@ inputs:
     description: 'Custom properties file'
   delete-unmanaged-properties:
     description: 'Delete unmanaged properties'
+  issue-types-file:
+    description: 'Issue types file'
+  delete-unmanaged-issue-types:
+    description: 'Delete unmanaged issue types'
   dry-run:
     description: 'Dry run mode'
 `;
@@ -112,6 +116,11 @@ const {
   normalizeCustomProperties,
   compareCustomProperty,
   syncCustomProperties,
+  parseIssueTypesFile,
+  normalizeIssueTypes,
+  compareIssueType,
+  syncIssueTypes,
+  mergeIssueTypes,
   syncOrgRulesets,
   mergeCustomProperties,
   validateOrgConfig,
@@ -194,6 +203,35 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
     test('should not warn for action input keys used as per-org overrides', () => {
       validateOrgConfig(
         { org: 'my-org', 'custom-properties-file': './props.yml', 'delete-unmanaged-properties': true },
+        'my-org'
+      );
+      expect(mockCore.warning).not.toHaveBeenCalled();
+    });
+
+    test('should warn for unknown issue type key', () => {
+      validateOrgConfig(
+        {
+          org: 'my-org',
+          'issue-types': [{ name: 'Bug', descriptin: 'typo' }]
+        },
+        'my-org'
+      );
+      expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('Unknown issue type key "descriptin"'));
+    });
+
+    test('should not warn for valid issue type keys', () => {
+      validateOrgConfig(
+        {
+          org: 'my-org',
+          'issue-types': [
+            {
+              name: 'Bug',
+              description: 'A bug',
+              color: 'ff0000',
+              'is-enabled': true
+            }
+          ]
+        },
         'my-org'
       );
       expect(mockCore.warning).not.toHaveBeenCalled();
@@ -714,6 +752,54 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
       expect(result[0].deleteUnmanagedProperties).toBeUndefined();
       expect(result[1].deleteUnmanagedProperties).toBe(true);
     });
+
+    test('should parse organizations with issue-types-file', () => {
+      const itYaml = `- name: Bug
+  description: Something is broken
+  color: ff0000
+- name: Feature
+  description: A new feature
+  color: 0e8a16
+`;
+      setMockFileContent(itYaml, '/mock/issue-types.yml');
+      const result = parseOrganizations('my-org', '', '', [], false, '/mock/issue-types.yml');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].org).toBe('my-org');
+      expect(result[0].issueTypes).toBeDefined();
+      expect(result[0].issueTypes.length).toBe(2);
+      expect(result[0].issueTypes[0].name).toBe('Bug');
+    });
+
+    test('should merge base issue-types-file with per-org overrides in organizations-file', () => {
+      const orgsYaml = `orgs:
+  - org: my-org
+  - org: my-other-org
+    issue-types:
+      - name: Bug
+        description: A serious bug
+        color: 0000ff
+`;
+      const itYaml = `- name: Bug
+  description: Something is broken
+  color: ff0000
+- name: Feature
+  description: A new feature
+  color: 0e8a16
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+      setMockFileContent(itYaml, '/mock/issue-types.yml');
+      const result = parseOrganizations('', '/mock/orgs.yml', '', [], false, '/mock/issue-types.yml');
+
+      expect(result).toHaveLength(2);
+      // my-org: no inline overrides → gets both base issue types
+      expect(result[0].issueTypes.length).toBe(2);
+      // my-other-org: overrides "Bug" → gets 2 merged (Bug overridden + Feature from base)
+      expect(result[1].issueTypes.length).toBe(2);
+      const bugType = result[1].issueTypes.find(t => t.name === 'Bug');
+      expect(bugType.description).toBe('A serious bug');
+      expect(bugType.color).toBe('0000ff');
+    });
   });
 
   // ─── parseOrganizationsFile ─────────────────────────────────────────────
@@ -777,6 +863,49 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
       expect(() => parseOrganizationsFile('/mock/bad.yml')).toThrow(
         'Invalid "custom-properties-file" for org "my-org"'
       );
+    });
+
+    test('should parse inline issue-types', () => {
+      const orgsYaml = `orgs:
+  - org: my-org
+    issue-types:
+      - name: Bug
+        description: Something is broken
+        color: ff0000
+      - name: Feature
+        description: A new feature
+        color: 0e8a16
+        is-enabled: true
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+      const result = parseOrganizationsFile('/mock/orgs.yml');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].issueTypes).toHaveLength(2);
+      expect(result[0].issueTypes[0].name).toBe('Bug');
+      expect(result[0].issueTypes[0].color).toBe('ff0000');
+      expect(result[0].issueTypes[1].name).toBe('Feature');
+      expect(result[0].issueTypes[1].is_enabled).toBe(true);
+    });
+
+    test('should parse delete-unmanaged-issue-types', () => {
+      const orgsYaml = `orgs:
+  - org: my-org
+    delete-unmanaged-issue-types: true
+    issue-types:
+      - name: Bug
+        description: A bug
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+      const result = parseOrganizationsFile('/mock/orgs.yml');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].deleteUnmanagedIssueTypes).toBe(true);
+    });
+
+    test('should throw for invalid issue-types-file value', () => {
+      setMockFileContent('orgs:\n  - org: my-org\n    issue-types-file: 123', '/mock/bad.yml');
+      expect(() => parseOrganizationsFile('/mock/bad.yml')).toThrow('Invalid "issue-types-file" for org "my-org"');
     });
   });
 
@@ -879,6 +1008,335 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
       expect(result).toHaveLength(2);
       expect(result.find(p => p.property_name === 'team').required).toBe(false);
       expect(result.find(p => p.property_name === 'env').required).toBe(false);
+    });
+  });
+
+  // ─── normalizeIssueTypes ─────────────────────────────────────────────────
+
+  describe('normalizeIssueTypes', () => {
+    test('should normalize an issue type with all fields', () => {
+      const result = normalizeIssueTypes([
+        {
+          name: 'Bug',
+          description: 'Something is broken',
+          color: 'ff0000',
+          'is-enabled': true
+        }
+      ]);
+
+      expect(result).toEqual([
+        {
+          name: 'Bug',
+          description: 'Something is broken',
+          color: 'ff0000',
+          is_enabled: true
+        }
+      ]);
+    });
+
+    test('should default is_enabled to true and missing fields to null', () => {
+      const result = normalizeIssueTypes([{ name: 'Task' }]);
+
+      expect(result).toEqual([
+        {
+          name: 'Task',
+          description: null,
+          color: null,
+          is_enabled: true
+        }
+      ]);
+    });
+
+    test('should throw for missing name', () => {
+      expect(() => normalizeIssueTypes([{ description: 'No name' }])).toThrow('must have a "name" field');
+    });
+
+    test('should handle is-enabled set to false', () => {
+      const result = normalizeIssueTypes([{ name: 'Deprecated', 'is-enabled': false }]);
+      expect(result[0].is_enabled).toBe(false);
+    });
+  });
+
+  // ─── compareIssueType ──────────────────────────────────────────────────
+
+  describe('compareIssueType', () => {
+    test('should detect no changes for identical issue types', () => {
+      const issueType = {
+        name: 'Bug',
+        description: 'Something is broken',
+        color: 'ff0000',
+        is_enabled: true
+      };
+
+      const { changed, changes } = compareIssueType(issueType, issueType);
+      expect(changed).toBe(false);
+      expect(changes).toHaveLength(0);
+    });
+
+    test('should detect description change', () => {
+      const existing = { name: 'Bug', description: 'Old desc', color: 'ff0000', is_enabled: true };
+      const desired = { ...existing, description: 'New desc' };
+
+      const { changed, changes } = compareIssueType(existing, desired);
+      expect(changed).toBe(true);
+      expect(changes).toContain('description updated');
+    });
+
+    test('should detect color change', () => {
+      const existing = { name: 'Bug', description: null, color: 'ff0000', is_enabled: true };
+      const desired = { ...existing, color: '00ff00' };
+
+      const { changed, changes } = compareIssueType(existing, desired);
+      expect(changed).toBe(true);
+      expect(changes).toContain('color: ff0000 → 00ff00');
+    });
+
+    test('should detect is_enabled change', () => {
+      const existing = { name: 'Bug', description: null, color: null, is_enabled: true };
+      const desired = { ...existing, is_enabled: false };
+
+      const { changed, changes } = compareIssueType(existing, desired);
+      expect(changed).toBe(true);
+      expect(changes).toContain('is_enabled: true → false');
+    });
+  });
+
+  // ─── parseIssueTypesFile ──────────────────────────────────────────────
+
+  describe('parseIssueTypesFile', () => {
+    test('should throw for missing file', () => {
+      expect(() => parseIssueTypesFile('/nonexistent/file.yml')).toThrow('not found');
+    });
+
+    test('should parse the issue types file', () => {
+      const itYaml = `- name: Bug
+  description: Something is broken
+  color: ff0000
+- name: Feature
+  description: A new feature
+  color: 0e8a16
+  is-enabled: true
+`;
+      setMockFileContent(itYaml, '/mock/issue-types.yml');
+      const result = parseIssueTypesFile('/mock/issue-types.yml');
+
+      expect(result).toHaveLength(2);
+      expect(result[0].name).toBe('Bug');
+      expect(result[0].color).toBe('ff0000');
+      expect(result[1].name).toBe('Feature');
+      expect(result[1].is_enabled).toBe(true);
+    });
+
+    test('should throw for non-array content', () => {
+      setMockFileContent('name: Bug', '/mock/bad-it.yml');
+      expect(() => parseIssueTypesFile('/mock/bad-it.yml')).toThrow('expected an array');
+    });
+  });
+
+  // ─── mergeIssueTypes ──────────────────────────────────────────────────
+
+  describe('mergeIssueTypes', () => {
+    test('should return base issue types when no org overrides', () => {
+      const base = [
+        { name: 'Bug', description: 'A bug', color: 'ff0000', is_enabled: true },
+        { name: 'Feature', description: 'A feature', color: '0e8a16', is_enabled: true }
+      ];
+
+      const result = mergeIssueTypes(base, []);
+      expect(result).toHaveLength(2);
+      expect(result[0].name).toBe('Bug');
+      expect(result[1].name).toBe('Feature');
+    });
+
+    test('should override base issue type with org-specific issue type', () => {
+      const base = [{ name: 'Bug', description: 'A bug', color: 'ff0000', is_enabled: true }];
+      const orgOverrides = [{ name: 'Bug', description: 'A serious bug', color: '0000ff', is_enabled: false }];
+
+      const result = mergeIssueTypes(base, orgOverrides);
+      expect(result).toHaveLength(1);
+      expect(result[0].description).toBe('A serious bug');
+      expect(result[0].color).toBe('0000ff');
+    });
+
+    test('should add org-specific issue types not in base', () => {
+      const base = [{ name: 'Bug', description: 'A bug', color: 'ff0000', is_enabled: true }];
+      const orgOverrides = [{ name: 'Task', description: 'A task', color: 'fbca04', is_enabled: true }];
+
+      const result = mergeIssueTypes(base, orgOverrides);
+      expect(result).toHaveLength(2);
+      expect(result.find(t => t.name === 'Bug')).toBeDefined();
+      expect(result.find(t => t.name === 'Task')).toBeDefined();
+    });
+  });
+
+  // ─── syncIssueTypes ──────────────────────────────────────────────────
+
+  describe('syncIssueTypes', () => {
+    const desiredIssueTypes = [
+      {
+        name: 'Bug',
+        description: 'Something is broken',
+        color: 'ff0000',
+        is_enabled: true
+      }
+    ];
+
+    test('should create new issue types when none exist', async () => {
+      mockRequest.mockResolvedValueOnce({ data: [] });
+      mockRequest.mockResolvedValueOnce({ data: { id: 1, name: 'Bug' } });
+
+      const result = await syncIssueTypes(mockOctokit, 'my-org', desiredIssueTypes, false, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('issue-type-create');
+      expect(result.subResults[0].status).toBe('changed');
+      expect(mockRequest).toHaveBeenCalledWith(
+        'POST /orgs/{org}/issue-types',
+        expect.objectContaining({
+          org: 'my-org',
+          name: 'Bug'
+        })
+      );
+    });
+
+    test('should detect no changes for identical issue types', async () => {
+      mockRequest.mockResolvedValueOnce({
+        data: [
+          {
+            id: 1,
+            name: 'Bug',
+            description: 'Something is broken',
+            color: 'ff0000',
+            is_enabled: true
+          }
+        ]
+      });
+
+      const result = await syncIssueTypes(mockOctokit, 'my-org', desiredIssueTypes, false, false);
+
+      expect(result.subResults).toHaveLength(0);
+      expect(mockRequest).toHaveBeenCalledTimes(1); // Only the GET
+    });
+
+    test('should detect and apply updates', async () => {
+      mockRequest.mockResolvedValueOnce({
+        data: [
+          {
+            id: 1,
+            name: 'Bug',
+            description: 'Old description',
+            color: 'ff0000',
+            is_enabled: true
+          }
+        ]
+      });
+      mockRequest.mockResolvedValueOnce({ data: {} });
+
+      const result = await syncIssueTypes(mockOctokit, 'my-org', desiredIssueTypes, false, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('issue-type-update');
+      expect(result.subResults[0].status).toBe('changed');
+      expect(mockRequest).toHaveBeenCalledWith(
+        'PATCH /orgs/{org}/issue-types/{issue_type_id}',
+        expect.objectContaining({
+          org: 'my-org',
+          issue_type_id: 1
+        })
+      );
+    });
+
+    test('should delete unmanaged issue types when flag is set', async () => {
+      mockRequest.mockResolvedValueOnce({
+        data: [
+          {
+            id: 1,
+            name: 'Bug',
+            description: 'Something is broken',
+            color: 'ff0000',
+            is_enabled: true
+          },
+          {
+            id: 2,
+            name: 'Old-Type',
+            description: 'Should be deleted',
+            color: '000000',
+            is_enabled: true
+          }
+        ]
+      });
+      mockRequest.mockResolvedValueOnce({ data: {} });
+
+      const result = await syncIssueTypes(mockOctokit, 'my-org', desiredIssueTypes, true, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('issue-type-delete');
+      expect(result.subResults[0].status).toBe('changed');
+      expect(mockRequest).toHaveBeenCalledWith('DELETE /orgs/{org}/issue-types/{issue_type_id}', {
+        org: 'my-org',
+        issue_type_id: 2
+      });
+    });
+
+    test('should not delete unmanaged issue types when flag is not set', async () => {
+      mockRequest.mockResolvedValueOnce({
+        data: [
+          {
+            id: 1,
+            name: 'Bug',
+            description: 'Something is broken',
+            color: 'ff0000',
+            is_enabled: true
+          },
+          {
+            id: 2,
+            name: 'Old-Type',
+            description: 'Should not be deleted',
+            color: '000000',
+            is_enabled: true
+          }
+        ]
+      });
+
+      const result = await syncIssueTypes(mockOctokit, 'my-org', desiredIssueTypes, false, false);
+
+      expect(result.subResults).toHaveLength(0);
+      expect(mockRequest).toHaveBeenCalledTimes(1); // Only the GET
+    });
+
+    test('should handle dry-run mode without making API changes', async () => {
+      mockRequest.mockResolvedValueOnce({ data: [] });
+
+      const result = await syncIssueTypes(mockOctokit, 'my-org', desiredIssueTypes, false, true);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('issue-type-create');
+      expect(result.subResults[0].status).toBe('changed');
+      expect(result.subResults[0].message).toContain('Would');
+      expect(mockRequest).toHaveBeenCalledTimes(1); // Only the GET
+    });
+
+    test('should handle API errors on create gracefully', async () => {
+      mockRequest.mockResolvedValueOnce({ data: [] });
+      mockRequest.mockRejectedValueOnce(new Error('Forbidden'));
+
+      const result = await syncIssueTypes(mockOctokit, 'my-org', desiredIssueTypes, false, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].status).toBe('warning');
+      expect(result.subResults[0].message).toContain('Failed');
+    });
+
+    test('should handle 404 on GET as empty issue types', async () => {
+      const error404 = new Error('Not Found');
+      error404.status = 404;
+      mockRequest.mockRejectedValueOnce(error404);
+      mockRequest.mockResolvedValueOnce({ data: { id: 1, name: 'Bug' } });
+
+      const result = await syncIssueTypes(mockOctokit, 'my-org', desiredIssueTypes, false, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('issue-type-create');
     });
   });
 
@@ -1272,6 +1730,50 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
 
       // Mock: no existing rulesets
       mockPaginate.mockResolvedValueOnce([]);
+
+      await run();
+
+      expect(mockCore.setFailed).not.toHaveBeenCalled();
+      expect(mockCore.setOutput).toHaveBeenCalledWith('updated-organizations', '1');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-organizations', '1');
+    });
+
+    test('should process organizations with issue-types-file input', async () => {
+      const itYaml = `- name: Bug
+  description: Something is broken
+  color: ff0000
+- name: Feature
+  description: A new feature
+  color: 0e8a16
+`;
+      setMockFileContent(itYaml, '/mock/issue-types.yml');
+
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          'github-api-url': 'https://api.github.com',
+          organizations: 'my-org',
+          'organizations-file': '',
+          'custom-properties-file': '',
+          'issue-types-file': '/mock/issue-types.yml',
+          'rulesets-file': '',
+          'delete-unmanaged-properties': 'false',
+          'delete-unmanaged-rulesets': 'false',
+          'delete-unmanaged-issue-types': 'false',
+          'dry-run': 'true'
+        };
+        return inputs[name] ?? '';
+      });
+      mockCore.getBooleanInput.mockImplementation(name => {
+        if (name === 'dry-run') return true;
+        if (name === 'delete-unmanaged-properties') return false;
+        if (name === 'delete-unmanaged-rulesets') return false;
+        if (name === 'delete-unmanaged-issue-types') return false;
+        return false;
+      });
+
+      // Mock: no existing issue types
+      mockRequest.mockResolvedValueOnce({ data: [] });
 
       await run();
 

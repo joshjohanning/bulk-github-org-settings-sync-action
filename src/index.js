@@ -43,7 +43,7 @@ function getBooleanInput(name) {
 function getKnownOrgConfigKeys() {
   // 'org' is the organization identifier in YAML config
   // 'custom-properties' is inline property definitions (YAML-only, not an action input)
-  const keys = new Set(['org', 'custom-properties']);
+  const keys = new Set(['org', 'custom-properties', 'issue-types']);
 
   try {
     const __filename = url.fileURLToPath(import.meta.url);
@@ -101,6 +101,12 @@ const KNOWN_CUSTOM_PROPERTY_KEYS = new Set([
 ]);
 
 /**
+ * Known keys for issue type definitions in the YAML file.
+ * Used to warn about typos or unknown keys.
+ */
+const KNOWN_ISSUE_TYPE_KEYS = new Set(['name', 'description', 'color', 'is-enabled']);
+
+/**
  * Validate organization configuration and warn about unknown keys.
  * @param {Object} orgConfig - Organization configuration object from YAML
  * @param {string} orgName - Organization name for logging context
@@ -137,6 +143,22 @@ export function validateOrgConfig(orgConfig, orgName) {
     }
   }
 
+  // Validate issue type keys if present
+  if (Array.isArray(orgConfig['issue-types'])) {
+    for (const issueType of orgConfig['issue-types']) {
+      if (typeof issueType !== 'object' || issueType === null) continue;
+      const typeName = issueType.name || '(unnamed)';
+      for (const key of Object.keys(issueType)) {
+        if (!KNOWN_ISSUE_TYPE_KEYS.has(key)) {
+          core.warning(
+            `⚠️  Unknown issue type key "${key}" found for issue type "${typeName}" in organization "${orgName}". ` +
+              `This key may not exist or may have a typo.`
+          );
+        }
+      }
+    }
+  }
+
   // Validate delete-unmanaged-properties value if present
   if (Object.prototype.hasOwnProperty.call(orgConfig, 'delete-unmanaged-properties')) {
     const val = orgConfig['delete-unmanaged-properties'];
@@ -154,6 +176,17 @@ export function validateOrgConfig(orgConfig, orgName) {
     if (typeof val !== 'boolean') {
       core.warning(
         `⚠️  Invalid "delete-unmanaged-rulesets" value for organization "${orgName}": ` +
+          `expected true or false, got "${val}". This setting will be ignored.`
+      );
+    }
+  }
+
+  // Validate delete-unmanaged-issue-types value if present
+  if (Object.prototype.hasOwnProperty.call(orgConfig, 'delete-unmanaged-issue-types')) {
+    const val = orgConfig['delete-unmanaged-issue-types'];
+    if (typeof val !== 'boolean') {
+      core.warning(
+        `⚠️  Invalid "delete-unmanaged-issue-types" value for organization "${orgName}": ` +
           `expected true or false, got "${val}". This setting will be ignored.`
       );
     }
@@ -181,6 +214,9 @@ const SYNC_KIND_LABELS = Object.freeze({
   'custom-property-create': 'custom property (created)',
   'custom-property-update': 'custom property (updated)',
   'custom-property-delete': 'custom property (deleted)',
+  'issue-type-create': 'issue type (created)',
+  'issue-type-update': 'issue type (updated)',
+  'issue-type-delete': 'issue type (deleted)',
   'ruleset-create': 'ruleset (created)',
   'ruleset-update': 'ruleset (updated)',
   'ruleset-delete': 'ruleset (deleted)'
@@ -229,19 +265,27 @@ function formatSubResultSummary(subResult) {
  * @param {string} customPropertiesFile - Path to custom properties YAML file
  * @param {string[]} [rulesetsFiles] - Paths to ruleset JSON files (base for all orgs)
  * @param {boolean} [deleteUnmanagedRulesets] - Whether to delete rulesets not in config
- * @returns {Array<{ org: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean }>} Parsed org configs
+ * @param {string} [issueTypesFile] - Path to issue types YAML file (base for all orgs)
+ * @returns {Array<{ org: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, issueTypes?: Array }>} Parsed org configs
  */
 export function parseOrganizations(
   organizationsInput,
   organizationsFile,
   customPropertiesFile,
   rulesetsFiles,
-  deleteUnmanagedRulesets
+  deleteUnmanagedRulesets,
+  issueTypesFile
 ) {
   // Load base custom properties from separate file (applies to all orgs)
   let baseCustomProperties = null;
   if (customPropertiesFile) {
     baseCustomProperties = parseCustomPropertiesFile(customPropertiesFile);
+  }
+
+  // Load base issue types from separate file (applies to all orgs)
+  let baseIssueTypes = null;
+  if (issueTypesFile) {
+    baseIssueTypes = parseIssueTypesFile(issueTypesFile);
   }
 
   if (organizationsFile) {
@@ -268,6 +312,27 @@ export function parseOrganizations(
 
       // Clean up the intermediate field
       delete orgConfig.customPropertiesFile;
+
+      // Per-org issue-types-file overrides the base for this org
+      let orgIssueTypesBase = baseIssueTypes;
+      if (orgConfig.issueTypesFile) {
+        try {
+          orgIssueTypesBase = parseIssueTypesFile(orgConfig.issueTypesFile);
+        } catch (error) {
+          throw new Error(
+            `Failed to parse issue types file "${orgConfig.issueTypesFile}" for organization "${orgConfig.org}": ${error.message}`,
+            { cause: error }
+          );
+        }
+      }
+
+      if (orgIssueTypesBase) {
+        // Inline issue-types layer on top of the base (per-org file or global file)
+        orgConfig.issueTypes = mergeIssueTypes(orgIssueTypesBase, orgConfig.issueTypes || []);
+      }
+
+      // Clean up the intermediate field
+      delete orgConfig.issueTypesFile;
 
       // Per-org rulesets-file overrides the base for this org
       if (!orgConfig.rulesetsFiles && rulesetsFiles && rulesetsFiles.length > 0) {
@@ -299,6 +364,7 @@ export function parseOrganizations(
   return orgs.map(org => ({
     org,
     ...(baseCustomProperties ? { customProperties: baseCustomProperties } : {}),
+    ...(baseIssueTypes ? { issueTypes: baseIssueTypes } : {}),
     ...(rulesetsFiles && rulesetsFiles.length > 0 ? { rulesetsFiles } : {}),
     ...(deleteUnmanagedRulesets !== undefined ? { deleteUnmanagedRulesets } : {})
   }));
@@ -325,9 +391,27 @@ export function mergeCustomProperties(baseProperties, orgProperties) {
 }
 
 /**
+ * Merge base issue types with per-org overrides.
+ * Per-org issue types override base issue types with the same name.
+ * Base issue types not overridden are preserved.
+ * @param {Array<Object>} baseIssueTypes - Base issue type definitions
+ * @param {Array<Object>} orgIssueTypes - Per-org issue type overrides
+ * @returns {Array<Object>} Merged issue types
+ */
+export function mergeIssueTypes(baseIssueTypes, orgIssueTypes) {
+  const merged = new Map(baseIssueTypes.map(t => [t.name, { ...t }]));
+
+  for (const orgType of orgIssueTypes) {
+    merged.set(orgType.name, { ...orgType });
+  }
+
+  return Array.from(merged.values());
+}
+
+/**
  * Parse the organizations YAML config file.
  * @param {string} filePath - Path to the YAML file
- * @returns {Array<{ org: string, customPropertiesFile?: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, deleteUnmanagedProperties?: boolean }>}
+ * @returns {Array<{ org: string, customPropertiesFile?: string, customProperties?: Array, issueTypesFile?: string, issueTypes?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, deleteUnmanagedProperties?: boolean, deleteUnmanagedIssueTypes?: boolean }>}
  */
 export function parseOrganizationsFile(filePath) {
   if (!fs.existsSync(filePath)) {
@@ -362,6 +446,18 @@ export function parseOrganizationsFile(filePath) {
       result.customProperties = normalizeCustomProperties(orgConfig['custom-properties']);
     }
 
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'issue-types-file')) {
+      const itFile = orgConfig['issue-types-file'];
+      if (typeof itFile !== 'string' || itFile.trim() === '') {
+        throw new Error(`Invalid "issue-types-file" for org "${orgConfig.org}": expected a non-empty string`);
+      }
+      result.issueTypesFile = itFile.trim();
+    }
+
+    if (orgConfig['issue-types']) {
+      result.issueTypes = normalizeIssueTypes(orgConfig['issue-types']);
+    }
+
     if (Object.prototype.hasOwnProperty.call(orgConfig, 'rulesets-file')) {
       const rsFile = orgConfig['rulesets-file'];
       result.rulesetsFiles = parseRulesetsFileValue(rsFile, orgConfig.org);
@@ -378,6 +474,13 @@ export function parseOrganizationsFile(filePath) {
       const val = orgConfig['delete-unmanaged-properties'];
       if (typeof val === 'boolean') {
         result.deleteUnmanagedProperties = val;
+      }
+    }
+
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'delete-unmanaged-issue-types')) {
+      const val = orgConfig['delete-unmanaged-issue-types'];
+      if (typeof val === 'boolean') {
+        result.deleteUnmanagedIssueTypes = val;
       }
     }
 
@@ -542,6 +645,204 @@ export function normalizeCustomProperties(properties) {
 
     return normalized;
   });
+}
+
+// ─── Issue Types Parsing & Sync ─────────────────────────────────────────────────
+
+/**
+ * Parse a standalone issue types YAML file.
+ * @param {string} filePath - Path to the YAML file
+ * @returns {Array<Object>} Normalized issue type definitions
+ */
+export function parseIssueTypesFile(filePath) {
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`Issue types file not found: ${filePath}`);
+  }
+
+  const content = fs.readFileSync(filePath, 'utf8');
+  const issueTypes = yaml.load(content);
+
+  if (!Array.isArray(issueTypes)) {
+    throw new Error(`Invalid issue types file format: expected an array in ${filePath}`);
+  }
+
+  return normalizeIssueTypes(issueTypes);
+}
+
+/**
+ * Normalize issue type definitions from YAML format to API format.
+ * @param {Array<Object>} issueTypes - Issue type definitions from YAML
+ * @returns {Array<Object>} Normalized issue types
+ */
+export function normalizeIssueTypes(issueTypes) {
+  return issueTypes.map(it => {
+    if (!it.name) {
+      throw new Error('Each issue type must have a "name" field');
+    }
+
+    const normalized = {
+      name: it.name,
+      is_enabled: it['is-enabled'] === undefined ? true : Boolean(it['is-enabled']),
+      description: it.description || null,
+      color: it.color || null
+    };
+
+    return normalized;
+  });
+}
+
+/**
+ * Compare two issue type definitions to check if they differ.
+ * @param {Object} existing - Current issue type from API
+ * @param {Object} desired - Desired issue type from config
+ * @returns {{ changed: boolean, changes: Array<string> }}
+ */
+export function compareIssueType(existing, desired) {
+  const changes = [];
+
+  // Normalize empty strings to null for consistent comparison
+  const existingDesc = existing.description || null;
+  const desiredDesc = desired.description || null;
+  if (existingDesc !== desiredDesc) {
+    changes.push(`description updated`);
+  }
+  const existingColor = existing.color || null;
+  const desiredColor = desired.color || null;
+  if (existingColor !== desiredColor) {
+    changes.push(`color: ${existingColor || 'none'} → ${desiredColor || 'none'}`);
+  }
+  if (Boolean(existing.is_enabled) !== Boolean(desired.is_enabled)) {
+    changes.push(`is_enabled: ${existing.is_enabled} → ${desired.is_enabled}`);
+  }
+
+  return { changed: changes.length > 0, changes };
+}
+
+/**
+ * Sync issue type definitions for an organization.
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} org - Organization name
+ * @param {Array<Object>} desiredIssueTypes - Desired issue type definitions
+ * @param {boolean} deleteUnmanaged - Whether to delete issue types not in config
+ * @param {boolean} dryRun - Preview mode
+ * @returns {Promise<Object>} Result object with subResults
+ */
+export async function syncIssueTypes(octokit, org, desiredIssueTypes, deleteUnmanaged, dryRun) {
+  const subResults = [];
+  const wouldPrefix = dryRun ? 'Would ' : '';
+
+  // Fetch current issue types
+  let existingIssueTypes;
+  try {
+    const { data } = await octokit.request('GET /orgs/{org}/issue-types', { org });
+    existingIssueTypes = data;
+  } catch (error) {
+    if (error.status === 404) {
+      existingIssueTypes = [];
+    } else {
+      throw error;
+    }
+  }
+
+  const existingMap = new Map(existingIssueTypes.map(t => [t.name, t]));
+  const desiredMap = new Map(desiredIssueTypes.map(t => [t.name, t]));
+
+  // Determine creates and updates
+  for (const desired of desiredIssueTypes) {
+    const existing = existingMap.get(desired.name);
+
+    if (!existing) {
+      // New issue type
+      core.info(`  🆕 ${wouldPrefix}Create issue type: ${desired.name}`);
+      subResults.push(
+        createSubResult('issue-type-create', SubResultStatus.CHANGED, `${wouldPrefix}create "${desired.name}"`)
+      );
+
+      if (!dryRun) {
+        try {
+          await octokit.request('POST /orgs/{org}/issue-types', {
+            org,
+            name: desired.name,
+            ...(desired.description != null ? { description: desired.description } : {}),
+            ...(desired.color != null ? { color: desired.color } : {}),
+            is_enabled: desired.is_enabled
+          });
+        } catch (error) {
+          core.warning(`  ⚠️  Failed to create issue type "${desired.name}": ${error.message}`);
+          subResults[subResults.length - 1] = createSubResult(
+            'issue-type-create',
+            SubResultStatus.WARNING,
+            `Failed to create "${desired.name}": ${error.message}`
+          );
+        }
+      }
+    } else {
+      // Check for updates
+      const { changed, changes } = compareIssueType(existing, desired);
+      if (changed) {
+        core.info(`  📝 ${wouldPrefix}Update issue type: ${desired.name} (${changes.join(', ')})`);
+        subResults.push(
+          createSubResult(
+            'issue-type-update',
+            SubResultStatus.CHANGED,
+            `${wouldPrefix}update "${desired.name}" (${changes.join(', ')})`
+          )
+        );
+
+        if (!dryRun) {
+          try {
+            await octokit.request('PATCH /orgs/{org}/issue-types/{issue_type_id}', {
+              org,
+              issue_type_id: existing.id,
+              name: desired.name,
+              ...(desired.description != null ? { description: desired.description } : {}),
+              ...(desired.color != null ? { color: desired.color } : {}),
+              is_enabled: desired.is_enabled
+            });
+          } catch (error) {
+            core.warning(`  ⚠️  Failed to update issue type "${desired.name}": ${error.message}`);
+            subResults[subResults.length - 1] = createSubResult(
+              'issue-type-update',
+              SubResultStatus.WARNING,
+              `Failed to update "${desired.name}": ${error.message}`
+            );
+          }
+        }
+      } else {
+        core.info(`  ✅ Issue type unchanged: ${desired.name}`);
+      }
+    }
+  }
+
+  // Determine and apply deletions
+  if (deleteUnmanaged) {
+    for (const existing of existingIssueTypes) {
+      if (!desiredMap.has(existing.name)) {
+        core.info(`  🗑️ ${wouldPrefix}Delete issue type: ${existing.name}`);
+        subResults.push(
+          createSubResult('issue-type-delete', SubResultStatus.CHANGED, `${wouldPrefix}delete "${existing.name}"`)
+        );
+
+        if (!dryRun) {
+          try {
+            await octokit.request('DELETE /orgs/{org}/issue-types/{issue_type_id}', {
+              org,
+              issue_type_id: existing.id
+            });
+          } catch (error) {
+            core.warning(`  ⚠️  Failed to delete issue type "${existing.name}": ${error.message}`);
+            subResults[subResults.length - 1] = createSubResult(
+              'issue-type-delete',
+              SubResultStatus.WARNING,
+              `Failed to delete "${existing.name}": ${error.message}`
+            );
+          }
+        }
+      }
+    }
+  }
+
+  return { subResults, failed: false };
 }
 
 // ─── Custom Properties Sync ─────────────────────────────────────────────────────
@@ -980,6 +1281,8 @@ export async function run() {
     const rulesetsFileInput = core.getInput('rulesets-file');
     const rulesetsFiles = parseRulesetsFileValue(rulesetsFileInput);
     const deleteUnmanagedRulesets = getBooleanInput('delete-unmanaged-rulesets') ?? false;
+    const issueTypesFile = core.getInput('issue-types-file');
+    const deleteUnmanagedIssueTypes = getBooleanInput('delete-unmanaged-issue-types') ?? false;
     const dryRun = getBooleanInput('dry-run') ?? false;
 
     core.info('Starting Bulk GitHub Organization Settings Sync Action...');
@@ -998,17 +1301,19 @@ export async function run() {
       organizationsFile,
       customPropertiesFile,
       rulesetsFiles,
-      deleteUnmanagedRulesets
+      deleteUnmanagedRulesets,
+      issueTypesFile
     );
 
     // Check that at least one setting type is specified
     const hasCustomProperties = orgList.some(o => o.customProperties && o.customProperties.length > 0);
     const hasRulesets = orgList.some(o => o.rulesetsFiles && o.rulesetsFiles.length > 0);
-    if (!hasCustomProperties && !hasRulesets) {
+    const hasIssueTypes = orgList.some(o => o.issueTypes && o.issueTypes.length > 0);
+    if (!hasCustomProperties && !hasRulesets && !hasIssueTypes) {
       throw new Error(
         'At least one setting must be specified. Provide custom properties via ' +
           '"organizations-file" or via "organizations" + "custom-properties-file" inputs, ' +
-          'or provide rulesets via "rulesets-file".'
+          'rulesets via "rulesets-file", or issue types via "issue-types-file".'
       );
     }
 
@@ -1026,6 +1331,10 @@ export async function run() {
 
     if (deleteUnmanagedRulesets) {
       core.info('⚠️  delete-unmanaged-rulesets is enabled: rulesets not in config will be deleted');
+    }
+
+    if (deleteUnmanagedIssueTypes) {
+      core.info('⚠️  delete-unmanaged-issue-types is enabled: issue types not in config will be deleted');
     }
 
     // Process organizations
@@ -1063,6 +1372,24 @@ export async function run() {
           if (cpResult.failed) {
             result.success = false;
             result.error = 'Custom properties sync failed';
+          }
+        }
+
+        // Sync issue types
+        if (orgConfig.issueTypes && orgConfig.issueTypes.length > 0) {
+          core.info(`  🏷️  Syncing issue types (${orgConfig.issueTypes.length} defined)...`);
+          const itResult = await syncIssueTypes(
+            octokit,
+            org,
+            orgConfig.issueTypes,
+            orgConfig.deleteUnmanagedIssueTypes ?? deleteUnmanagedIssueTypes,
+            dryRun
+          );
+          result.subResults.push(...itResult.subResults);
+
+          if (itResult.failed) {
+            result.success = false;
+            result.error = result.error ? `${result.error}; Issue types sync failed` : 'Issue types sync failed';
           }
         }
 

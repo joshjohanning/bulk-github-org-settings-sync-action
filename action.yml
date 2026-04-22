@@ -32,6 +32,15 @@ inputs:
     required: false
     default: 'false'
 
+  # === Issue Types ===
+  issue-types-file:
+    description: 'Path to a YAML file defining issue type definitions to sync to target organizations'
+    required: false
+  delete-unmanaged-issue-types:
+    description: 'Delete issue types not defined in the configuration file'
+    required: false
+    default: 'false'
+
   # === Rulesets ===
   rulesets-file:
     description: 'Comma-separated paths to JSON files, each containing a single organization ruleset configuration to sync'
