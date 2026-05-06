@@ -185,7 +185,7 @@ orgs:
                          # gets: team (overridden) + cost-center (from base)
 ```
 
-The same merging applies to member privilege inputs (or `member-privileges-file`) and per-org `member-privileges` — per-org settings override base settings with the same key; base settings not overridden are preserved:
+The same merging applies to member privilege inputs and per-org `member-privileges` — per-org settings override base settings with the same key; base settings not overridden are preserved:
 
 ```yaml
 # action inputs (base): default-repository-permission=read, members-can-fork-private-repositories=false
@@ -457,23 +457,11 @@ Set member privilege settings directly as action inputs:
     github-token: ${{ secrets.ORG_ADMIN_TOKEN }}
     organizations: 'my-org'
     default-repository-permission: read
+    members-can-create-repositories: true
     members-can-fork-private-repositories: false
     members-can-create-internal-repositories: false # GHEC/GHES only
+    web-commit-signoff-required: true
     default-repository-branch: main
-```
-
-Alternatively, define all settings in a separate file via `member-privileges-file`:
-
-> [!TIP]
-> 📄 **See full example:** [sample-configuration/member-privileges.yml](sample-configuration/member-privileges.yml)
-
-```yml
-- name: Sync Organization Settings
-  uses: joshjohanning/bulk-github-org-settings-sync-action@v1
-  with:
-    github-token: ${{ secrets.ORG_ADMIN_TOKEN }}
-    organizations: 'my-org'
-    member-privileges-file: './member-privileges.yml'
 ```
 
 **Behavior:**
@@ -482,17 +470,18 @@ Alternatively, define all settings in a separate file via `member-privileges-fil
 - If a setting already matches the config, no API call is made
 - Settings are applied via a single `PATCH /orgs/{org}` call per organization
 - In dry-run mode, shows which settings would be changed without applying them
-- When both individual inputs and `member-privileges-file` are provided, the file takes precedence for any conflicting keys
 
 ### Member Privilege Settings
 
 | Setting                                       | Type    | Description                                                          |
 | --------------------------------------------- | ------- | -------------------------------------------------------------------- |
 | `default-repository-permission`               | string  | Default permission for org members: `read`, `write`, `admin`, `none` |
+| `members-can-create-repositories`             | boolean | Can members create repositories                                      |
 | `members-can-create-public-repositories`      | boolean | Can members create public repositories                               |
 | `members-can-create-private-repositories`     | boolean | Can members create private repositories                              |
 | `members-can-create-internal-repositories`    | boolean | Can members create internal repositories (GHEC/GHES only)            |
 | `members-can-fork-private-repositories`       | boolean | Can members fork private repositories                                |
+| `web-commit-signoff-required`                 | boolean | Require web UI commits to be signed off                              |
 | `members-can-create-pages`                    | boolean | Can members create GitHub Pages sites                                |
 | `members-can-create-public-pages`             | boolean | Can members create public GitHub Pages sites                         |
 | `members-can-create-private-pages`            | boolean | Can members create private GitHub Pages sites                        |
@@ -514,7 +503,7 @@ In `orgs.yml`, use `member-privileges` to override specific settings for an org:
 ```yaml
 orgs:
   - org: my-org
-    # inherits base member-privileges-file from action input
+    # inherits base member privilege action inputs
 
   - org: my-other-org
     member-privileges:
@@ -534,12 +523,13 @@ orgs:
 | `organizations-file`                          | Path to YAML file containing organization settings configuration                    | No       |                         |
 | `custom-properties-file`                      | Path to a YAML file defining custom property schemas                                | No       |                         |
 | `delete-unmanaged-properties`                 | Delete custom properties not defined in the configuration file                      | No       | `false`                 |
-| `member-privileges-file`                      | Path to a YAML file defining member privilege settings (alternative to inputs)      | No       |                         |
 | `default-repository-permission`               | Default permission for org members: `read`, `write`, `admin`, `none`                | No       |                         |
+| `members-can-create-repositories`             | Whether members can create repositories                                             | No       |                         |
 | `members-can-create-public-repositories`      | Whether members can create public repositories                                      | No       |                         |
 | `members-can-create-private-repositories`     | Whether members can create private repositories                                     | No       |                         |
 | `members-can-create-internal-repositories`    | Whether members can create internal repositories (GHEC/GHES only)                   | No       |                         |
 | `members-can-fork-private-repositories`       | Whether members can fork private repositories                                       | No       |                         |
+| `web-commit-signoff-required`                 | Whether web UI commits require signoff                                              | No       |                         |
 | `members-can-create-pages`                    | Whether members can create GitHub Pages sites                                       | No       |                         |
 | `members-can-create-public-pages`             | Whether members can create public GitHub Pages sites                                | No       |                         |
 | `members-can-create-private-pages`            | Whether members can create private GitHub Pages sites                               | No       |                         |
@@ -558,7 +548,7 @@ orgs:
 | `dry-run`                                     | Preview changes without applying them                                               | No       | `false`                 |
 
 > [!NOTE]
-> You must provide either `organizations` or `organizations-file`. Member privilege settings can be provided as individual inputs (e.g., `default-repository-permission`) or via `member-privileges-file` — when both are used, the file takes precedence for conflicting keys. Per-org overrides in `organizations-file` layer on top of the base.
+> You must provide either `organizations` or `organizations-file`. Member privilege settings can be provided as individual inputs (e.g., `default-repository-permission`). Per-org overrides in `organizations-file` layer on top of the base.
 
 ## Action Outputs
 

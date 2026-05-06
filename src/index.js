@@ -111,10 +111,12 @@ export const MEMBER_PRIVILEGE_SETTINGS = new Map([
     'default-repository-permission',
     { apiKey: 'default_repository_permission', type: 'string', validValues: ['read', 'write', 'admin', 'none'] }
   ],
+  ['members-can-create-repositories', { apiKey: 'members_can_create_repositories', type: 'boolean' }],
   ['members-can-create-public-repositories', { apiKey: 'members_can_create_public_repositories', type: 'boolean' }],
   ['members-can-create-private-repositories', { apiKey: 'members_can_create_private_repositories', type: 'boolean' }],
   ['members-can-create-internal-repositories', { apiKey: 'members_can_create_internal_repositories', type: 'boolean' }],
   ['members-can-fork-private-repositories', { apiKey: 'members_can_fork_private_repositories', type: 'boolean' }],
+  ['web-commit-signoff-required', { apiKey: 'web_commit_signoff_required', type: 'boolean' }],
   ['members-can-create-pages', { apiKey: 'members_can_create_pages', type: 'boolean' }],
   ['members-can-create-public-pages', { apiKey: 'members_can_create_public_pages', type: 'boolean' }],
   ['members-can-create-private-pages', { apiKey: 'members_can_create_private_pages', type: 'boolean' }],
@@ -207,7 +209,7 @@ export function validateOrgConfig(orgConfig, orgName) {
     } else if (memberPrivileges !== undefined) {
       core.warning(
         `⚠️  Invalid "member-privileges" value for organization "${orgName}": ` +
-          `expected a key-value map. This setting will be ignored.`
+          `expected a key-value map. This configuration will fail validation.`
       );
     }
   }
@@ -267,8 +269,8 @@ function formatSubResultSummary(subResult) {
  * Parse the list of organizations and their settings from inputs.
  * Supports two modes:
  *   1. organizations-file: YAML file with full org + settings config
- * Supports layering: base settings from action inputs (custom-properties-file,
- * rulesets-file, member-privileges-file) are merged with per-org overrides from organizations-file.
+ * Supports layering: base settings from action inputs (custom-properties-file, rulesets-file, and direct
+ * member privilege inputs) are merged with per-org overrides from organizations-file.
  * Per-org properties override base properties with the same name; base properties
  * not overridden are preserved.
  *
@@ -276,14 +278,13 @@ function formatSubResultSummary(subResult) {
  * overrides the corresponding base file from the action input for that org.
  *
  * Modes:
- *   1. organizations-file (optionally combined with custom-properties-file / rulesets-file / member-privileges-file for base settings)
- *   2. organizations input + custom-properties-file / rulesets-file / member-privileges-file (same properties for all orgs)
+ *   1. organizations-file (optionally combined with custom-properties-file / rulesets-file / direct member privilege inputs for base settings)
+ *   2. organizations input + custom-properties-file / rulesets-file / direct member privilege inputs (same properties for all orgs)
  * @param {string} organizationsInput - Comma-separated org names
  * @param {string} organizationsFile - Path to YAML config file
  * @param {string} customPropertiesFile - Path to custom properties YAML file
  * @param {string[]} [rulesetsFiles] - Paths to ruleset JSON files (base for all orgs)
  * @param {boolean} [deleteUnmanagedRulesets] - Whether to delete rulesets not in config
- * @param {string} [memberPrivilegesFile] - Path to member privileges YAML file (base for all orgs)
  * @param {Object|null} [memberPrivilegesFromInputs] - Member privileges parsed from action inputs (base for all orgs)
  * @returns {Array<{ org: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, memberPrivileges?: Object }>} Parsed org configs
  */
@@ -293,7 +294,6 @@ export function parseOrganizations(
   customPropertiesFile,
   rulesetsFiles,
   deleteUnmanagedRulesets,
-  memberPrivilegesFile,
   memberPrivilegesFromInputs
 ) {
   // Load base custom properties from separate file (applies to all orgs)
@@ -302,14 +302,10 @@ export function parseOrganizations(
     baseCustomProperties = parseCustomPropertiesFile(customPropertiesFile);
   }
 
-  // Load base member privileges: inputs first, then file overrides inputs
+  // Load base member privileges from direct action inputs.
   let baseMemberPrivileges = null;
   if (memberPrivilegesFromInputs) {
     baseMemberPrivileges = { ...memberPrivilegesFromInputs };
-  }
-  if (memberPrivilegesFile) {
-    const filePrivileges = parseMemberPrivilegesFile(memberPrivilegesFile);
-    baseMemberPrivileges = baseMemberPrivileges ? { ...baseMemberPrivileges, ...filePrivileges } : filePrivileges;
   }
 
   if (organizationsFile) {
@@ -470,7 +466,7 @@ export function parseOrganizationsFile(filePath) {
       }
     }
 
-    if (orgConfig['member-privileges']) {
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'member-privileges')) {
       result.memberPrivileges = parseMemberPrivileges(orgConfig['member-privileges'], orgConfig.org);
     }
 
@@ -669,41 +665,24 @@ export function parseMemberPrivileges(config, context) {
         throw new Error(`Member privilege "${yamlKey}"${label} must be a boolean (true/false), got "${value}"`);
       }
     } else if (setting.type === 'string') {
-      if (typeof value !== 'string' || value.trim() === '') {
+      const trimmedValue = typeof value === 'string' ? value.trim() : value;
+      if (typeof trimmedValue !== 'string' || trimmedValue === '') {
         throw new Error(`Member privilege "${yamlKey}"${label} must be a non-empty string`);
       }
-      if (setting.validValues && !setting.validValues.includes(value)) {
+      if (setting.validValues && !setting.validValues.includes(trimmedValue)) {
         throw new Error(
-          `Member privilege "${yamlKey}"${label} has invalid value "${value}". ` +
+          `Member privilege "${yamlKey}"${label} has invalid value "${trimmedValue}". ` +
             `Valid values: ${setting.validValues.join(', ')}`
         );
       }
+      normalized[setting.apiKey] = trimmedValue;
+      continue;
     }
 
     normalized[setting.apiKey] = value;
   }
 
   return normalized;
-}
-
-/**
- * Parse a standalone member privileges YAML file.
- * @param {string} filePath - Path to the YAML file
- * @returns {Object} Normalized privileges with API keys
- */
-export function parseMemberPrivilegesFile(filePath) {
-  if (!fs.existsSync(filePath)) {
-    throw new Error(`Member privileges file not found: ${filePath}`);
-  }
-
-  const content = fs.readFileSync(filePath, 'utf8');
-  const config = yaml.load(content);
-
-  if (typeof config !== 'object' || config === null || Array.isArray(config)) {
-    throw new Error(`Invalid member privileges file format: expected a key-value map in ${filePath}`);
-  }
-
-  return parseMemberPrivileges(config);
 }
 
 /**
@@ -729,12 +708,14 @@ export function getMemberPrivilegesFromInputs() {
         throw new Error(`Input "${yamlKey}" must be a boolean (true/false), got "${raw}"`);
       }
     } else if (setting.type === 'string') {
-      if (setting.validValues && !setting.validValues.includes(raw)) {
+      const trimmedRaw = raw.trim();
+      if (trimmedRaw === '') continue;
+      if (setting.validValues && !setting.validValues.includes(trimmedRaw)) {
         throw new Error(
-          `Input "${yamlKey}" has invalid value "${raw}". Valid values: ${setting.validValues.join(', ')}`
+          `Input "${yamlKey}" has invalid value "${trimmedRaw}". Valid values: ${setting.validValues.join(', ')}`
         );
       }
-      result[setting.apiKey] = raw;
+      result[setting.apiKey] = trimmedRaw;
     }
   }
 
@@ -1278,7 +1259,6 @@ export async function run() {
     const rulesetsFileInput = core.getInput('rulesets-file');
     const rulesetsFiles = parseRulesetsFileValue(rulesetsFileInput);
     const deleteUnmanagedRulesets = getBooleanInput('delete-unmanaged-rulesets') ?? false;
-    const memberPrivilegesFile = core.getInput('member-privileges-file');
     const memberPrivilegesFromInputs = getMemberPrivilegesFromInputs();
     const dryRun = getBooleanInput('dry-run') ?? false;
 
@@ -1299,7 +1279,6 @@ export async function run() {
       customPropertiesFile,
       rulesetsFiles,
       deleteUnmanagedRulesets,
-      memberPrivilegesFile,
       memberPrivilegesFromInputs
     );
 
@@ -1312,7 +1291,7 @@ export async function run() {
         'At least one setting must be specified. Provide custom properties via ' +
           '"organizations-file" or via "organizations" + "custom-properties-file" inputs, ' +
           'provide rulesets via "rulesets-file", or provide member privileges via ' +
-          'individual inputs (e.g., "default-repository-permission") or "member-privileges-file".'
+          'individual inputs (e.g., "default-repository-permission").'
       );
     }
 

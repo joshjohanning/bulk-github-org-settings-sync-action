@@ -29,10 +29,10 @@ inputs:
     description: 'Custom properties file'
   delete-unmanaged-properties:
     description: 'Delete unmanaged properties'
-  member-privileges-file:
-    description: 'Member privileges file'
   default-repository-permission:
     description: 'Default permission level'
+  members-can-create-repositories:
+    description: 'Can members create repos'
   members-can-create-public-repositories:
     description: 'Can members create public repos'
   members-can-create-private-repositories:
@@ -41,6 +41,8 @@ inputs:
     description: 'Can members create internal repos'
   members-can-fork-private-repositories:
     description: 'Can members fork private repos'
+  web-commit-signoff-required:
+    description: 'Web commit signoff required'
   members-can-create-pages:
     description: 'Can members create pages'
   members-can-create-public-pages:
@@ -158,7 +160,6 @@ const {
   mergeCustomProperties,
   mergeMemberPrivileges,
   parseMemberPrivileges,
-  parseMemberPrivilegesFile,
   getMemberPrivilegesFromInputs,
   syncMemberPrivileges,
   MEMBER_PRIVILEGE_SETTINGS,
@@ -1729,10 +1730,12 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
     test('should parse all supported settings', () => {
       const config = {
         'default-repository-permission': 'read',
+        'members-can-create-repositories': true,
         'members-can-create-public-repositories': true,
         'members-can-create-private-repositories': true,
         'members-can-create-internal-repositories': false,
         'members-can-fork-private-repositories': false,
+        'web-commit-signoff-required': true,
         'members-can-create-pages': true,
         'members-can-create-public-pages': true,
         'members-can-create-private-pages': true,
@@ -1749,44 +1752,24 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
       };
 
       const result = parseMemberPrivileges(config);
-      expect(Object.keys(result)).toHaveLength(18);
+      expect(Object.keys(result)).toHaveLength(20);
       expect(result.default_repository_permission).toBe('read');
+      expect(result.members_can_create_repositories).toBe(true);
       expect(result.members_can_fork_private_repositories).toBe(false);
+      expect(result.web_commit_signoff_required).toBe(true);
       expect(result.default_repository_branch).toBe('main');
     });
-  });
 
-  // ─── parseMemberPrivilegesFile ───────────────────────────────────────────
-
-  describe('parseMemberPrivilegesFile', () => {
-    test('should parse a valid YAML file', () => {
-      const yamlContent = `
-default-repository-permission: read
-members-can-fork-private-repositories: false
-members-can-create-public-repositories: true
-`;
-      setMockFileContent(yamlContent, '/mock/member-privileges.yml');
-      const result = parseMemberPrivilegesFile('/mock/member-privileges.yml');
+    test('should trim string settings before normalizing', () => {
+      const result = parseMemberPrivileges({
+        'default-repository-permission': ' read ',
+        'default-repository-branch': ' main '
+      });
 
       expect(result).toEqual({
         default_repository_permission: 'read',
-        members_can_fork_private_repositories: false,
-        members_can_create_public_repositories: true
+        default_repository_branch: 'main'
       });
-    });
-
-    test('should throw for missing file', () => {
-      expect(() => parseMemberPrivilegesFile('/nonexistent/file.yml')).toThrow('not found');
-    });
-
-    test('should throw for non-object YAML content', () => {
-      setMockFileContent('- item1\n- item2', '/mock/bad.yml');
-      expect(() => parseMemberPrivilegesFile('/mock/bad.yml')).toThrow('expected a key-value map');
-    });
-
-    test('should throw for invalid values in file', () => {
-      setMockFileContent('default-repository-permission: superadmin', '/mock/invalid.yml');
-      expect(() => parseMemberPrivilegesFile('/mock/invalid.yml')).toThrow('has invalid value');
     });
   });
 
@@ -1992,14 +1975,13 @@ members-can-create-public-repositories: true
   // ─── parseOrganizations with member privileges ───────────────────────────
 
   describe('parseOrganizations with member privileges', () => {
-    test('should include memberPrivileges from base file', () => {
-      const mpYaml = `
-default-repository-permission: read
-members-can-fork-private-repositories: false
-`;
-      setMockFileContent(mpYaml, '/mock/member-privileges.yml');
+    test('should include memberPrivileges from base inputs', () => {
+      const inputPrivileges = {
+        default_repository_permission: 'read',
+        members_can_fork_private_repositories: false
+      };
 
-      const result = parseOrganizations('org1', '', '', [], false, '/mock/member-privileges.yml');
+      const result = parseOrganizations('org1', '', '', [], false, inputPrivileges);
 
       expect(result).toHaveLength(1);
       expect(result[0].memberPrivileges).toEqual({
@@ -2009,11 +1991,10 @@ members-can-fork-private-repositories: false
     });
 
     test('should merge base and per-org member privileges from orgs.yml', () => {
-      const mpYaml = `
-default-repository-permission: read
-members-can-fork-private-repositories: false
-`;
-      setMockFileContent(mpYaml, '/mock/member-privileges.yml');
+      const inputPrivileges = {
+        default_repository_permission: 'read',
+        members_can_fork_private_repositories: false
+      };
 
       const orgsYaml = `orgs:
   - org: my-org
@@ -2024,7 +2005,7 @@ members-can-fork-private-repositories: false
 `;
       setMockFileContent(orgsYaml, '/mock/orgs.yml');
 
-      const result = parseOrganizations('', '/mock/orgs.yml', '', [], false, '/mock/member-privileges.yml');
+      const result = parseOrganizations('', '/mock/orgs.yml', '', [], false, inputPrivileges);
 
       expect(result).toHaveLength(2);
       // my-org inherits base
@@ -2040,7 +2021,7 @@ members-can-fork-private-repositories: false
       });
     });
 
-    test('should support per-org only member privileges without base file', () => {
+    test('should support per-org only member privileges without base inputs', () => {
       const orgsYaml = `orgs:
   - org: my-org
     member-privileges:
@@ -2092,13 +2073,26 @@ members-can-fork-private-repositories: false
       expect(result).toHaveLength(1);
       expect(result[0].memberPrivileges).toBeUndefined();
     });
+
+    test('should throw for invalid member-privileges type', () => {
+      const orgsYaml = `orgs:
+  - org: my-org
+    member-privileges:
+      - invalid
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+
+      expect(() => parseOrganizationsFile('/mock/orgs.yml')).toThrow(
+        'Invalid member-privileges for org "my-org": expected a key-value map'
+      );
+    });
   });
 
   // ─── MEMBER_PRIVILEGE_SETTINGS ───────────────────────────────────────────
 
   describe('MEMBER_PRIVILEGE_SETTINGS', () => {
-    test('should have 18 settings defined', () => {
-      expect(MEMBER_PRIVILEGE_SETTINGS.size).toBe(18);
+    test('should have 20 settings defined', () => {
+      expect(MEMBER_PRIVILEGE_SETTINGS.size).toBe(20);
     });
 
     test('should have unique API keys', () => {
@@ -2171,34 +2165,12 @@ members-can-fork-private-repositories: false
         members_can_fork_private_repositories: false
       };
 
-      const result = parseOrganizations('org1', '', '', [], false, '', inputPrivileges);
+      const result = parseOrganizations('org1', '', '', [], false, inputPrivileges);
 
       expect(result).toHaveLength(1);
       expect(result[0].memberPrivileges).toEqual({
         default_repository_permission: 'read',
         members_can_fork_private_repositories: false
-      });
-    });
-
-    test('should merge file over inputs (file wins for conflicts)', () => {
-      const inputPrivileges = {
-        default_repository_permission: 'read',
-        members_can_fork_private_repositories: false
-      };
-
-      const mpYaml = `
-default-repository-permission: write
-members-can-create-teams: true
-`;
-      setMockFileContent(mpYaml, '/mock/member-privileges.yml');
-
-      const result = parseOrganizations('org1', '', '', [], false, '/mock/member-privileges.yml', inputPrivileges);
-
-      expect(result).toHaveLength(1);
-      expect(result[0].memberPrivileges).toEqual({
-        default_repository_permission: 'write', // file wins
-        members_can_fork_private_repositories: false, // from inputs
-        members_can_create_teams: true // from file
       });
     });
 
@@ -2216,7 +2188,7 @@ members-can-create-teams: true
 `;
       setMockFileContent(orgsYaml, '/mock/orgs.yml');
 
-      const result = parseOrganizations('', '/mock/orgs.yml', '', [], false, '', inputPrivileges);
+      const result = parseOrganizations('', '/mock/orgs.yml', '', [], false, inputPrivileges);
 
       expect(result).toHaveLength(2);
       expect(result[0].memberPrivileges).toEqual({
