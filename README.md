@@ -17,6 +17,7 @@ Please refer to the [release page](https://github.com/joshjohanning/bulk-github-
 
 - 🏷️ Sync custom property definitions across organizations
 - 📋 Sync organization-level rulesets across organizations
+- 🔧 Sync member privileges and repository policies across organizations
 - ✅ Support for all custom property types: `string`, `single_select`, `multi_select`, `true_false`, `url`
 - 🔍 Dry-run mode with change preview and intelligent change detection
 - 📋 Per-organization overrides via YAML configuration
@@ -112,9 +113,9 @@ List organizations directly via the `organizations` input. All orgs receive the 
 
 ### Option 2: Organizations File (`orgs.yml`)
 
-Define organizations in a YAML file with optional per-org setting overrides. Common settings can still be defined via `custom-properties-file` — per-org overrides layer on top (same pattern as [`bulk-github-repo-settings-sync-action`](https://github.com/joshjohanning/bulk-github-repo-settings-sync-action) where action inputs define global defaults and the YAML file provides per-item overrides).
+Define organizations in a YAML file with optional per-org setting overrides. Common settings can still be defined via action inputs (including member privilege inputs and `custom-properties-file`) — per-org overrides layer on top (same pattern as [`bulk-github-repo-settings-sync-action`](https://github.com/joshjohanning/bulk-github-repo-settings-sync-action) where action inputs define global defaults and the YAML file provides per-item overrides).
 
-**Best for:** Managing multiple orgs with different settings, or when specific orgs need additional/different custom properties.
+**Best for:** Managing multiple orgs with different settings, or when specific orgs need additional/different custom properties or member privileges.
 
 > [!TIP]
 > 📄 **See full example:** [sample-configuration/orgs.yml](sample-configuration/orgs.yml)
@@ -125,6 +126,7 @@ Create an `orgs.yml` file:
 orgs:
   - org: my-org
     # No custom-properties → inherits all base properties from custom-properties-file
+    # No member-privileges → inherits all base settings from action inputs
 
   - org: my-other-org
     custom-properties-file: './config/custom-properties/other-org.yml' # Override base file for this org
@@ -145,6 +147,10 @@ orgs:
           - backend
           - data-science # extra team only in this org
         values-editable-by: org_actors
+    member-privileges:
+      # Override specific member privilege settings for this org
+      members-can-fork-private-repositories: true
+      members-can-create-internal-repositories: true # GHEC/GHES only
 ```
 
 Use in workflow:
@@ -157,6 +163,8 @@ Use in workflow:
     organizations-file: './orgs.yml'
     custom-properties-file: './config/custom-properties/base.yml' # Base properties for all orgs
     rulesets-file: './config/rulesets/branch-protection.json, ./config/rulesets/tag-protection.json' # Base rulesets for all orgs
+    default-repository-permission: read # Base member privileges for all orgs
+    members-can-fork-private-repositories: false
 ```
 
 **Settings Merging:**
@@ -175,6 +183,20 @@ orgs:
     custom-properties:
       - name: team       # overrides base "team" with different allowed-values
                          # gets: team (overridden) + cost-center (from base)
+```
+
+The same merging applies to member privilege inputs and per-org `member-privileges` — per-org settings override base settings with the same key; base settings not overridden are preserved:
+
+```yaml
+# action inputs (base): default-repository-permission=read, members-can-fork-private-repositories=false
+
+# orgs.yml:
+orgs:
+  - org: my-org # gets: read + no fork (base only)
+  - org: my-other-org
+    member-privileges:
+      members-can-fork-private-repositories: true # override → fork allowed
+      # gets: read (from base) + fork allowed (overridden)
 ```
 
 ---
@@ -422,22 +444,111 @@ By default, syncing rulesets will create or update the specified rulesets, but w
 
 ---
 
+## Syncing Member Privileges
+
+Sync organization-level member privilege settings (repository policies) across organizations. These control what members can do within the organization, such as creating repositories, forking private repos, and managing pages.
+
+Set member privilege settings directly as action inputs:
+
+```yml
+- name: Sync Organization Settings
+  uses: joshjohanning/bulk-github-org-settings-sync-action@v1
+  with:
+    github-token: ${{ secrets.ORG_ADMIN_TOKEN }}
+    organizations: 'my-org'
+    default-repository-permission: read
+    members-can-create-repositories: true
+    members-can-fork-private-repositories: false
+    members-can-create-internal-repositories: false # GHEC/GHES only
+    web-commit-signoff-required: true
+    default-repository-branch: main
+```
+
+**Behavior:**
+
+- Only settings included in the config are managed — omitted settings remain unchanged
+- If a setting already matches the config, no API call is made
+- Settings are applied via a single `PATCH /orgs/{org}` call per organization
+- In dry-run mode, shows which settings would be changed without applying them
+
+### Member Privilege Settings
+
+| Setting                                       | Type    | Description                                                          |
+| --------------------------------------------- | ------- | -------------------------------------------------------------------- |
+| `default-repository-permission`               | string  | Default permission for org members: `read`, `write`, `admin`, `none` |
+| `members-can-create-repositories`             | boolean | Can members create repositories                                      |
+| `members-can-create-public-repositories`      | boolean | Can members create public repositories                               |
+| `members-can-create-private-repositories`     | boolean | Can members create private repositories                              |
+| `members-can-create-internal-repositories`    | boolean | Can members create internal repositories (GHEC/GHES only)            |
+| `members-can-fork-private-repositories`       | boolean | Can members fork private repositories                                |
+| `web-commit-signoff-required`                 | boolean | Require web UI commits to be signed off                              |
+| `members-can-create-pages`                    | boolean | Can members create GitHub Pages sites                                |
+| `members-can-create-public-pages`             | boolean | Can members create public GitHub Pages sites                         |
+| `members-can-create-private-pages`            | boolean | Can members create private GitHub Pages sites                        |
+| `members-can-invite-outside-collaborators`    | boolean | Can members invite outside collaborators                             |
+| `members-can-create-teams`                    | boolean | Can members create teams                                             |
+| `members-can-delete-repositories`             | boolean | Can members delete repositories                                      |
+| `members-can-change-repo-visibility`          | boolean | Can members change repository visibility                             |
+| `members-can-delete-issues`                   | boolean | Can members delete issues                                            |
+| `default-repository-branch`                   | string  | Default branch name for new repositories                             |
+| `deploy-keys-enabled-for-repositories`        | boolean | Whether deploy keys can be added to repositories                     |
+| `readers-can-create-discussions`              | boolean | Can users with read access create discussions                        |
+| `members-can-view-dependency-insights`        | boolean | Can members view dependency insights                                 |
+| `display-commenter-full-name-setting-enabled` | boolean | Display commenter full name in issues and PRs                        |
+
+### Per-Org Member Privilege Overrides
+
+In `orgs.yml`, use `member-privileges` to override specific settings for an org:
+
+```yaml
+orgs:
+  - org: my-org
+    # inherits base member privilege action inputs
+
+  - org: my-other-org
+    member-privileges:
+      members-can-fork-private-repositories: true # override base
+      members-can-create-internal-repositories: true # GHEC/GHES only
+```
+
+---
+
 ## Action Inputs
 
-| Input                         | Description                                                                         | Required | Default                 |
-| ----------------------------- | ----------------------------------------------------------------------------------- | -------- | ----------------------- |
-| `github-token`                | GitHub token for API access (requires `admin:org` scope)                            | Yes      |                         |
-| `github-api-url`              | GitHub API URL (e.g., `https://api.github.com` or `https://ghes.domain.com/api/v3`) | No       | `${{ github.api_url }}` |
-| `organizations`               | Comma-separated list of organization names                                          | No       |                         |
-| `organizations-file`          | Path to YAML file containing organization settings configuration                    | No       |                         |
-| `custom-properties-file`      | Path to a YAML file defining custom property schemas                                | No       |                         |
-| `delete-unmanaged-properties` | Delete custom properties not defined in the configuration file                      | No       | `false`                 |
-| `rulesets-file`               | Comma-separated paths to JSON files, each with a single org ruleset config          | No       |                         |
-| `delete-unmanaged-rulesets`   | Delete all other rulesets besides those being synced                                | No       | `false`                 |
-| `dry-run`                     | Preview changes without applying them                                               | No       | `false`                 |
+| Input                                         | Description                                                                         | Required | Default                 |
+| --------------------------------------------- | ----------------------------------------------------------------------------------- | -------- | ----------------------- |
+| `github-token`                                | GitHub token for API access (requires `admin:org` scope)                            | Yes      |                         |
+| `github-api-url`                              | GitHub API URL (e.g., `https://api.github.com` or `https://ghes.domain.com/api/v3`) | No       | `${{ github.api_url }}` |
+| `organizations`                               | Comma-separated list of organization names                                          | No       |                         |
+| `organizations-file`                          | Path to YAML file containing organization settings configuration                    | No       |                         |
+| `custom-properties-file`                      | Path to a YAML file defining custom property schemas                                | No       |                         |
+| `delete-unmanaged-properties`                 | Delete custom properties not defined in the configuration file                      | No       | `false`                 |
+| `default-repository-permission`               | Default permission for org members: `read`, `write`, `admin`, `none`                | No       |                         |
+| `members-can-create-repositories`             | Whether members can create repositories                                             | No       |                         |
+| `members-can-create-public-repositories`      | Whether members can create public repositories                                      | No       |                         |
+| `members-can-create-private-repositories`     | Whether members can create private repositories                                     | No       |                         |
+| `members-can-create-internal-repositories`    | Whether members can create internal repositories (GHEC/GHES only)                   | No       |                         |
+| `members-can-fork-private-repositories`       | Whether members can fork private repositories                                       | No       |                         |
+| `web-commit-signoff-required`                 | Whether web UI commits require signoff                                              | No       |                         |
+| `members-can-create-pages`                    | Whether members can create GitHub Pages sites                                       | No       |                         |
+| `members-can-create-public-pages`             | Whether members can create public GitHub Pages sites                                | No       |                         |
+| `members-can-create-private-pages`            | Whether members can create private GitHub Pages sites                               | No       |                         |
+| `members-can-invite-outside-collaborators`    | Whether members can invite outside collaborators                                    | No       |                         |
+| `members-can-create-teams`                    | Whether members can create teams                                                    | No       |                         |
+| `members-can-delete-repositories`             | Whether members can delete repositories                                             | No       |                         |
+| `members-can-change-repo-visibility`          | Whether members can change repository visibility                                    | No       |                         |
+| `members-can-delete-issues`                   | Whether members can delete issues                                                   | No       |                         |
+| `default-repository-branch`                   | Default branch name for new repositories                                            | No       |                         |
+| `deploy-keys-enabled-for-repositories`        | Whether deploy keys can be added to repositories                                    | No       |                         |
+| `readers-can-create-discussions`              | Whether users with read access can create discussions                               | No       |                         |
+| `members-can-view-dependency-insights`        | Whether members can view dependency insights                                        | No       |                         |
+| `display-commenter-full-name-setting-enabled` | Whether to display commenter full name in issues and PRs                            | No       |                         |
+| `rulesets-file`                               | Comma-separated paths to JSON files, each with a single org ruleset config          | No       |                         |
+| `delete-unmanaged-rulesets`                   | Delete all other rulesets besides those being synced                                | No       | `false`                 |
+| `dry-run`                                     | Preview changes without applying them                                               | No       | `false`                 |
 
 > [!NOTE]
-> You must provide either `organizations` or `organizations-file`. The `custom-properties-file` and `rulesets-file` inputs provide base settings for all orgs and can be combined with either approach. Per-org overrides in `organizations-file` layer on top of the base.
+> You must provide either `organizations` or `organizations-file`. Member privilege settings can be provided as individual inputs (e.g., `default-repository-permission`). Per-org overrides in `organizations-file` layer on top of the base.
 
 ## Action Outputs
 
@@ -537,9 +648,10 @@ jobs:
 ## Important Notes
 
 - Settings not specified will remain unchanged
-- Custom properties that already match the config are skipped (no unnecessary API calls)
+- Custom properties and member privileges that already match the config are skipped (no unnecessary API calls)
 - Failed updates are logged as warnings but don't fail the action; if one or more organizations fail entirely, the action is marked as failed
 - With `delete-unmanaged-properties: true`, properties not in the config are **deleted** from the organization
+- `members-can-create-internal-repositories` only applies to organizations on GitHub Enterprise Cloud (GHEC) or GitHub Enterprise Server (GHES)
 
 ## Contributing
 
