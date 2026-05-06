@@ -34,7 +34,61 @@ inputs:
 
   # === Member Privileges ===
   member-privileges-file:
-    description: 'Path to a YAML file defining organization member privilege settings to sync'
+    description: 'Path to a YAML file defining organization member privilege settings to sync (alternative to individual inputs below)'
+    required: false
+  default-repository-permission:
+    description: 'Default permission level for org members on new repositories: read, write, admin, or none'
+    required: false
+  members-can-create-public-repositories:
+    description: 'Whether members can create public repositories'
+    required: false
+  members-can-create-private-repositories:
+    description: 'Whether members can create private repositories'
+    required: false
+  members-can-create-internal-repositories:
+    description: 'Whether members can create internal repositories (GHEC/GHES only)'
+    required: false
+  members-can-fork-private-repositories:
+    description: 'Whether members can fork private repositories'
+    required: false
+  members-can-create-pages:
+    description: 'Whether members can create GitHub Pages sites'
+    required: false
+  members-can-create-public-pages:
+    description: 'Whether members can create public GitHub Pages sites'
+    required: false
+  members-can-create-private-pages:
+    description: 'Whether members can create private GitHub Pages sites'
+    required: false
+  members-can-invite-outside-collaborators:
+    description: 'Whether members can invite outside collaborators'
+    required: false
+  members-can-create-teams:
+    description: 'Whether members can create teams'
+    required: false
+  members-can-delete-repositories:
+    description: 'Whether members can delete repositories'
+    required: false
+  members-can-change-repo-visibility:
+    description: 'Whether members can change repository visibility'
+    required: false
+  members-can-delete-issues:
+    description: 'Whether members can delete issues'
+    required: false
+  default-repository-branch:
+    description: 'Default branch name for new repositories created in the organization'
+    required: false
+  deploy-keys-enabled-for-repositories:
+    description: 'Whether deploy keys can be added to repositories'
+    required: false
+  readers-can-create-discussions:
+    description: 'Whether users with read access can create discussions'
+    required: false
+  members-can-view-dependency-insights:
+    description: 'Whether members can view dependency insights'
+    required: false
+  display-commenter-full-name-setting-enabled:
+    description: 'Whether to display commenter full name in issues and PRs'
     required: false
 
   # === Rulesets ===

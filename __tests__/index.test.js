@@ -31,6 +31,42 @@ inputs:
     description: 'Delete unmanaged properties'
   member-privileges-file:
     description: 'Member privileges file'
+  default-repository-permission:
+    description: 'Default permission level'
+  members-can-create-public-repositories:
+    description: 'Can members create public repos'
+  members-can-create-private-repositories:
+    description: 'Can members create private repos'
+  members-can-create-internal-repositories:
+    description: 'Can members create internal repos'
+  members-can-fork-private-repositories:
+    description: 'Can members fork private repos'
+  members-can-create-pages:
+    description: 'Can members create pages'
+  members-can-create-public-pages:
+    description: 'Can members create public pages'
+  members-can-create-private-pages:
+    description: 'Can members create private pages'
+  members-can-invite-outside-collaborators:
+    description: 'Can members invite outside collaborators'
+  members-can-create-teams:
+    description: 'Can members create teams'
+  members-can-delete-repositories:
+    description: 'Can members delete repos'
+  members-can-change-repo-visibility:
+    description: 'Can members change visibility'
+  members-can-delete-issues:
+    description: 'Can members delete issues'
+  default-repository-branch:
+    description: 'Default branch name'
+  deploy-keys-enabled-for-repositories:
+    description: 'Deploy keys enabled'
+  readers-can-create-discussions:
+    description: 'Readers can create discussions'
+  members-can-view-dependency-insights:
+    description: 'Members can view dependency insights'
+  display-commenter-full-name-setting-enabled:
+    description: 'Display commenter full name'
   rulesets-file:
     description: 'Rulesets file'
   delete-unmanaged-rulesets:
@@ -123,6 +159,7 @@ const {
   mergeMemberPrivileges,
   parseMemberPrivileges,
   parseMemberPrivilegesFile,
+  getMemberPrivilegesFromInputs,
   syncMemberPrivileges,
   MEMBER_PRIVILEGE_SETTINGS,
   validateOrgConfig,
@@ -2070,6 +2107,126 @@ members-can-fork-private-repositories: false
         expect(apiKeys.has(setting.apiKey)).toBe(false);
         apiKeys.add(setting.apiKey);
       }
+    });
+  });
+
+  // ─── getMemberPrivilegesFromInputs ─────────────────────────────────────
+
+  describe('getMemberPrivilegesFromInputs', () => {
+    test('should return null when no member privilege inputs are set', () => {
+      mockCore.getInput.mockReturnValue('');
+      const result = getMemberPrivilegesFromInputs();
+      expect(result).toBeNull();
+    });
+
+    test('should parse boolean inputs', () => {
+      mockCore.getInput.mockImplementation(name => {
+        if (name === 'members-can-fork-private-repositories') return 'false';
+        if (name === 'members-can-create-teams') return 'true';
+        return '';
+      });
+      const result = getMemberPrivilegesFromInputs();
+      expect(result).toEqual({
+        members_can_fork_private_repositories: false,
+        members_can_create_teams: true
+      });
+    });
+
+    test('should parse string inputs', () => {
+      mockCore.getInput.mockImplementation(name => {
+        if (name === 'default-repository-permission') return 'read';
+        if (name === 'default-repository-branch') return 'main';
+        return '';
+      });
+      const result = getMemberPrivilegesFromInputs();
+      expect(result).toEqual({
+        default_repository_permission: 'read',
+        default_repository_branch: 'main'
+      });
+    });
+
+    test('should throw on invalid boolean value', () => {
+      mockCore.getInput.mockImplementation(name => {
+        if (name === 'members-can-fork-private-repositories') return 'yes';
+        return '';
+      });
+      expect(() => getMemberPrivilegesFromInputs()).toThrow(/must be a boolean/);
+    });
+
+    test('should throw on invalid enum value', () => {
+      mockCore.getInput.mockImplementation(name => {
+        if (name === 'default-repository-permission') return 'superadmin';
+        return '';
+      });
+      expect(() => getMemberPrivilegesFromInputs()).toThrow(/invalid value/);
+    });
+  });
+
+  // ─── parseOrganizations with member privilege inputs ────────────────────
+
+  describe('parseOrganizations with member privilege inputs', () => {
+    test('should use member privileges from inputs', () => {
+      const inputPrivileges = {
+        default_repository_permission: 'read',
+        members_can_fork_private_repositories: false
+      };
+
+      const result = parseOrganizations('org1', '', '', [], false, '', inputPrivileges);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].memberPrivileges).toEqual({
+        default_repository_permission: 'read',
+        members_can_fork_private_repositories: false
+      });
+    });
+
+    test('should merge file over inputs (file wins for conflicts)', () => {
+      const inputPrivileges = {
+        default_repository_permission: 'read',
+        members_can_fork_private_repositories: false
+      };
+
+      const mpYaml = `
+default-repository-permission: write
+members-can-create-teams: true
+`;
+      setMockFileContent(mpYaml, '/mock/member-privileges.yml');
+
+      const result = parseOrganizations('org1', '', '', [], false, '/mock/member-privileges.yml', inputPrivileges);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].memberPrivileges).toEqual({
+        default_repository_permission: 'write', // file wins
+        members_can_fork_private_repositories: false, // from inputs
+        members_can_create_teams: true // from file
+      });
+    });
+
+    test('should layer per-org overrides on top of inputs', () => {
+      const inputPrivileges = {
+        default_repository_permission: 'read',
+        members_can_fork_private_repositories: false
+      };
+
+      const orgsYaml = `orgs:
+  - org: my-org
+  - org: my-other-org
+    member-privileges:
+      members-can-fork-private-repositories: true
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+
+      const result = parseOrganizations('', '/mock/orgs.yml', '', [], false, '', inputPrivileges);
+
+      expect(result).toHaveLength(2);
+      expect(result[0].memberPrivileges).toEqual({
+        default_repository_permission: 'read',
+        members_can_fork_private_repositories: false
+      });
+      expect(result[1].memberPrivileges).toEqual({
+        default_repository_permission: 'read',
+        members_can_fork_private_repositories: true // per-org override
+      });
     });
   });
 });
