@@ -3138,6 +3138,19 @@ orgs:
       expect(result).toEqual(['actions/cache@*', 'actions/setup-node@*', 'myorg/*']);
     });
 
+    test('should trim and de-duplicate allow list patterns', () => {
+      const content = `actions:
+  - ' actions/cache@* '
+  - actions/setup-node@*
+  - actions/cache@*
+`;
+      setMockFileContent(content, '/mock/dedupe-allow-list.yml');
+
+      const result = parseActionsAllowListFile('/mock/dedupe-allow-list.yml');
+
+      expect(result).toEqual(['actions/cache@*', 'actions/setup-node@*']);
+    });
+
     test('should throw for missing file', () => {
       expect(() => parseActionsAllowListFile('/mock/nonexistent.yml')).toThrow('not found');
     });
@@ -3421,6 +3434,67 @@ orgs:
 
       expect(result.failed).toBe(false);
       expect(result.subResults).toHaveLength(0);
+    });
+
+    test('should ignore duplicate allow list patterns when comparing', async () => {
+      mockRequest.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/actions/permissions/selected-actions') {
+          return {
+            data: {
+              github_owned_allowed: true,
+              verified_allowed: false,
+              patterns_allowed: ['action-a@*', 'action-b@*']
+            }
+          };
+        }
+        return { data: {} };
+      });
+
+      const allowList = ['action-b@*', 'action-a@*', 'action-a@*'];
+      const result = await syncActionsPolicy(mockOctokit, 'my-org', {}, allowList, false);
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults).toHaveLength(0);
+      expect(mockRequest).not.toHaveBeenCalledWith(
+        'PUT /orgs/{org}/actions/permissions/selected-actions',
+        expect.anything()
+      );
+    });
+
+    test('should mark all selected actions sub-results as warnings when update fails', async () => {
+      mockRequest.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/actions/permissions/selected-actions') {
+          return {
+            data: {
+              github_owned_allowed: false,
+              verified_allowed: false,
+              patterns_allowed: ['old-action@*']
+            }
+          };
+        }
+        if (route === 'PUT /orgs/{org}/actions/permissions/selected-actions') {
+          throw new Error('Forbidden');
+        }
+        return { data: {} };
+      });
+
+      const desired = { github_owned_allowed: true };
+      const allowList = ['new-action@*'];
+      const result = await syncActionsPolicy(mockOctokit, 'my-org', desired, allowList, false);
+
+      expect(result.failed).toBe(true);
+      expect(result.subResults).toEqual([
+        {
+          kind: 'actions-policy-selected-actions-update',
+          status: 'warning',
+          message: 'Failed to update selected actions settings: Forbidden'
+        },
+        {
+          kind: 'actions-policy-allow-list-update',
+          status: 'warning',
+          message: 'Failed to update selected actions settings: Forbidden'
+        }
+      ]);
     });
   });
 });

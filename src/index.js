@@ -630,7 +630,7 @@ export function mergeMemberPrivileges(basePrivileges, orgPrivileges) {
  * Converts YAML keys (hyphenated) to API keys (snake_case) and validates types.
  * @param {Object} config - Raw key-value map from YAML
  * @param {string} [context] - Context for error messages (e.g., org name)
- * @returns {Object} Normalized policy with API keys grouped by endpoint
+ * @returns {Object} Normalized policy with API keys
  */
 export function parseActionsPolicy(config, context) {
   if (typeof config !== 'object' || config === null || Array.isArray(config)) {
@@ -738,14 +738,20 @@ export function parseActionsAllowListFile(filePath) {
     throw new Error(`Invalid actions allow list file format: expected an "actions" array in ${filePath}`);
   }
 
-  const patterns = config.actions
-    .map(entry => {
-      if (typeof entry !== 'string') {
-        throw new Error(`Invalid entry in actions allow list: expected a string, got ${typeof entry}`);
-      }
-      return entry.trim();
-    })
-    .filter(entry => entry.length > 0);
+  const patterns = [];
+  const seenPatterns = new Set();
+
+  for (const entry of config.actions) {
+    if (typeof entry !== 'string') {
+      throw new Error(`Invalid entry in actions allow list: expected a string, got ${typeof entry}`);
+    }
+
+    const pattern = entry.trim();
+    if (pattern.length > 0 && !seenPatterns.has(pattern)) {
+      patterns.push(pattern);
+      seenPatterns.add(pattern);
+    }
+  }
 
   if (patterns.length === 0) {
     throw new Error(`Actions allow list file contains no valid patterns: ${filePath}`);
@@ -1607,6 +1613,15 @@ function buildActionsPolicyApiToYamlKeyMap() {
 const ACTIONS_POLICY_API_TO_YAML_KEY = buildActionsPolicyApiToYamlKeyMap();
 
 /**
+ * Return de-duplicated allow-list patterns while preserving original order.
+ * @param {string[]} patterns
+ * @returns {string[]}
+ */
+function uniqueActionsAllowListPatterns(patterns) {
+  return [...new Set(patterns)];
+}
+
+/**
  * Sync Actions policy settings for an organization.
  * Manages three API endpoints:
  *   1. GET/PUT /orgs/{org}/actions/permissions — allowed_actions
@@ -1874,20 +1889,23 @@ async function syncActionsSelectedActions(octokit, org, desiredSettings, allowLi
 
   // Compare allow list patterns
   if (allowList) {
-    const currentPatterns = current.patterns_allowed || [];
+    const currentPatterns = uniqueActionsAllowListPatterns(current.patterns_allowed || []);
+    const desiredPatterns = uniqueActionsAllowListPatterns(allowList);
     const sortedCurrent = [...currentPatterns].sort();
-    const sortedDesired = [...allowList].sort();
+    const sortedDesired = [...desiredPatterns].sort();
     const patternsChanged =
       sortedCurrent.length !== sortedDesired.length || sortedCurrent.some((v, i) => v !== sortedDesired[i]);
 
     if (patternsChanged) {
-      patch.patterns_allowed = allowList;
-      const added = allowList.filter(p => !currentPatterns.includes(p));
-      const removed = currentPatterns.filter(p => !allowList.includes(p));
+      patch.patterns_allowed = desiredPatterns;
+      const currentPatternSet = new Set(currentPatterns);
+      const desiredPatternSet = new Set(desiredPatterns);
+      const added = desiredPatterns.filter(p => !currentPatternSet.has(p));
+      const removed = currentPatterns.filter(p => !desiredPatternSet.has(p));
       const details = [];
       if (added.length > 0) details.push(`+${added.length} added`);
       if (removed.length > 0) details.push(`-${removed.length} removed`);
-      changes.push(`allow-list: ${details.join(', ')} (${allowList.length} total)`);
+      changes.push(`allow-list: ${details.join(', ')} (${desiredPatterns.length} total)`);
     }
   }
 
@@ -1942,13 +1960,13 @@ async function syncActionsSelectedActions(octokit, org, desiredSettings, allowLi
       });
     } catch (error) {
       core.warning(`  ⚠️  Failed to update selected actions settings: ${error.message}`);
-      // Replace the last sub-result with a warning
-      const lastIdx = subResults.length - 1;
-      subResults[lastIdx] = createSubResult(
-        subResults[lastIdx].kind,
-        SubResultStatus.WARNING,
-        `Failed to update selected actions settings: ${error.message}`
-      );
+      for (let i = 0; i < subResults.length; i++) {
+        subResults[i] = createSubResult(
+          subResults[i].kind,
+          SubResultStatus.WARNING,
+          `Failed to update selected actions settings: ${error.message}`
+        );
+      }
       return { subResults, failed: true };
     }
   }
