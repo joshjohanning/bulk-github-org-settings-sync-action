@@ -3014,6 +3014,18 @@ orgs:
       });
     });
 
+    test('should trim string settings and allow empty strings', () => {
+      const result = parseOrgProfile({
+        'org-name': '  My Org  ',
+        'org-description': '   '
+      });
+
+      expect(result).toEqual({
+        name: 'My Org',
+        description: ''
+      });
+    });
+
     test('should throw for unknown key', () => {
       expect(() => parseOrgProfile({ 'org-name': 'test', 'unknown-key': 'val' })).toThrow(
         /Unknown org profile key "unknown-key"/
@@ -3042,8 +3054,9 @@ orgs:
 
     test('should parse string inputs', () => {
       mockCore.getInput.mockImplementation(name => {
-        if (name === 'org-name') return 'My Org';
+        if (name === 'org-name') return '  My Org  ';
         if (name === 'org-email') return 'org@example.com';
+        if (name === 'org-blog') return '   ';
         return '';
       });
       const result = getOrgProfileFromInputs();
@@ -3132,6 +3145,31 @@ orgs:
 
       expect(result.failed).toBe(true);
       expect(result.subResults[0].status).toBe('warning');
+    });
+
+    test('should reuse shared organization settings cache', async () => {
+      mockRequest.mockResolvedValueOnce({
+        data: {
+          default_repository_permission: 'write',
+          name: 'Old Name'
+        }
+      });
+
+      const orgSettingsCache = new Map();
+
+      const memberResult = await syncMemberPrivileges(
+        mockOctokit,
+        'test-org',
+        { default_repository_permission: 'read' },
+        true,
+        orgSettingsCache
+      );
+      const profileResult = await syncOrgProfile(mockOctokit, 'test-org', { name: 'New Name' }, true, orgSettingsCache);
+
+      expect(memberResult.failed).toBe(false);
+      expect(profileResult.failed).toBe(false);
+      expect(mockRequest).toHaveBeenCalledTimes(1);
+      expect(mockRequest).toHaveBeenCalledWith('GET /orgs/{org}', { org: 'test-org' });
     });
   });
 

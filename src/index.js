@@ -145,17 +145,17 @@ export const MEMBER_PRIVILEGE_SETTINGS = new Map([
 
 /**
  * Supported organization profile settings.
- * Maps YAML key (hyphenated) to API key (snake_case) and expected type.
- * @type {Map<string, { apiKey: string, type: string }>}
+ * Maps YAML keys (hyphenated) to GitHub REST API parameter names.
+ * @type {Map<string, { apiKey: string }>}
  */
 export const ORG_PROFILE_SETTINGS = new Map([
-  ['org-name', { apiKey: 'name', type: 'string' }],
-  ['org-description', { apiKey: 'description', type: 'string' }],
-  ['org-company', { apiKey: 'company', type: 'string' }],
-  ['org-location', { apiKey: 'location', type: 'string' }],
-  ['org-email', { apiKey: 'email', type: 'string' }],
-  ['org-twitter-username', { apiKey: 'twitter_username', type: 'string' }],
-  ['org-blog', { apiKey: 'blog', type: 'string' }]
+  ['org-name', { apiKey: 'name' }],
+  ['org-description', { apiKey: 'description' }],
+  ['org-company', { apiKey: 'company' }],
+  ['org-location', { apiKey: 'location' }],
+  ['org-email', { apiKey: 'email' }],
+  ['org-twitter-username', { apiKey: 'twitter_username' }],
+  ['org-blog', { apiKey: 'blog' }]
 ]);
 
 /**
@@ -334,6 +334,7 @@ const SYNC_KIND_LABELS = Object.freeze({
   'issue-type-update': 'issue type (updated)',
   'issue-type-delete': 'issue type (deleted)',
   'member-privileges-update': 'member privileges (updated)',
+  'org-profile-update': 'organization profile (updated)',
   'ruleset-create': 'ruleset (created)',
   'ruleset-update': 'ruleset (updated)',
   'ruleset-delete': 'ruleset (deleted)'
@@ -348,6 +349,30 @@ const SYNC_KIND_LABELS = Object.freeze({
  */
 function createSubResult(kind, status, message) {
   return { kind, status, message };
+}
+
+/**
+ * Fetch organization settings, optionally reusing a per-run cache.
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} org - Organization name
+ * @param {Map<string, Promise<Object>>} [orgSettingsCache] - Cache shared across org settings sync calls
+ * @returns {Promise<Object>} Current organization settings
+ */
+async function getOrganizationSettings(octokit, org, orgSettingsCache) {
+  if (!orgSettingsCache) {
+    const { data } = await octokit.request('GET /orgs/{org}', { org });
+    return data;
+  }
+
+  if (!orgSettingsCache.has(org)) {
+    const settingsPromise = (async () => {
+      const { data } = await octokit.request('GET /orgs/{org}', { org });
+      return data;
+    })();
+    orgSettingsCache.set(org, settingsPromise);
+  }
+
+  return orgSettingsCache.get(org);
 }
 
 /**
@@ -1175,7 +1200,7 @@ export function parseOrgProfile(config, context) {
       throw new Error(`Org profile "${yamlKey}"${label} must be a string, got "${typeof value}"`);
     }
 
-    normalized[setting.apiKey] = value;
+    normalized[setting.apiKey] = value.trim();
   }
 
   return normalized;
@@ -1192,8 +1217,9 @@ export function getOrgProfileFromInputs() {
 
   for (const [yamlKey, setting] of ORG_PROFILE_SETTINGS) {
     const raw = core.getInput(yamlKey);
-    if (raw === '') continue;
-    result[setting.apiKey] = raw;
+    const trimmed = raw.trim();
+    if (trimmed === '') continue;
+    result[setting.apiKey] = trimmed;
   }
 
   return Object.keys(result).length > 0 ? result : null;
@@ -1387,17 +1413,17 @@ const API_TO_YAML_KEY = buildApiToYamlKeyMap();
  * @param {string} org - Organization name
  * @param {Object} desiredSettings - Desired member privilege settings (API-keyed)
  * @param {boolean} dryRun - Preview mode
+ * @param {Map<string, Promise<Object>>} [orgSettingsCache] - Optional shared organization settings cache
  * @returns {Promise<Object>} Result object with subResults
  */
-export async function syncMemberPrivileges(octokit, org, desiredSettings, dryRun) {
+export async function syncMemberPrivileges(octokit, org, desiredSettings, dryRun, orgSettingsCache) {
   const subResults = [];
   const wouldPrefix = dryRun ? 'Would ' : '';
 
   // Fetch current organization settings
   let currentOrg;
   try {
-    const { data } = await octokit.request('GET /orgs/{org}', { org });
-    currentOrg = data;
+    currentOrg = await getOrganizationSettings(octokit, org, orgSettingsCache);
   } catch (error) {
     core.warning(`  ⚠️  Failed to fetch organization settings: ${error.message}`);
     subResults.push(
@@ -1488,17 +1514,17 @@ const PROFILE_API_TO_YAML_KEY = buildProfileApiToYamlKeyMap();
  * @param {string} org - Organization name
  * @param {Object} desiredSettings - Desired org profile settings (API-keyed)
  * @param {boolean} dryRun - Preview mode
+ * @param {Map<string, Promise<Object>>} [orgSettingsCache] - Optional shared organization settings cache
  * @returns {Promise<Object>} Result object with subResults
  */
-export async function syncOrgProfile(octokit, org, desiredSettings, dryRun) {
+export async function syncOrgProfile(octokit, org, desiredSettings, dryRun, orgSettingsCache) {
   const subResults = [];
   const wouldPrefix = dryRun ? 'Would ' : '';
 
   // Fetch current organization settings
   let currentOrg;
   try {
-    const { data } = await octokit.request('GET /orgs/{org}', { org });
-    currentOrg = data;
+    currentOrg = await getOrganizationSettings(octokit, org, orgSettingsCache);
   } catch (error) {
     core.warning(`  ⚠️  Failed to fetch organization settings: ${error.message}`);
     subResults.push(
@@ -1919,6 +1945,7 @@ export async function run() {
         subResults: [],
         dryRun
       };
+      const orgSettingsCache = new Map();
 
       try {
         // Sync custom properties
@@ -1979,7 +2006,13 @@ export async function run() {
         if (orgConfig.memberPrivileges && Object.keys(orgConfig.memberPrivileges).length > 0) {
           const settingCount = Object.keys(orgConfig.memberPrivileges).length;
           core.info(`  🔧 Syncing member privileges (${settingCount} setting(s))...`);
-          const mpResult = await syncMemberPrivileges(octokit, org, orgConfig.memberPrivileges, dryRun);
+          const mpResult = await syncMemberPrivileges(
+            octokit,
+            org,
+            orgConfig.memberPrivileges,
+            dryRun,
+            orgSettingsCache
+          );
           result.subResults.push(...mpResult.subResults);
 
           if (mpResult.failed) {
@@ -1994,7 +2027,7 @@ export async function run() {
         if (orgConfig.orgProfile && Object.keys(orgConfig.orgProfile).length > 0) {
           const fieldCount = Object.keys(orgConfig.orgProfile).length;
           core.info(`  🏢 Syncing organization profile (${fieldCount} field(s))...`);
-          const opResult = await syncOrgProfile(octokit, org, orgConfig.orgProfile, dryRun);
+          const opResult = await syncOrgProfile(octokit, org, orgConfig.orgProfile, dryRun, orgSettingsCache);
           result.subResults.push(...opResult.subResults);
 
           if (opResult.failed) {
