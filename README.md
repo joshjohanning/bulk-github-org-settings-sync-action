@@ -17,6 +17,7 @@ Please refer to the [release page](https://github.com/joshjohanning/bulk-github-
 
 - 🏷️ Sync custom property definitions across organizations
 - 📋 Sync organization-level rulesets across organizations
+- 🏷️ Sync issue type definitions across organizations
 - 🔧 Sync member privileges and repository policies across organizations
 - ✅ Support for all custom property types: `string`, `single_select`, `multi_select`, `true_false`, `url`
 - 🔍 Dry-run mode with change preview and intelligent change detection
@@ -50,6 +51,7 @@ For stronger security and higher rate limits, use a GitHub App:
 1. Create a GitHub App with the following permissions:
    - **Organization Custom Properties**: Admin (required for managing custom property definitions)
    - **Organization Administration**: Read and write (required for managing organization settings and rulesets)
+   - **Organization Issue Types**: Write (required for managing issue type definitions)
 2. Install it to your organization(s)
 3. Add `APP_ID` and `APP_PRIVATE_KEY` as repository secrets
 
@@ -444,6 +446,97 @@ By default, syncing rulesets will create or update the specified rulesets, but w
 
 ---
 
+## Syncing Issue Types
+
+Sync organization-level issue type definitions across organizations. Issue types define the categories (e.g., Bug, Feature, Task) that can be assigned to issues within the organization.
+
+Create an `issue-types.yml` file:
+
+```yaml
+- name: Bug
+  description: 'Something is broken'
+  color: 'ff0000'
+
+- name: Feature
+  description: 'A new feature request'
+  color: '0e8a16'
+
+- name: Task
+  description: 'A unit of work'
+  color: 'fbca04'
+  is-enabled: true
+```
+
+Use in workflow:
+
+```yml
+- name: Sync Organization Settings
+  uses: joshjohanning/bulk-github-org-settings-sync-action@v1
+  with:
+    github-token: ${{ secrets.ORG_ADMIN_TOKEN }}
+    organizations: 'my-org'
+    issue-types-file: './issue-types.yml'
+```
+
+**Behavior:**
+
+- If an issue type with the same name doesn't exist, it is created
+- If it exists but differs from the config, it is updated
+- If content is identical, no changes are made
+- With `delete-unmanaged-issue-types: true`, issue types not in the config are deleted
+
+### Issue Type Fields
+
+Each issue type supports these fields:
+
+| Field         | Description                              | Required | Default |
+| ------------- | ---------------------------------------- | -------- | ------- |
+| `name`        | Issue type name                          | Yes      |         |
+| `description` | Human-readable description               | No       |         |
+| `color`       | 6-character hex color code (without `#`) | No       |         |
+| `is-enabled`  | Whether the issue type is enabled        | No       | `true`  |
+
+### Per-Org Issue Types Override
+
+In `orgs.yml`, you can define issue types per-org or use a separate file:
+
+```yaml
+orgs:
+  - org: my-org
+    # inherits base issue-types-file from action input
+
+  - org: my-other-org
+    issue-types-file: './config/issue-types/other-org.yml'
+    delete-unmanaged-issue-types: true
+    issue-types:
+      - name: Bug
+        description: 'Critical bug'
+        color: 'ff0000'
+```
+
+### Delete Unmanaged Issue Types
+
+By default, syncing issue types will create or update the specified types, but will not delete other issue types that may exist in the organization. To delete all other issue types not defined in the config, use `delete-unmanaged-issue-types`:
+
+```yml
+- name: Sync Organization Settings
+  uses: joshjohanning/bulk-github-org-settings-sync-action@v1
+  with:
+    github-token: ${{ secrets.ORG_ADMIN_TOKEN }}
+    organizations: 'my-org'
+    issue-types-file: './issue-types.yml'
+    delete-unmanaged-issue-types: true
+```
+
+**Behavior with `delete-unmanaged-issue-types: true`:**
+
+- Creates issue types that don't exist
+- Updates issue types that differ from the config
+- **Deletes all other issue types not defined in the config**
+- In dry-run mode, shows which issue types would be deleted without actually deleting them
+
+---
+
 ## Syncing Member Privileges
 
 Sync organization-level member privilege settings (repository policies) across organizations. These control what members can do within the organization, such as creating repositories, forking private repos, and managing pages.
@@ -523,6 +616,8 @@ orgs:
 | `organizations-file`                          | Path to YAML file containing organization settings configuration                    | No       |                         |
 | `custom-properties-file`                      | Path to a YAML file defining custom property schemas                                | No       |                         |
 | `delete-unmanaged-properties`                 | Delete custom properties not defined in the configuration file                      | No       | `false`                 |
+| `issue-types-file`                            | Path to a YAML file defining issue type definitions                                 | No       |                         |
+| `delete-unmanaged-issue-types`                | Delete issue types not defined in the configuration file                            | No       | `false`                 |
 | `default-repository-permission`               | Default permission for org members: `read`, `write`, `admin`, `none`                | No       |                         |
 | `members-can-create-repositories`             | Whether members can create repositories                                             | No       |                         |
 | `members-can-create-public-repositories`      | Whether members can create public repositories                                      | No       |                         |
@@ -548,7 +643,7 @@ orgs:
 | `dry-run`                                     | Preview changes without applying them                                               | No       | `false`                 |
 
 > [!NOTE]
-> You must provide either `organizations` or `organizations-file`. Member privilege settings can be provided as individual inputs (e.g., `default-repository-permission`). Per-org overrides in `organizations-file` layer on top of the base.
+> You must provide either `organizations` or `organizations-file`. The `custom-properties-file`, `issue-types-file`, and `rulesets-file` inputs provide base settings for all orgs and can be combined with either approach. Member privilege settings can be provided as individual inputs (e.g., `default-repository-permission`). Per-org overrides in `organizations-file` layer on top of the base.
 
 ## Action Outputs
 
