@@ -19,6 +19,7 @@ Please refer to the [release page](https://github.com/joshjohanning/bulk-github-
 - 📋 Sync organization-level rulesets across organizations
 - 🏷️ Sync issue type definitions across organizations
 - 🔧 Sync member privileges and repository policies across organizations
+- 🔒 Sync code security configurations across organizations
 - ✅ Support for all custom property types: `string`, `single_select`, `multi_select`, `true_false`, `url`
 - 🔍 Dry-run mode with change preview and intelligent change detection
 - 📋 Per-organization overrides via YAML configuration
@@ -621,44 +622,119 @@ orgs:
 
 ---
 
-## Action Inputs
+## Syncing Code Security Configurations
 
-| Input                                         | Description                                                                         | Required | Default                 |
-| --------------------------------------------- | ----------------------------------------------------------------------------------- | -------- | ----------------------- |
-| `github-token`                                | GitHub token for API access (requires `admin:org` scope)                            | Yes      |                         |
-| `github-api-url`                              | GitHub API URL (e.g., `https://api.github.com` or `https://ghes.domain.com/api/v3`) | No       | `${{ github.api_url }}` |
-| `organizations`                               | Comma-separated list of organization names                                          | No       |                         |
-| `organizations-file`                          | Path to YAML file containing organization settings configuration                    | No       |                         |
-| `custom-properties-file`                      | Path to a YAML file defining custom property schemas                                | No       |                         |
-| `delete-unmanaged-properties`                 | Delete custom properties not defined in the configuration file                      | No       | `false`                 |
-| `issue-types-file`                            | Path to a YAML file defining issue type definitions                                 | No       |                         |
-| `delete-unmanaged-issue-types`                | Delete issue types not defined in the configuration file                            | No       | `false`                 |
-| `default-repository-permission`               | Default permission for org members: `read`, `write`, `admin`, `none`                | No       |                         |
-| `members-can-create-repositories`             | Whether members can create repositories                                             | No       |                         |
-| `members-can-create-public-repositories`      | Whether members can create public repositories                                      | No       |                         |
-| `members-can-create-private-repositories`     | Whether members can create private repositories                                     | No       |                         |
-| `members-can-create-internal-repositories`    | Whether members can create internal repositories (GHEC/GHES only)                   | No       |                         |
-| `members-can-fork-private-repositories`       | Whether members can fork private repositories                                       | No       |                         |
-| `web-commit-signoff-required`                 | Whether web UI commits require signoff                                              | No       |                         |
-| `members-can-create-pages`                    | Whether members can create GitHub Pages sites                                       | No       |                         |
-| `members-can-create-public-pages`             | Whether members can create public GitHub Pages sites                                | No       |                         |
-| `members-can-create-private-pages`            | Whether members can create private GitHub Pages sites                               | No       |                         |
-| `members-can-invite-outside-collaborators`    | Whether members can invite outside collaborators                                    | No       |                         |
-| `members-can-create-teams`                    | Whether members can create teams                                                    | No       |                         |
-| `members-can-delete-repositories`             | Whether members can delete repositories                                             | No       |                         |
-| `members-can-change-repo-visibility`          | Whether members can change repository visibility                                    | No       |                         |
-| `members-can-delete-issues`                   | Whether members can delete issues                                                   | No       |                         |
-| `default-repository-branch`                   | Default branch name for new repositories                                            | No       |                         |
-| `deploy-keys-enabled-for-repositories`        | Whether deploy keys can be added to repositories                                    | No       |                         |
-| `readers-can-create-discussions`              | Whether users with read access can create discussions                               | No       |                         |
-| `members-can-view-dependency-insights`        | Whether members can view dependency insights                                        | No       |                         |
-| `display-commenter-full-name-setting-enabled` | Whether to display commenter full name in issues and PRs                            | No       |                         |
-| `rulesets-file`                               | Comma-separated paths to JSON files, each with a single org ruleset config          | No       |                         |
-| `delete-unmanaged-rulesets`                   | Delete all other rulesets besides those being synced                                | No       | `false`                 |
-| `dry-run`                                     | Preview changes without applying them                                               | No       | `false`                 |
+Sync named code security configurations across organizations. These configurations define security feature enablement policies (e.g., Dependabot, secret scanning, code scanning) that can be applied to repositories.
+
+### Basic Usage
+
+```yml
+- name: Sync Organization Settings
+  uses: joshjohanning/bulk-github-org-settings-sync-action@v1
+  with:
+    github-token: ${{ secrets.ORG_ADMIN_TOKEN }}
+    organizations: 'my-org,my-other-org'
+    code-security-configurations-file: './code-security-configurations.yml'
+```
+
+### Example Configuration File
+
+```yaml
+# code-security-configurations.yml
+- name: High risk settings
+  description: Security configuration for high risk repositories
+  advanced_security: enabled
+  dependency_graph: enabled
+  dependabot_alerts: enabled
+  dependabot_security_updates: enabled
+  code_scanning_default_setup: enabled
+  secret_scanning: enabled
+  secret_scanning_push_protection: enabled
+  private_vulnerability_reporting: enabled
+  enforcement: enforced
+
+- name: Standard settings
+  description: Security configuration for standard repositories
+  advanced_security: enabled
+  dependency_graph: enabled
+  dependabot_alerts: enabled
+  secret_scanning: enabled
+  secret_scanning_push_protection: enabled
+  private_vulnerability_reporting: enabled
+  enforcement: unenforced
+```
+
+All enablement fields accept: `enabled`, `disabled`, or `not_set`. The `enforcement` field accepts: `enforced` or `unenforced`.
+
+### Per-Org Code Security Configuration Overrides
+
+In `orgs.yml`, use `code-security-configurations` to override specific configurations for an org:
+
+```yaml
+orgs:
+  - org: my-org
+    # inherits base code-security-configurations-file as-is
+
+  - org: my-other-org
+    # code-security-configurations-file: './other-org-configs.yml' # use a different base file
+    code-security-configurations:
+      - name: High risk settings
+        description: Stricter settings for this org
+        advanced_security: enabled
+        secret_scanning: enabled
+        secret_scanning_push_protection: enabled
+        enforcement: enforced
+```
+
+### Delete Unmanaged Configurations
+
+Set `delete-unmanaged-code-security-configurations: true` to remove code security configurations not defined in the configuration file. Only custom (organization-owned) configurations are deleted — global GitHub-managed configurations are never touched.
 
 > [!NOTE]
-> You must provide either `organizations` or `organizations-file`. The `custom-properties-file`, `issue-types-file`, and `rulesets-file` inputs provide base settings for all orgs and can be combined with either approach. Member privilege settings can be provided as individual inputs (e.g., `default-repository-permission`). Per-org overrides in `organizations-file` layer on top of the base.
+> Requires a GitHub Advanced Security (GHAS) license for `advanced_security` features. Available on GitHub.com (GHEC) and GHES 3.x+.
+
+---
+
+## Action Inputs
+
+| Input                                           | Description                                                                         | Required | Default                 |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------- | -------- | ----------------------- |
+| `github-token`                                  | GitHub token for API access (requires `admin:org` scope)                            | Yes      |                         |
+| `github-api-url`                                | GitHub API URL (e.g., `https://api.github.com` or `https://ghes.domain.com/api/v3`) | No       | `${{ github.api_url }}` |
+| `organizations`                                 | Comma-separated list of organization names                                          | No       |                         |
+| `organizations-file`                            | Path to YAML file containing organization settings configuration                    | No       |                         |
+| `custom-properties-file`                        | Path to a YAML file defining custom property schemas                                | No       |                         |
+| `delete-unmanaged-properties`                   | Delete custom properties not defined in the configuration file                      | No       | `false`                 |
+| `issue-types-file`                              | Path to a YAML file defining issue type definitions                                 | No       |                         |
+| `delete-unmanaged-issue-types`                  | Delete issue types not defined in the configuration file                            | No       | `false`                 |
+| `default-repository-permission`                 | Default permission for org members: `read`, `write`, `admin`, `none`                | No       |                         |
+| `members-can-create-repositories`               | Whether members can create repositories                                             | No       |                         |
+| `members-can-create-public-repositories`        | Whether members can create public repositories                                      | No       |                         |
+| `members-can-create-private-repositories`       | Whether members can create private repositories                                     | No       |                         |
+| `members-can-create-internal-repositories`      | Whether members can create internal repositories (GHEC/GHES only)                   | No       |                         |
+| `members-can-fork-private-repositories`         | Whether members can fork private repositories                                       | No       |                         |
+| `web-commit-signoff-required`                   | Whether web UI commits require signoff                                              | No       |                         |
+| `members-can-create-pages`                      | Whether members can create GitHub Pages sites                                       | No       |                         |
+| `members-can-create-public-pages`               | Whether members can create public GitHub Pages sites                                | No       |                         |
+| `members-can-create-private-pages`              | Whether members can create private GitHub Pages sites                               | No       |                         |
+| `members-can-invite-outside-collaborators`      | Whether members can invite outside collaborators                                    | No       |                         |
+| `members-can-create-teams`                      | Whether members can create teams                                                    | No       |                         |
+| `members-can-delete-repositories`               | Whether members can delete repositories                                             | No       |                         |
+| `members-can-change-repo-visibility`            | Whether members can change repository visibility                                    | No       |                         |
+| `members-can-delete-issues`                     | Whether members can delete issues                                                   | No       |                         |
+| `default-repository-branch`                     | Default branch name for new repositories                                            | No       |                         |
+| `deploy-keys-enabled-for-repositories`          | Whether deploy keys can be added to repositories                                    | No       |                         |
+| `readers-can-create-discussions`                | Whether users with read access can create discussions                               | No       |                         |
+| `members-can-view-dependency-insights`          | Whether members can view dependency insights                                        | No       |                         |
+| `display-commenter-full-name-setting-enabled`   | Whether to display commenter full name in issues and PRs                            | No       |                         |
+| `rulesets-file`                                 | Comma-separated paths to JSON files, each with a single org ruleset config          | No       |                         |
+| `delete-unmanaged-rulesets`                     | Delete all other rulesets besides those being synced                                | No       | `false`                 |
+| `code-security-configurations-file`             | Path to a YAML file defining code security configurations to sync                   | No       |                         |
+| `delete-unmanaged-code-security-configurations` | Delete code security configurations not defined in the configuration file           | No       | `false`                 |
+| `dry-run`                                       | Preview changes without applying them                                               | No       | `false`                 |
+
+> [!NOTE]
+> You must provide either `organizations` or `organizations-file`. The `custom-properties-file`, `issue-types-file`, `rulesets-file`, and `code-security-configurations-file` inputs provide base settings for all orgs and can be combined with either approach. Member privilege settings can be provided as individual inputs (e.g., `default-repository-permission`). Per-org overrides in `organizations-file` layer on top of the base.
 
 ## Action Outputs
 

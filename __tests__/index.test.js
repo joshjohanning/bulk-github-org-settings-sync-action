@@ -77,6 +77,10 @@ inputs:
     description: 'Rulesets file'
   delete-unmanaged-rulesets:
     description: 'Delete unmanaged rulesets'
+  code-security-configurations-file:
+    description: 'Code security configurations file'
+  delete-unmanaged-code-security-configurations:
+    description: 'Delete unmanaged code security configurations'
   dry-run:
     description: 'Dry run mode'
 `;
@@ -175,7 +179,12 @@ const {
   validateOrgConfig,
   resetKnownOrgConfigKeysCache,
   resolveFilePath,
-  applyBasePathToOrgConfig
+  applyBasePathToOrgConfig,
+  parseCodeSecurityConfigurationsFile,
+  normalizeCodeSecurityConfigurations,
+  compareCodeSecurityConfiguration,
+  mergeCodeSecurityConfigurations,
+  syncCodeSecurityConfigurations
 } = await import('../src/index.js');
 
 describe('Bulk GitHub Organization Settings Sync Action', () => {
@@ -2962,6 +2971,446 @@ orgs:
         default_repository_permission: 'read',
         members_can_fork_private_repositories: true // per-org override
       });
+    });
+  });
+
+  // ─── parseCodeSecurityConfigurationsFile ──────────────────────────────
+
+  describe('parseCodeSecurityConfigurationsFile', () => {
+    test('should parse a valid file', () => {
+      const yamlContent = `- name: High risk
+  description: High risk config
+  advanced_security: enabled
+  secret_scanning: enabled
+- name: Standard
+  description: Standard config
+  dependency_graph: enabled
+`;
+      setMockFileContent(yamlContent, '/mock/code-security-configs.yml');
+
+      const result = parseCodeSecurityConfigurationsFile('/mock/code-security-configs.yml');
+
+      expect(result).toHaveLength(2);
+      expect(result[0].name).toBe('High risk');
+      expect(result[0].advanced_security).toBe('enabled');
+      expect(result[1].name).toBe('Standard');
+      expect(result[1].dependency_graph).toBe('enabled');
+    });
+
+    test('should throw for non-existent file', () => {
+      expect(() => parseCodeSecurityConfigurationsFile('/mock/nonexistent.yml')).toThrow(
+        'Code security configurations file not found'
+      );
+    });
+
+    test('should throw for non-array format', () => {
+      setMockFileContent('name: not-an-array', '/mock/bad-format.yml');
+
+      expect(() => parseCodeSecurityConfigurationsFile('/mock/bad-format.yml')).toThrow('expected an array');
+    });
+  });
+
+  // ─── normalizeCodeSecurityConfigurations ──────────────────────────────
+
+  describe('normalizeCodeSecurityConfigurations', () => {
+    test('should normalize a valid config', () => {
+      const configs = [
+        {
+          name: 'Test config',
+          description: 'A test configuration',
+          advanced_security: 'enabled',
+          secret_scanning: 'disabled',
+          enforcement: 'enforced'
+        }
+      ];
+
+      const result = normalizeCodeSecurityConfigurations(configs);
+
+      expect(result).toHaveLength(1);
+      expect(result[0]).toEqual({
+        name: 'Test config',
+        description: 'A test configuration',
+        advanced_security: 'enabled',
+        secret_scanning: 'disabled',
+        enforcement: 'enforced'
+      });
+    });
+
+    test('should throw for missing name', () => {
+      expect(() => normalizeCodeSecurityConfigurations([{ description: 'No name' }])).toThrow(
+        'must have a "name" field'
+      );
+    });
+
+    test('should throw for missing description', () => {
+      expect(() => normalizeCodeSecurityConfigurations([{ name: 'Test' }])).toThrow('must have a "description" field');
+    });
+
+    test('should handle hyphenated YAML keys', () => {
+      const configs = [
+        {
+          name: 'Hyphenated test',
+          description: 'Test with hyphenated keys',
+          'advanced-security': 'enabled',
+          'secret-scanning': 'disabled',
+          'secret-scanning-push-protection': 'enabled',
+          'code-scanning-default-setup-options': { runner_type: 'default', runner_label: '' }
+        }
+      ];
+
+      const result = normalizeCodeSecurityConfigurations(configs);
+
+      expect(result[0].advanced_security).toBe('enabled');
+      expect(result[0].secret_scanning).toBe('disabled');
+      expect(result[0].secret_scanning_push_protection).toBe('enabled');
+      expect(result[0].code_scanning_default_setup_options).toEqual({
+        runner_type: 'default',
+        runner_label: ''
+      });
+    });
+  });
+
+  // ─── compareCodeSecurityConfiguration ─────────────────────────────────
+
+  describe('compareCodeSecurityConfiguration', () => {
+    test('should detect no changes', () => {
+      const existing = {
+        id: 1,
+        name: 'Test',
+        description: 'Test config',
+        advanced_security: 'enabled',
+        target_type: 'organization'
+      };
+      const desired = {
+        name: 'Test',
+        description: 'Test config',
+        advanced_security: 'enabled'
+      };
+
+      const result = compareCodeSecurityConfiguration(existing, desired);
+
+      expect(result.changed).toBe(false);
+      expect(result.changes).toHaveLength(0);
+    });
+
+    test('should detect string field changes', () => {
+      const existing = {
+        id: 1,
+        name: 'Test',
+        description: 'Old description',
+        advanced_security: 'disabled'
+      };
+      const desired = {
+        name: 'Test',
+        description: 'New description',
+        advanced_security: 'enabled'
+      };
+
+      const result = compareCodeSecurityConfiguration(existing, desired);
+
+      expect(result.changed).toBe(true);
+      expect(result.changes).toContain('description: Old description → New description');
+      expect(result.changes).toContain('advanced_security: disabled → enabled');
+    });
+
+    test('should detect object field changes', () => {
+      const existing = {
+        id: 1,
+        name: 'Test',
+        description: 'Test',
+        code_scanning_default_setup_options: { runner_type: 'default', runner_label: '' }
+      };
+      const desired = {
+        name: 'Test',
+        description: 'Test',
+        code_scanning_default_setup_options: { runner_type: 'labeled', runner_label: 'my-runner' }
+      };
+
+      const result = compareCodeSecurityConfiguration(existing, desired);
+
+      expect(result.changed).toBe(true);
+      expect(result.changes).toContain('code_scanning_default_setup_options updated');
+    });
+  });
+
+  // ─── mergeCodeSecurityConfigurations ──────────────────────────────────
+
+  describe('mergeCodeSecurityConfigurations', () => {
+    test('should merge base and org configs', () => {
+      const base = [
+        { name: 'Config A', description: 'Base A', advanced_security: 'enabled' },
+        { name: 'Config B', description: 'Base B', secret_scanning: 'enabled' }
+      ];
+      const org = [{ name: 'Config C', description: 'Org C', dependabot_alerts: 'enabled' }];
+
+      const result = mergeCodeSecurityConfigurations(base, org);
+
+      expect(result).toHaveLength(3);
+      expect(result.map(c => c.name)).toEqual(['Config A', 'Config B', 'Config C']);
+    });
+
+    test('should override by name', () => {
+      const base = [{ name: 'Config A', description: 'Base A', advanced_security: 'enabled' }];
+      const org = [{ name: 'Config A', description: 'Override A', advanced_security: 'disabled' }];
+
+      const result = mergeCodeSecurityConfigurations(base, org);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].description).toBe('Override A');
+      expect(result[0].advanced_security).toBe('disabled');
+    });
+  });
+
+  // ─── syncCodeSecurityConfigurations ───────────────────────────────────
+
+  describe('syncCodeSecurityConfigurations', () => {
+    const desiredConfigs = [
+      {
+        name: 'High risk',
+        description: 'High risk config',
+        advanced_security: 'enabled',
+        secret_scanning: 'enabled'
+      }
+    ];
+
+    test('should create new configuration', async () => {
+      mockRequest.mockResolvedValueOnce({ data: [] });
+      mockRequest.mockResolvedValueOnce({ data: { id: 1, name: 'High risk' } });
+
+      const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', desiredConfigs, false, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('code-security-config-create');
+      expect(result.subResults[0].status).toBe('changed');
+      expect(mockRequest).toHaveBeenCalledWith(
+        'POST /orgs/{org}/code-security/configurations',
+        expect.objectContaining({
+          org: 'my-org',
+          name: 'High risk'
+        })
+      );
+    });
+
+    test('should update changed configuration', async () => {
+      mockRequest.mockResolvedValueOnce({
+        data: [
+          {
+            id: 1,
+            name: 'High risk',
+            description: 'Old description',
+            advanced_security: 'disabled',
+            secret_scanning: 'enabled',
+            target_type: 'organization'
+          }
+        ]
+      });
+      mockRequest.mockResolvedValueOnce({ data: {} });
+
+      const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', desiredConfigs, false, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('code-security-config-update');
+      expect(result.subResults[0].status).toBe('changed');
+      expect(mockRequest).toHaveBeenCalledWith(
+        'PATCH /orgs/{org}/code-security/configurations/{configuration_id}',
+        expect.objectContaining({
+          org: 'my-org',
+          configuration_id: 1
+        })
+      );
+    });
+
+    test('should skip unchanged configuration', async () => {
+      mockRequest.mockResolvedValueOnce({
+        data: [
+          {
+            id: 1,
+            name: 'High risk',
+            description: 'High risk config',
+            advanced_security: 'enabled',
+            secret_scanning: 'enabled',
+            target_type: 'organization'
+          }
+        ]
+      });
+
+      const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', desiredConfigs, false, false);
+
+      expect(result.subResults).toHaveLength(0);
+      expect(mockRequest).toHaveBeenCalledTimes(1); // Only the GET
+    });
+
+    test('should delete unmanaged configuration when enabled', async () => {
+      mockRequest.mockResolvedValueOnce({
+        data: [
+          {
+            id: 1,
+            name: 'High risk',
+            description: 'High risk config',
+            advanced_security: 'enabled',
+            secret_scanning: 'enabled',
+            target_type: 'organization'
+          },
+          {
+            id: 2,
+            name: 'Old config',
+            description: 'Should be deleted',
+            target_type: 'organization'
+          }
+        ]
+      });
+      mockRequest.mockResolvedValueOnce({ data: {} });
+
+      const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', desiredConfigs, true, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('code-security-config-delete');
+      expect(result.subResults[0].status).toBe('changed');
+      expect(mockRequest).toHaveBeenCalledWith('DELETE /orgs/{org}/code-security/configurations/{configuration_id}', {
+        org: 'my-org',
+        configuration_id: 2
+      });
+    });
+
+    test('should not delete unmanaged when disabled', async () => {
+      mockRequest.mockResolvedValueOnce({
+        data: [
+          {
+            id: 1,
+            name: 'High risk',
+            description: 'High risk config',
+            advanced_security: 'enabled',
+            secret_scanning: 'enabled',
+            target_type: 'organization'
+          },
+          {
+            id: 2,
+            name: 'Old config',
+            description: 'Should not be deleted',
+            target_type: 'organization'
+          }
+        ]
+      });
+
+      const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', desiredConfigs, false, false);
+
+      expect(result.subResults).toHaveLength(0);
+      expect(mockRequest).toHaveBeenCalledTimes(1); // Only the GET
+    });
+
+    test('should handle API errors gracefully', async () => {
+      mockRequest.mockResolvedValueOnce({ data: [] });
+      mockRequest.mockRejectedValueOnce(new Error('Forbidden'));
+
+      const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', desiredConfigs, false, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].status).toBe('warning');
+      expect(result.subResults[0].message).toContain('Failed');
+      expect(result.failed).toBe(true);
+    });
+
+    test('should handle 404 on list gracefully', async () => {
+      const error404 = new Error('Not Found');
+      error404.status = 404;
+      mockRequest.mockRejectedValueOnce(error404);
+      mockRequest.mockResolvedValueOnce({ data: { id: 1, name: 'High risk' } });
+
+      const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', desiredConfigs, false, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('code-security-config-create');
+    });
+
+    test('should skip global configurations when deleting unmanaged', async () => {
+      mockRequest.mockResolvedValueOnce({
+        data: [
+          {
+            id: 1,
+            name: 'High risk',
+            description: 'High risk config',
+            advanced_security: 'enabled',
+            secret_scanning: 'enabled',
+            target_type: 'organization'
+          },
+          {
+            id: 99,
+            name: 'GitHub recommended',
+            description: 'GitHub managed config',
+            target_type: 'global'
+          }
+        ]
+      });
+
+      const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', desiredConfigs, true, false);
+
+      // Should not delete the global config
+      expect(result.subResults).toHaveLength(0);
+      expect(mockRequest).toHaveBeenCalledTimes(1); // Only the GET
+    });
+  });
+
+  // ─── parseOrganizations with code security configurations ─────────────
+
+  describe('parseOrganizations with code security configurations', () => {
+    test('should parse orgs with code-security-configurations-file', () => {
+      const cscYaml = `- name: High risk
+  description: High risk config
+  advanced_security: enabled
+`;
+      setMockFileContent(cscYaml, '/mock/code-security-configs.yml');
+
+      const result = parseOrganizations(
+        'my-org,my-other-org',
+        '',
+        '',
+        [],
+        false,
+        '',
+        null,
+        '/mock/code-security-configs.yml'
+      );
+
+      expect(result).toHaveLength(2);
+      expect(result[0].codeSecurityConfigurations).toHaveLength(1);
+      expect(result[0].codeSecurityConfigurations[0].name).toBe('High risk');
+      expect(result[1].codeSecurityConfigurations).toHaveLength(1);
+    });
+
+    test('should handle inline code-security-configurations in orgs.yml', () => {
+      const orgsYaml = `orgs:
+  - org: my-org
+  - org: my-other-org
+    code-security-configurations:
+      - name: Custom config
+        description: Inline config
+        secret_scanning: enabled
+`;
+      const cscYaml = `- name: Base config
+  description: Base security config
+  advanced_security: enabled
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+      setMockFileContent(cscYaml, '/mock/code-security-configs.yml');
+
+      const result = parseOrganizations(
+        '',
+        '/mock/orgs.yml',
+        '',
+        [],
+        false,
+        '',
+        null,
+        '/mock/code-security-configs.yml'
+      );
+
+      expect(result).toHaveLength(2);
+      // First org gets only base configs
+      expect(result[0].codeSecurityConfigurations).toHaveLength(1);
+      expect(result[0].codeSecurityConfigurations[0].name).toBe('Base config');
+      // Second org gets base + inline merged
+      expect(result[1].codeSecurityConfigurations).toHaveLength(2);
+      expect(result[1].codeSecurityConfigurations.map(c => c.name)).toEqual(['Base config', 'Custom config']);
     });
   });
 });

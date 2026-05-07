@@ -112,6 +112,15 @@ inputs:
     required: false
     default: 'false'
 
+  # === Code Security Configurations ===
+  code-security-configurations-file:
+    description: 'Path to a YAML file defining code security configurations to sync to target organizations'
+    required: false
+  delete-unmanaged-code-security-configurations:
+    description: 'Delete code security configurations not defined in the configuration file'
+    required: false
+    default: 'false'
+
   # === Execution Options ===
   dry-run:
     description: 'Preview changes without applying them (logs what would be changed)'

@@ -20,6 +20,11 @@
 # Member privileges can be defined as direct action inputs. Per-org
 # member-privileges overrides layer on top — settings with the same key
 # override the base value.
+#
+# Code security configurations can be defined in a separate
+# code-security-configurations.yml file and provided via the
+# code-security-configurations-file input. Per-org overrides below
+# layer on top — configurations with the same name override the base definition.
 
 orgs:
   # Org that inherits all base properties from custom-properties-file as-is
@@ -60,7 +65,16 @@ orgs:
     member-privileges:
       members-can-fork-private-repositories: true # Override the base setting for this org
       members-can-create-internal-repositories: true # GHEC/GHES only
-
+    # Per-org code security configuration overrides (layers on top of base code-security-configurations-file)
+    # code-security-configurations-file: './config/code-security/other-org.yml' # Use a different base file for this org
+    # delete-unmanaged-code-security-configurations: true # Override the action input for this org
+    code-security-configurations:
+      - name: High risk settings
+        description: Security configuration for high risk repositories (stricter for this org)
+        advanced_security: enabled
+        secret_scanning: enabled
+        secret_scanning_push_protection: enabled
+        enforcement: enforced
 
 # ---
 # Alternative: fully self-contained (no base custom-properties-file needed)

@@ -1,0 +1,41 @@
+# Code security configurations for bulk-github-org-settings-sync-action
+# Use with: code-security-configurations-file: './code-security-configurations.yml'
+#
+# Each entry defines a named code security configuration that will be synced
+# to target organizations. Configurations are matched by name — if a
+# configuration with the same name exists it will be updated, otherwise created.
+#
+# All enablement fields accept: enabled, disabled, or not_set
+# The enforcement field accepts: enforced or unenforced
+#
+# Requires GitHub Advanced Security (GHAS) license for advanced_security features.
+# Available on GitHub.com (GHEC) and GHES 3.x+.
+
+- name: High risk settings
+  description: Security configuration for high risk repositories
+  advanced_security: enabled
+  dependency_graph: enabled
+  dependency_graph_autosubmit_action: not_set
+  dependabot_alerts: enabled
+  dependabot_security_updates: enabled
+  code_scanning_default_setup: enabled
+  secret_scanning: enabled
+  secret_scanning_push_protection: enabled
+  secret_scanning_validity_checks: enabled
+  secret_scanning_non_provider_patterns: enabled
+  private_vulnerability_reporting: enabled
+  enforcement: enforced
+
+- name: Standard settings
+  description: Security configuration for standard repositories
+  advanced_security: enabled
+  dependency_graph: enabled
+  dependabot_alerts: enabled
+  dependabot_security_updates: not_set
+  code_scanning_default_setup: not_set
+  secret_scanning: enabled
+  secret_scanning_push_protection: enabled
+  secret_scanning_validity_checks: disabled
+  secret_scanning_non_provider_patterns: disabled
+  private_vulnerability_reporting: enabled
+  enforcement: unenforced
