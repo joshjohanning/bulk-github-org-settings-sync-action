@@ -794,7 +794,7 @@ orgs:
 | `readers-can-create-discussions`              | Whether users with read access can create discussions                               | No       |                         |
 | `members-can-view-dependency-insights`        | Whether members can view dependency insights                                        | No       |                         |
 | `display-commenter-full-name-setting-enabled` | Whether to display commenter full name in issues and PRs                            | No       |                         |
-| `rulesets-file`                               | Comma-separated paths to JSON files, each with a single org ruleset config          | No       | `false`                 |
+| `rulesets-file`                               | Comma-separated paths to JSON files, each with a single org ruleset config          | No       |                         |
 | `delete-unmanaged-rulesets`                   | Delete all other rulesets besides those being synced                                | No       | `false`                 |
 | `custom-org-roles-file`                       | Path to a YAML file defining custom organization role definitions (GHEC only)       | No       |                         |
 | `delete-unmanaged-org-roles`                  | Delete custom org roles not defined in the configuration file                       | No       | `false`                 |

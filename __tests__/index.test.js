@@ -3120,7 +3120,7 @@ orgs:
 
   describe('syncCustomOrgRoles', () => {
     test('should create a new org role', async () => {
-      mockRequest.mockResolvedValueOnce({ data: { roles: [] } });
+      mockPaginate.mockResolvedValueOnce([]);
       mockRequest.mockResolvedValueOnce({ data: {} });
 
       const desiredRoles = [{ name: 'Auditor', description: 'Audit role', permissions: ['read_audit_log'] }];
@@ -3129,6 +3129,11 @@ orgs:
 
       expect(result.subResults).toHaveLength(1);
       expect(result.subResults[0].kind).toBe('custom-org-role-create');
+      expect(mockPaginate).toHaveBeenCalledWith(
+        'GET /orgs/{org}/organization-roles',
+        { org: 'test-org', per_page: 100 },
+        expect.any(Function)
+      );
       expect(mockRequest).toHaveBeenCalledWith('POST /orgs/{org}/organization-roles', {
         org: 'test-org',
         name: 'Auditor',
@@ -3138,9 +3143,9 @@ orgs:
     });
 
     test('should update an existing org role when changed', async () => {
-      mockRequest.mockResolvedValueOnce({
-        data: { roles: [{ id: 1, name: 'Auditor', description: 'Old', permissions: ['read_audit_log'] }] }
-      });
+      mockPaginate.mockResolvedValueOnce([
+        { id: 1, name: 'Auditor', description: 'Old', permissions: ['read_audit_log'] }
+      ]);
       mockRequest.mockResolvedValueOnce({ data: {} });
 
       const desiredRoles = [{ name: 'Auditor', description: 'New', permissions: ['read_audit_log'] }];
@@ -3159,9 +3164,7 @@ orgs:
     });
 
     test('should delete unmanaged org roles when enabled', async () => {
-      mockRequest.mockResolvedValueOnce({
-        data: { roles: [{ id: 1, name: 'Unmanaged', description: null, permissions: ['x'] }] }
-      });
+      mockPaginate.mockResolvedValueOnce([{ id: 1, name: 'Unmanaged', description: null, permissions: ['x'] }]);
       mockRequest.mockResolvedValueOnce({ data: {} });
 
       const result = await syncCustomOrgRoles(mockOctokit, 'test-org', [], true, false);
@@ -3175,9 +3178,7 @@ orgs:
     });
 
     test('should not delete unmanaged roles when disabled', async () => {
-      mockRequest.mockResolvedValueOnce({
-        data: { roles: [{ id: 1, name: 'Unmanaged', description: null, permissions: ['x'] }] }
-      });
+      mockPaginate.mockResolvedValueOnce([{ id: 1, name: 'Unmanaged', description: null, permissions: ['x'] }]);
 
       const result = await syncCustomOrgRoles(mockOctokit, 'test-org', [], false, false);
 
@@ -3185,7 +3186,7 @@ orgs:
     });
 
     test('should preview changes in dry-run mode', async () => {
-      mockRequest.mockResolvedValueOnce({ data: { roles: [] } });
+      mockPaginate.mockResolvedValueOnce([]);
 
       const desiredRoles = [{ name: 'Auditor', description: null, permissions: ['read_audit_log'] }];
 
@@ -3193,14 +3194,14 @@ orgs:
 
       expect(result.subResults).toHaveLength(1);
       expect(result.subResults[0].message).toContain('Would');
-      // Should only make the GET call, not POST
-      expect(mockRequest).toHaveBeenCalledTimes(1);
+      expect(mockPaginate).toHaveBeenCalledTimes(1);
+      expect(mockRequest).not.toHaveBeenCalled();
     });
   });
 
   describe('syncCustomRepoRoles', () => {
     test('should create a new repo role', async () => {
-      mockRequest.mockResolvedValueOnce({ data: { custom_roles: [] } });
+      mockPaginate.mockResolvedValueOnce([]);
       mockRequest.mockResolvedValueOnce({ data: {} });
 
       const desiredRoles = [
@@ -3211,6 +3212,11 @@ orgs:
 
       expect(result.subResults).toHaveLength(1);
       expect(result.subResults[0].kind).toBe('custom-repo-role-create');
+      expect(mockPaginate).toHaveBeenCalledWith(
+        'GET /orgs/{org}/custom-repository-roles',
+        { org: 'test-org', per_page: 100 },
+        expect.any(Function)
+      );
       expect(mockRequest).toHaveBeenCalledWith('POST /orgs/{org}/custom-repository-roles', {
         org: 'test-org',
         name: 'Contractor',
@@ -3221,11 +3227,9 @@ orgs:
     });
 
     test('should update an existing repo role when changed', async () => {
-      mockRequest.mockResolvedValueOnce({
-        data: {
-          custom_roles: [{ id: 5, name: 'Contractor', description: 'Old', base_role: 'write', permissions: ['x'] }]
-        }
-      });
+      mockPaginate.mockResolvedValueOnce([
+        { id: 5, name: 'Contractor', description: 'Old', base_role: 'write', permissions: ['x'] }
+      ]);
       mockRequest.mockResolvedValueOnce({ data: {} });
 
       const desiredRoles = [{ name: 'Contractor', description: 'New', base_role: 'write', permissions: ['x'] }];
@@ -3237,9 +3241,9 @@ orgs:
     });
 
     test('should delete unmanaged repo roles when enabled', async () => {
-      mockRequest.mockResolvedValueOnce({
-        data: { custom_roles: [{ id: 5, name: 'Old Role', description: null, base_role: 'read', permissions: ['x'] }] }
-      });
+      mockPaginate.mockResolvedValueOnce([
+        { id: 5, name: 'Old Role', description: null, base_role: 'read', permissions: ['x'] }
+      ]);
       mockRequest.mockResolvedValueOnce({ data: {} });
 
       const result = await syncCustomRepoRoles(mockOctokit, 'test-org', [], true, false);
