@@ -3068,6 +3068,42 @@ orgs:
         runner_label: ''
       });
     });
+
+    test('should throw for invalid enablement value', () => {
+      expect(() =>
+        normalizeCodeSecurityConfigurations([
+          {
+            name: 'Invalid config',
+            description: 'Invalid enablement',
+            advanced_security: 'enabeld'
+          }
+        ])
+      ).toThrow('Valid values: enabled, disabled, not_set');
+    });
+
+    test('should throw for invalid enforcement value', () => {
+      expect(() =>
+        normalizeCodeSecurityConfigurations([
+          {
+            name: 'Invalid config',
+            description: 'Invalid enforcement',
+            enforcement: 'enabled'
+          }
+        ])
+      ).toThrow('Valid values: enforced, unenforced');
+    });
+
+    test('should throw for non-object option fields', () => {
+      expect(() =>
+        normalizeCodeSecurityConfigurations([
+          {
+            name: 'Invalid config',
+            description: 'Invalid options',
+            'code-scanning-default-setup-options': ['runner']
+          }
+        ])
+      ).toThrow('must be a key-value map');
+    });
   });
 
   // ─── compareCodeSecurityConfiguration ─────────────────────────────────
@@ -3174,7 +3210,7 @@ orgs:
     ];
 
     test('should create new configuration', async () => {
-      mockRequest.mockResolvedValueOnce({ data: [] });
+      mockPaginate.mockResolvedValueOnce([]);
       mockRequest.mockResolvedValueOnce({ data: { id: 1, name: 'High risk' } });
 
       const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', desiredConfigs, false, false);
@@ -3189,21 +3225,23 @@ orgs:
           name: 'High risk'
         })
       );
+      expect(mockPaginate).toHaveBeenCalledWith('GET /orgs/{org}/code-security/configurations', {
+        org: 'my-org',
+        per_page: 100
+      });
     });
 
     test('should update changed configuration', async () => {
-      mockRequest.mockResolvedValueOnce({
-        data: [
-          {
-            id: 1,
-            name: 'High risk',
-            description: 'Old description',
-            advanced_security: 'disabled',
-            secret_scanning: 'enabled',
-            target_type: 'organization'
-          }
-        ]
-      });
+      mockPaginate.mockResolvedValueOnce([
+        {
+          id: 1,
+          name: 'High risk',
+          description: 'Old description',
+          advanced_security: 'disabled',
+          secret_scanning: 'enabled',
+          target_type: 'organization'
+        }
+      ]);
       mockRequest.mockResolvedValueOnce({ data: {} });
 
       const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', desiredConfigs, false, false);
@@ -3221,44 +3259,40 @@ orgs:
     });
 
     test('should skip unchanged configuration', async () => {
-      mockRequest.mockResolvedValueOnce({
-        data: [
-          {
-            id: 1,
-            name: 'High risk',
-            description: 'High risk config',
-            advanced_security: 'enabled',
-            secret_scanning: 'enabled',
-            target_type: 'organization'
-          }
-        ]
-      });
+      mockPaginate.mockResolvedValueOnce([
+        {
+          id: 1,
+          name: 'High risk',
+          description: 'High risk config',
+          advanced_security: 'enabled',
+          secret_scanning: 'enabled',
+          target_type: 'organization'
+        }
+      ]);
 
       const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', desiredConfigs, false, false);
 
       expect(result.subResults).toHaveLength(0);
-      expect(mockRequest).toHaveBeenCalledTimes(1); // Only the GET
+      expect(mockRequest).not.toHaveBeenCalled();
     });
 
     test('should delete unmanaged configuration when enabled', async () => {
-      mockRequest.mockResolvedValueOnce({
-        data: [
-          {
-            id: 1,
-            name: 'High risk',
-            description: 'High risk config',
-            advanced_security: 'enabled',
-            secret_scanning: 'enabled',
-            target_type: 'organization'
-          },
-          {
-            id: 2,
-            name: 'Old config',
-            description: 'Should be deleted',
-            target_type: 'organization'
-          }
-        ]
-      });
+      mockPaginate.mockResolvedValueOnce([
+        {
+          id: 1,
+          name: 'High risk',
+          description: 'High risk config',
+          advanced_security: 'enabled',
+          secret_scanning: 'enabled',
+          target_type: 'organization'
+        },
+        {
+          id: 2,
+          name: 'Old config',
+          description: 'Should be deleted',
+          target_type: 'organization'
+        }
+      ]);
       mockRequest.mockResolvedValueOnce({ data: {} });
 
       const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', desiredConfigs, true, false);
@@ -3273,33 +3307,31 @@ orgs:
     });
 
     test('should not delete unmanaged when disabled', async () => {
-      mockRequest.mockResolvedValueOnce({
-        data: [
-          {
-            id: 1,
-            name: 'High risk',
-            description: 'High risk config',
-            advanced_security: 'enabled',
-            secret_scanning: 'enabled',
-            target_type: 'organization'
-          },
-          {
-            id: 2,
-            name: 'Old config',
-            description: 'Should not be deleted',
-            target_type: 'organization'
-          }
-        ]
-      });
+      mockPaginate.mockResolvedValueOnce([
+        {
+          id: 1,
+          name: 'High risk',
+          description: 'High risk config',
+          advanced_security: 'enabled',
+          secret_scanning: 'enabled',
+          target_type: 'organization'
+        },
+        {
+          id: 2,
+          name: 'Old config',
+          description: 'Should not be deleted',
+          target_type: 'organization'
+        }
+      ]);
 
       const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', desiredConfigs, false, false);
 
       expect(result.subResults).toHaveLength(0);
-      expect(mockRequest).toHaveBeenCalledTimes(1); // Only the GET
+      expect(mockRequest).not.toHaveBeenCalled();
     });
 
     test('should handle API errors gracefully', async () => {
-      mockRequest.mockResolvedValueOnce({ data: [] });
+      mockPaginate.mockResolvedValueOnce([]);
       mockRequest.mockRejectedValueOnce(new Error('Forbidden'));
 
       const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', desiredConfigs, false, false);
@@ -3313,7 +3345,7 @@ orgs:
     test('should handle 404 on list gracefully', async () => {
       const error404 = new Error('Not Found');
       error404.status = 404;
-      mockRequest.mockRejectedValueOnce(error404);
+      mockPaginate.mockRejectedValueOnce(error404);
       mockRequest.mockResolvedValueOnce({ data: { id: 1, name: 'High risk' } });
 
       const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', desiredConfigs, false, false);
@@ -3323,30 +3355,28 @@ orgs:
     });
 
     test('should skip global configurations when deleting unmanaged', async () => {
-      mockRequest.mockResolvedValueOnce({
-        data: [
-          {
-            id: 1,
-            name: 'High risk',
-            description: 'High risk config',
-            advanced_security: 'enabled',
-            secret_scanning: 'enabled',
-            target_type: 'organization'
-          },
-          {
-            id: 99,
-            name: 'GitHub recommended',
-            description: 'GitHub managed config',
-            target_type: 'global'
-          }
-        ]
-      });
+      mockPaginate.mockResolvedValueOnce([
+        {
+          id: 1,
+          name: 'High risk',
+          description: 'High risk config',
+          advanced_security: 'enabled',
+          secret_scanning: 'enabled',
+          target_type: 'organization'
+        },
+        {
+          id: 99,
+          name: 'GitHub recommended',
+          description: 'GitHub managed config',
+          target_type: 'global'
+        }
+      ]);
 
       const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', desiredConfigs, true, false);
 
       // Should not delete the global config
       expect(result.subResults).toHaveLength(0);
-      expect(mockRequest).toHaveBeenCalledTimes(1); // Only the GET
+      expect(mockRequest).not.toHaveBeenCalled();
     });
   });
 

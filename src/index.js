@@ -1703,6 +1703,38 @@ const CODE_SECURITY_CONFIG_READONLY_FIELDS = new Set([
   'updated_at'
 ]);
 
+const CODE_SECURITY_ENABLEMENT_VALUES = new Set(['enabled', 'disabled', 'not_set']);
+const CODE_SECURITY_ENFORCEMENT_VALUES = new Set(['enforced', 'unenforced']);
+const CODE_SECURITY_OPTION_FIELDS = [
+  'dependency_graph_autosubmit_action_options',
+  'code_scanning_default_setup_options',
+  'secret_scanning_delegated_bypass_options',
+  'code_scanning_options'
+];
+
+function getCodeSecurityConfigValue(config, field) {
+  const hyphenated = field.replace(/_/g, '-');
+  return config[field] ?? config[hyphenated];
+}
+
+function normalizeCodeSecurityEnumValue(value, field, configName, validValues) {
+  const normalizedValue = String(value).trim();
+  if (!validValues.has(normalizedValue)) {
+    throw new Error(
+      `Code security configuration "${configName}" field "${field}" has invalid value "${normalizedValue}". ` +
+        `Valid values: ${[...validValues].join(', ')}`
+    );
+  }
+  return normalizedValue;
+}
+
+function normalizeCodeSecurityOptionsValue(value, field, configName) {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error(`Code security configuration "${configName}" field "${field}" must be a key-value map`);
+  }
+  return value;
+}
+
 /**
  * Parse a standalone code security configurations YAML file.
  * @param {string} filePath - Path to the YAML file
@@ -1770,38 +1802,34 @@ export function normalizeCodeSecurityConfigurations(configs) {
     ];
 
     for (const field of enablementFields) {
-      // Support both snake_case (API) and hyphenated (YAML-friendly) keys
-      const hyphenated = field.replace(/_/g, '-');
-      const value = config[field] ?? config[hyphenated];
+      const value = getCodeSecurityConfigValue(config, field);
       if (value !== undefined && value !== null) {
-        normalized[field] = String(value);
+        normalized[field] = normalizeCodeSecurityEnumValue(
+          value,
+          field,
+          normalized.name,
+          CODE_SECURITY_ENABLEMENT_VALUES
+        );
       }
     }
 
     // enforcement field (enforced/unenforced)
     const enforcement = config.enforcement;
     if (enforcement !== undefined && enforcement !== null) {
-      normalized.enforcement = String(enforcement);
+      normalized.enforcement = normalizeCodeSecurityEnumValue(
+        enforcement,
+        'enforcement',
+        normalized.name,
+        CODE_SECURITY_ENFORCEMENT_VALUES
+      );
     }
 
     // Object fields
-    if (config.dependency_graph_autosubmit_action_options || config['dependency-graph-autosubmit-action-options']) {
-      normalized.dependency_graph_autosubmit_action_options =
-        config.dependency_graph_autosubmit_action_options || config['dependency-graph-autosubmit-action-options'];
-    }
-
-    if (config.code_scanning_default_setup_options || config['code-scanning-default-setup-options']) {
-      normalized.code_scanning_default_setup_options =
-        config.code_scanning_default_setup_options || config['code-scanning-default-setup-options'];
-    }
-
-    if (config.secret_scanning_delegated_bypass_options || config['secret-scanning-delegated-bypass-options']) {
-      normalized.secret_scanning_delegated_bypass_options =
-        config.secret_scanning_delegated_bypass_options || config['secret-scanning-delegated-bypass-options'];
-    }
-
-    if (config.code_scanning_options || config['code-scanning-options']) {
-      normalized.code_scanning_options = config.code_scanning_options || config['code-scanning-options'];
+    for (const field of CODE_SECURITY_OPTION_FIELDS) {
+      const value = getCodeSecurityConfigValue(config, field);
+      if (value !== undefined && value !== null) {
+        normalized[field] = normalizeCodeSecurityOptionsValue(value, field, normalized.name);
+      }
     }
 
     return normalized;
@@ -1884,8 +1912,7 @@ export async function syncCodeSecurityConfigurations(octokit, org, desiredConfig
   // Fetch current code security configurations
   let existingConfigs;
   try {
-    const { data } = await octokit.request('GET /orgs/{org}/code-security/configurations', { org });
-    existingConfigs = data;
+    existingConfigs = await octokit.paginate('GET /orgs/{org}/code-security/configurations', { org, per_page: 100 });
   } catch (error) {
     if (error.status === 404) {
       existingConfigs = [];
