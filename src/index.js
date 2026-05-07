@@ -1687,6 +1687,44 @@ function calculateGitBlobSha(content) {
 }
 
 /**
+ * Convert Git tree entry type/mode into a user-facing path type.
+ * @param {Object} entry - Git tree entry
+ * @returns {string} Human-readable remote path type
+ */
+function formatRemotePathType(entry) {
+  if (entry.mode === '120000') return 'symlink';
+  if (entry.mode === '160000' || entry.type === 'commit') return 'submodule';
+  if (entry.type === 'tree') return 'directory';
+  return entry.mode ? `${entry.type} (mode ${entry.mode})` : entry.type;
+}
+
+/**
+ * Build the deterministic branch used for repeated .github repo sync runs.
+ * @param {string} repoName - Target repo name
+ * @returns {string} Branch name
+ */
+function getDotGithubSyncBranchName(repoName) {
+  const normalizedRepoName = repoName.replace(/^\./, '').replace(/[^A-Za-z0-9._-]/g, '-');
+  return `bulk-org-settings-sync/${normalizedRepoName}`;
+}
+
+/**
+ * Format a bounded changed-files list for pull request bodies.
+ * @param {Array<{ path: string, sha?: string|null }>} changedFiles - Changed files
+ * @param {number} [limit] - Maximum files to list inline
+ * @returns {string} Markdown list
+ */
+function formatChangedFilesForPullRequest(changedFiles, limit = 50) {
+  const visibleFiles = changedFiles.slice(0, limit);
+  const lines = visibleFiles.map(f => `- \`${f.path}\` (${f.sha ? 'updated' : 'created'})`);
+  const remainingCount = changedFiles.length - visibleFiles.length;
+  if (remainingCount > 0) {
+    lines.push(`- ...and ${remainingCount} more file(s)`);
+  }
+  return lines.join('\n');
+}
+
+/**
  * Sync a local directory to a .github or .github-private repository via PR.
  * Compares local files against the repo's default branch, and creates a PR
  * if there are differences.
@@ -1792,18 +1830,19 @@ export async function syncDotGithubRepo(octokit, org, sourceDir, repoName, dryRu
 
   for (const filePath of localFiles) {
     const localContent = fs.readFileSync(path.join(sourceDir, filePath));
-    const localBase64 = localContent.toString('base64');
     const localSha = calculateGitBlobSha(localContent);
     const remoteEntry = remoteEntriesByPath.get(filePath);
 
     if (remoteEntry && (remoteEntry.type !== 'blob' || remoteEntry.mode === '120000')) {
-      const remoteType = remoteEntry.mode === '120000' ? 'symlink' : remoteEntry.type;
-      core.warning(`  ⚠️  Cannot sync "${filePath}" to ${org}/${repoName}: remote path is a ${remoteType}, not a file`);
+      const remoteType = formatRemotePathType(remoteEntry);
+      core.warning(
+        `  ⚠️  Cannot sync "${filePath}" to ${org}/${repoName}: remote path is a ${remoteType}, not a regular file`
+      );
       subResults.push(
         createSubResult(
           kindLabel,
           SubResultStatus.WARNING,
-          `Cannot sync "${filePath}" to ${org}/${repoName}: remote path is a ${remoteType}, not a file`
+          `Cannot sync "${filePath}" to ${org}/${repoName}: remote path is a ${remoteType}, not a regular file`
         )
       );
       hasFailed = true;
@@ -1811,7 +1850,7 @@ export async function syncDotGithubRepo(octokit, org, sourceDir, repoName, dryRu
     }
 
     if (localSha !== remoteEntry?.sha) {
-      changedFiles.push({ path: filePath, content: localBase64, sha: remoteEntry?.sha || null });
+      changedFiles.push({ path: filePath, content: localContent.toString('base64'), sha: remoteEntry?.sha || null });
     }
   }
 
@@ -1833,12 +1872,12 @@ export async function syncDotGithubRepo(octokit, org, sourceDir, repoName, dryRu
   );
 
   if (dryRun) {
-    return { subResults, failed: false };
+    return { subResults, failed: hasFailed };
   }
 
   // Create a PR with the changes
   try {
-    const branchName = `bulk-org-settings-sync/${Date.now()}`;
+    const branchName = getDotGithubSyncBranchName(repoName);
     const tree = [];
 
     // Upload changed file blobs, then create one tree/commit/ref for a single-commit PR.
@@ -1867,24 +1906,48 @@ export async function syncDotGithubRepo(octokit, org, sourceDir, repoName, dryRu
       parents: [baseSha]
     });
 
-    await octokit.request('POST /repos/{owner}/{repo}/git/refs', {
-      owner: org,
-      repo: repoName,
-      ref: `refs/heads/${branchName}`,
-      sha: commit.sha
-    });
+    try {
+      await octokit.request('POST /repos/{owner}/{repo}/git/refs', {
+        owner: org,
+        repo: repoName,
+        ref: `refs/heads/${branchName}`,
+        sha: commit.sha
+      });
+    } catch (error) {
+      if (error.status !== 422) {
+        throw error;
+      }
+      await octokit.request('PATCH /repos/{owner}/{repo}/git/refs/{ref}', {
+        owner: org,
+        repo: repoName,
+        ref: `heads/${branchName}`,
+        sha: commit.sha,
+        force: true
+      });
+    }
 
-    // Create a pull request
-    const { data: pr } = await octokit.request('POST /repos/{owner}/{repo}/pulls', {
+    const { data: openPulls } = await octokit.request('GET /repos/{owner}/{repo}/pulls', {
       owner: org,
       repo: repoName,
-      title: `Sync ${repoName} files from organization settings`,
-      body: `This PR was created automatically by the Bulk GitHub Organization Settings Sync Action.\n\n**Files changed:**\n${changedFiles.map(f => `- \`${f.path}\` (${f.sha ? 'updated' : 'created'})`).join('\n')}`,
-      head: branchName,
+      state: 'open',
+      head: `${org}:${branchName}`,
       base: defaultBranch
     });
 
-    core.info(`  🔗 Created PR #${pr.number}: ${pr.html_url}`);
+    let pr = openPulls[0];
+    if (!pr) {
+      const { data: createdPr } = await octokit.request('POST /repos/{owner}/{repo}/pulls', {
+        owner: org,
+        repo: repoName,
+        title: `Sync ${repoName} files from organization settings`,
+        body: `This PR was created automatically by the Bulk GitHub Organization Settings Sync Action.\n\n**Files changed:**\n${formatChangedFilesForPullRequest(changedFiles)}`,
+        head: branchName,
+        base: defaultBranch
+      });
+      pr = createdPr;
+    }
+
+    core.info(`  🔗 ${openPulls[0] ? 'Updated' : 'Created'} PR #${pr.number}: ${pr.html_url}`);
 
     // Update sub-result with PR link
     subResults[subResults.length - 1] = createSubResult(

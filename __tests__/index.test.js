@@ -3034,6 +3034,8 @@ orgs:
         .mockResolvedValueOnce({ data: { sha: 'new-commit-sha' } })
         // POST ref
         .mockResolvedValueOnce({ data: {} })
+        // GET open pulls for deterministic sync branch
+        .mockResolvedValueOnce({ data: [] })
         // POST create PR
         .mockResolvedValueOnce({ data: { number: 42, html_url: 'https://github.com/my-org/.github/pull/42' } });
 
@@ -3043,6 +3045,12 @@ orgs:
       expect(result.subResults[0].status).toBe('changed');
       expect(result.subResults[0].message).toContain('PR #42');
       expect(result.failed).toBe(false);
+      expect(mockRequest).toHaveBeenCalledWith('POST /repos/{owner}/{repo}/git/refs', {
+        owner: 'my-org',
+        repo: '.github',
+        ref: 'refs/heads/bulk-org-settings-sync/github',
+        sha: 'new-commit-sha'
+      });
       expect(mockRequest).toHaveBeenCalledWith('POST /repos/{owner}/{repo}/git/commits', {
         owner: 'my-org',
         repo: '.github',
@@ -3135,7 +3143,7 @@ orgs:
       expect(result.failed).toBe(false);
     });
 
-    test('should warn when a remote path is not a regular file', async () => {
+    test('should warn and fail dry-run when a remote path is not a regular file', async () => {
       mockFs.readdirSync.mockImplementation(dirPath => {
         if (dirPath === '/source') {
           return [{ name: 'README.md', isDirectory: () => false, isFile: () => true }];
@@ -3157,11 +3165,12 @@ orgs:
           data: { tree: [{ path: 'README.md', type: 'tree', mode: '040000', sha: 'tree-sha' }] }
         });
 
-      const result = await syncDotGithubRepo(mockOctokit, 'my-org', '/source', '.github', false);
+      const result = await syncDotGithubRepo(mockOctokit, 'my-org', '/source', '.github', true);
 
       expect(result.subResults).toHaveLength(1);
       expect(result.subResults[0].status).toBe('warning');
-      expect(result.subResults[0].message).toContain('not a file');
+      expect(result.subResults[0].message).toContain('directory');
+      expect(result.subResults[0].message).toContain('not a regular file');
       expect(result.failed).toBe(true);
     });
 
