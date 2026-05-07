@@ -937,7 +937,9 @@ orgs:
   - org: my-org
 `;
       setMockFileContent(orgsYaml, '/mock/orgs.yml');
-      expect(() => parseOrganizationsFile('/mock/orgs.yml')).toThrow(`'base-path' must be a string`);
+      expect(() => parseOrganizationsFile('/mock/orgs.yml')).toThrow(
+        `Invalid 'base-path' in /mock/orgs.yml: expected a string, got number`
+      );
     });
 
     test('should treat whitespace-only base-path as no-op', () => {
