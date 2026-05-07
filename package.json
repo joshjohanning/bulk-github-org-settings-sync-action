@@ -23,6 +23,7 @@
     "organization",
     "settings",
     "custom-properties",
+    "issue-types",
     "rulesets",
     "javascript",
     "node-action"
