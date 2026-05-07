@@ -9,6 +9,10 @@
 # provided via the rulesets-file input (comma-separated paths). Per-org
 # rulesets-file overrides the base for that org. In the YAML config, you can
 # use either a comma-separated string or a YAML array.
+#
+# Member privileges can be defined as direct action inputs. Per-org
+# member-privileges overrides layer on top — settings with the same key
+# override the base value.
 
 orgs:
   # Org that inherits all base properties from custom-properties-file as-is
@@ -33,6 +37,11 @@ orgs:
           - backend
           - data-science
         values-editable-by: org_actors
+    # Per-org member privilege overrides (layers on top of base action inputs)
+    member-privileges:
+      members-can-fork-private-repositories: true # Override the base setting for this org
+      members-can-create-internal-repositories: true # GHEC/GHES only
+
 
 # ---
 # Alternative: fully self-contained (no base custom-properties-file needed)
