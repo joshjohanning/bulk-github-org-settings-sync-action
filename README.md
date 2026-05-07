@@ -43,7 +43,7 @@ Please refer to the [release page](https://github.com/joshjohanning/bulk-github-
 
 ### Sync .github Repository Files
 
-Sync a local directory to the `.github` (and/or `.github-private`) repository across organizations. The action compares files and creates a PR with any changes:
+Sync a local directory to the `.github` (and/or `.github-private`) repository across organizations. The action compares local files against the target repository and creates a PR with any creates/updates:
 
 ```yml
 - name: Sync .github repo files
@@ -55,6 +55,8 @@ Sync a local directory to the `.github` (and/or `.github-private`) repository ac
     dot-github-private-source-dir: './dot-github-private-template'
     dry-run: ${{ github.event_name == 'pull_request' }}
 ```
+
+This sync is intentionally non-destructive: it creates or updates files present in the source directory, but it does not delete remote-only files from `.github` or `.github-private`.
 
 ---
 

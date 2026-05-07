@@ -3,6 +3,7 @@
  */
 
 import { jest } from '@jest/globals';
+import * as crypto from 'crypto';
 
 // ─── Mock fs module ─────────────────────────────────────────────────────────────
 
@@ -13,6 +14,13 @@ const mockFs = {
 };
 // CJS modules expose named exports and a default that mirrors them
 mockFs.default = mockFs;
+
+function gitBlobSha(content) {
+  return crypto
+    .createHash('sha1')
+    .update(Buffer.concat([Buffer.from(`blob ${content.length}\0`), content]))
+    .digest('hex');
+}
 
 // Mock action.yml content so getKnownOrgConfigKeys() works under mocked fs
 const mockActionYmlContent = `
@@ -3010,15 +3018,21 @@ orgs:
       mockRequest
         // GET repo info
         .mockResolvedValueOnce({ data: { default_branch: 'main' } })
-        // GET contents (file exists remotely with different content)
-        .mockResolvedValueOnce({
-          data: { sha: 'abc123', content: Buffer.from('# Old Content').toString('base64') }
-        })
         // GET git ref
         .mockResolvedValueOnce({ data: { object: { sha: 'base-sha-123' } } })
-        // POST create branch
-        .mockResolvedValueOnce({ data: {} })
-        // PUT file content
+        // GET git commit
+        .mockResolvedValueOnce({ data: { tree: { sha: 'base-tree-sha' } } })
+        // GET recursive tree (file exists remotely with different content)
+        .mockResolvedValueOnce({
+          data: { tree: [{ path: 'profile/README.md', type: 'blob', mode: '100644', sha: 'old-blob-sha' }] }
+        })
+        // POST blob
+        .mockResolvedValueOnce({ data: { sha: 'new-blob-sha' } })
+        // POST tree
+        .mockResolvedValueOnce({ data: { sha: 'new-tree-sha' } })
+        // POST commit
+        .mockResolvedValueOnce({ data: { sha: 'new-commit-sha' } })
+        // POST ref
         .mockResolvedValueOnce({ data: {} })
         // POST create PR
         .mockResolvedValueOnce({ data: { number: 42, html_url: 'https://github.com/my-org/.github/pull/42' } });
@@ -3029,6 +3043,14 @@ orgs:
       expect(result.subResults[0].status).toBe('changed');
       expect(result.subResults[0].message).toContain('PR #42');
       expect(result.failed).toBe(false);
+      expect(mockRequest).toHaveBeenCalledWith('POST /repos/{owner}/{repo}/git/commits', {
+        owner: 'my-org',
+        repo: '.github',
+        message: 'Sync .github files from organization settings',
+        tree: 'new-tree-sha',
+        parents: ['base-sha-123']
+      });
+      expect(mockRequest).not.toHaveBeenCalledWith('PUT /repos/{owner}/{repo}/contents/{path}', expect.any(Object));
     });
 
     test('should report would-sync in dry-run mode', async () => {
@@ -3049,7 +3071,11 @@ orgs:
         throw new Error(`ENOENT: ${filePath}`);
       });
 
-      mockRequest.mockResolvedValueOnce({ data: { default_branch: 'main' } }).mockRejectedValueOnce({ status: 404 }); // File doesn't exist remotely
+      mockRequest
+        .mockResolvedValueOnce({ data: { default_branch: 'main' } })
+        .mockResolvedValueOnce({ data: { object: { sha: 'base-sha-123' } } })
+        .mockResolvedValueOnce({ data: { tree: { sha: 'base-tree-sha' } } })
+        .mockResolvedValueOnce({ data: { tree: [] } });
 
       const result = await syncDotGithubRepo(mockOctokit, 'my-org', '/source', '.github', true);
 
@@ -3057,7 +3083,7 @@ orgs:
       expect(result.subResults[0].status).toBe('changed');
       expect(result.subResults[0].message).toContain('Would');
       // Should NOT call git ref/branch/PR creation in dry-run
-      expect(mockRequest).toHaveBeenCalledTimes(2);
+      expect(mockRequest).toHaveBeenCalledTimes(4);
     });
 
     test('should handle repo not found gracefully', async () => {
@@ -3095,14 +3121,48 @@ orgs:
         throw new Error(`ENOENT: ${filePath}`);
       });
 
-      mockRequest.mockResolvedValueOnce({ data: { default_branch: 'main' } }).mockResolvedValueOnce({
-        data: { sha: 'abc', content: Buffer.from(content).toString('base64') }
-      });
+      mockRequest
+        .mockResolvedValueOnce({ data: { default_branch: 'main' } })
+        .mockResolvedValueOnce({ data: { object: { sha: 'base-sha-123' } } })
+        .mockResolvedValueOnce({ data: { tree: { sha: 'base-tree-sha' } } })
+        .mockResolvedValueOnce({
+          data: { tree: [{ path: 'README.md', type: 'blob', mode: '100644', sha: gitBlobSha(Buffer.from(content)) }] }
+        });
 
       const result = await syncDotGithubRepo(mockOctokit, 'my-org', '/source', '.github', false);
 
       expect(result.subResults).toHaveLength(0);
       expect(result.failed).toBe(false);
+    });
+
+    test('should warn when a remote path is not a regular file', async () => {
+      mockFs.readdirSync.mockImplementation(dirPath => {
+        if (dirPath === '/source') {
+          return [{ name: 'README.md', isDirectory: () => false, isFile: () => true }];
+        }
+        return [];
+      });
+
+      mockFs.readFileSync.mockImplementation((filePath, _encoding) => {
+        if (filePath === '/source/README.md') return Buffer.from('# New');
+        if (typeof filePath === 'string' && filePath.endsWith('action.yml')) return mockActionYmlContent;
+        throw new Error(`ENOENT: ${filePath}`);
+      });
+
+      mockRequest
+        .mockResolvedValueOnce({ data: { default_branch: 'main' } })
+        .mockResolvedValueOnce({ data: { object: { sha: 'base-sha-123' } } })
+        .mockResolvedValueOnce({ data: { tree: { sha: 'base-tree-sha' } } })
+        .mockResolvedValueOnce({
+          data: { tree: [{ path: 'README.md', type: 'tree', mode: '040000', sha: 'tree-sha' }] }
+        });
+
+      const result = await syncDotGithubRepo(mockOctokit, 'my-org', '/source', '.github', false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].status).toBe('warning');
+      expect(result.subResults[0].message).toContain('not a file');
+      expect(result.failed).toBe(true);
     });
 
     test('should use dot-github-private-sync kind for .github-private repo', async () => {
@@ -3119,7 +3179,11 @@ orgs:
         throw new Error(`ENOENT: ${filePath}`);
       });
 
-      mockRequest.mockResolvedValueOnce({ data: { default_branch: 'main' } }).mockRejectedValueOnce({ status: 404 });
+      mockRequest
+        .mockResolvedValueOnce({ data: { default_branch: 'main' } })
+        .mockResolvedValueOnce({ data: { object: { sha: 'base-sha-123' } } })
+        .mockResolvedValueOnce({ data: { tree: { sha: 'base-tree-sha' } } })
+        .mockResolvedValueOnce({ data: { tree: [] } });
 
       const result = await syncDotGithubRepo(mockOctokit, 'my-org', '/source', '.github-private', true);
 
@@ -3157,6 +3221,36 @@ orgs:
       expect(result).toHaveLength(2);
       expect(result[0].dotGithubSourceDir).toBe('./custom-dir');
       expect(result[1].dotGithubSourceDir).toBe('/base-source');
+    });
+
+    test('should reject empty per-org dot-github-source-dir', () => {
+      setMockFileContent(
+        `
+orgs:
+  - org: org1
+    dot-github-source-dir: '   '
+`,
+        '/mock/orgs.yml'
+      );
+
+      expect(() => parseOrganizations('', '/mock/orgs.yml')).toThrow(
+        'Invalid "dot-github-source-dir" for org "org1": expected a non-empty string'
+      );
+    });
+
+    test('should reject non-string per-org dot-github-private-source-dir', () => {
+      setMockFileContent(
+        `
+orgs:
+  - org: org1
+    dot-github-private-source-dir: true
+`,
+        '/mock/orgs.yml'
+      );
+
+      expect(() => parseOrganizations('', '/mock/orgs.yml')).toThrow(
+        'Invalid "dot-github-private-source-dir" for org "org1": expected a non-empty string'
+      );
     });
   });
 });

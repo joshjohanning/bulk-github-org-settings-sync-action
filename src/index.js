@@ -12,6 +12,7 @@
 
 import * as core from '@actions/core';
 import { Octokit } from '@octokit/rest';
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as url from 'url';
@@ -659,16 +660,20 @@ export function parseOrganizationsFile(filePath) {
 
     if (Object.prototype.hasOwnProperty.call(orgConfig, 'dot-github-source-dir')) {
       const val = orgConfig['dot-github-source-dir'];
-      if (typeof val === 'string' && val.trim() !== '') {
-        result.dotGithubSourceDir = val.trim();
+      if (typeof val !== 'string' || val.trim() === '') {
+        throw new Error(`Invalid "dot-github-source-dir" for org "${orgConfig.org}": expected a non-empty string`);
       }
+      result.dotGithubSourceDir = val.trim();
     }
 
     if (Object.prototype.hasOwnProperty.call(orgConfig, 'dot-github-private-source-dir')) {
       const val = orgConfig['dot-github-private-source-dir'];
-      if (typeof val === 'string' && val.trim() !== '') {
-        result.dotGithubPrivateSourceDir = val.trim();
+      if (typeof val !== 'string' || val.trim() === '') {
+        throw new Error(
+          `Invalid "dot-github-private-source-dir" for org "${orgConfig.org}": expected a non-empty string`
+        );
       }
+      result.dotGithubPrivateSourceDir = val.trim();
     }
 
     return result;
@@ -1670,6 +1675,18 @@ export function listFilesRecursively(dirPath, prefix = '') {
 }
 
 /**
+ * Calculate the Git blob SHA for file content.
+ * @param {Buffer} content - File content
+ * @returns {string} Git blob SHA
+ */
+function calculateGitBlobSha(content) {
+  return crypto
+    .createHash('sha1')
+    .update(Buffer.concat([Buffer.from(`blob ${content.length}\0`), content]))
+    .digest('hex');
+}
+
+/**
  * Sync a local directory to a .github or .github-private repository via PR.
  * Compares local files against the repo's default branch, and creates a PR
  * if there are differences.
@@ -1719,48 +1736,90 @@ export async function syncDotGithubRepo(octokit, org, sourceDir, repoName, dryRu
     throw error;
   }
 
-  // Compare each local file with the remote version
+  // Fetch the default branch tree once to compare all local files without one Contents API call per file.
+  let baseSha;
+  let baseTreeSha;
+  let remoteEntries;
+  try {
+    const { data: refData } = await octokit.request('GET /repos/{owner}/{repo}/git/ref/{ref}', {
+      owner: org,
+      repo: repoName,
+      ref: `heads/${defaultBranch}`
+    });
+    baseSha = refData.object.sha;
+
+    const { data: commitData } = await octokit.request('GET /repos/{owner}/{repo}/git/commits/{commit_sha}', {
+      owner: org,
+      repo: repoName,
+      commit_sha: baseSha
+    });
+    baseTreeSha = commitData.tree.sha;
+
+    const { data: treeData } = await octokit.request('GET /repos/{owner}/{repo}/git/trees/{tree_sha}', {
+      owner: org,
+      repo: repoName,
+      tree_sha: baseTreeSha,
+      recursive: '1'
+    });
+
+    if (treeData.truncated) {
+      core.warning(`  ⚠️  Failed to compare ${org}/${repoName}: repository tree response was truncated`);
+      subResults.push(
+        createSubResult(
+          kindLabel,
+          SubResultStatus.WARNING,
+          `Repository tree for ${org}/${repoName} is too large to compare safely`
+        )
+      );
+      return { subResults, failed: true };
+    }
+
+    remoteEntries = treeData.tree || [];
+  } catch (error) {
+    core.warning(`  ⚠️  Failed to fetch repository tree for ${org}/${repoName}: ${error.message}`);
+    subResults.push(
+      createSubResult(
+        kindLabel,
+        SubResultStatus.WARNING,
+        `Failed to fetch repository tree for ${org}/${repoName}: ${error.message}`
+      )
+    );
+    return { subResults, failed: true };
+  }
+
+  const remoteEntriesByPath = new Map(remoteEntries.map(entry => [entry.path, entry]));
   const changedFiles = [];
 
   for (const filePath of localFiles) {
     const localContent = fs.readFileSync(path.join(sourceDir, filePath));
     const localBase64 = localContent.toString('base64');
+    const localSha = calculateGitBlobSha(localContent);
+    const remoteEntry = remoteEntriesByPath.get(filePath);
 
-    let remoteSha = null;
-    let remoteBase64 = null;
-    try {
-      const { data } = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
-        owner: org,
-        repo: repoName,
-        path: filePath,
-        ref: defaultBranch
-      });
-      remoteSha = data.sha;
-      remoteBase64 = data.content ? data.content.replace(/\n/g, '') : '';
-    } catch (error) {
-      if (error.status !== 404) {
-        core.warning(`  ⚠️  Failed to fetch "${filePath}" from ${org}/${repoName}: ${error.message}`);
-        subResults.push(
-          createSubResult(
-            kindLabel,
-            SubResultStatus.WARNING,
-            `Failed to fetch "${filePath}" from ${org}/${repoName}: ${error.message}`
-          )
-        );
-        hasFailed = true;
-        continue;
-      }
-      // 404 means file doesn't exist remotely — it will be created
+    if (remoteEntry && (remoteEntry.type !== 'blob' || remoteEntry.mode === '120000')) {
+      const remoteType = remoteEntry.mode === '120000' ? 'symlink' : remoteEntry.type;
+      core.warning(`  ⚠️  Cannot sync "${filePath}" to ${org}/${repoName}: remote path is a ${remoteType}, not a file`);
+      subResults.push(
+        createSubResult(
+          kindLabel,
+          SubResultStatus.WARNING,
+          `Cannot sync "${filePath}" to ${org}/${repoName}: remote path is a ${remoteType}, not a file`
+        )
+      );
+      hasFailed = true;
+      continue;
     }
 
-    if (localBase64 !== remoteBase64) {
-      changedFiles.push({ path: filePath, content: localBase64, sha: remoteSha });
+    if (localSha !== remoteEntry?.sha) {
+      changedFiles.push({ path: filePath, content: localBase64, sha: remoteEntry?.sha || null });
     }
   }
 
   if (changedFiles.length === 0) {
-    core.info(`  ✅ ${org}/${repoName} is already up to date`);
-    return { subResults, failed: false };
+    if (!hasFailed) {
+      core.info(`  ✅ ${org}/${repoName} is already up to date`);
+    }
+    return { subResults, failed: hasFailed };
   }
 
   const changesSummary = changedFiles.map(f => (f.sha ? `update ${f.path}` : `create ${f.path}`)).join(', ');
@@ -1779,35 +1838,41 @@ export async function syncDotGithubRepo(octokit, org, sourceDir, repoName, dryRu
 
   // Create a PR with the changes
   try {
-    // Get the SHA of the default branch HEAD
-    const { data: refData } = await octokit.request('GET /repos/{owner}/{repo}/git/ref/{ref}', {
+    const branchName = `bulk-org-settings-sync/${Date.now()}`;
+    const tree = [];
+
+    // Upload changed file blobs, then create one tree/commit/ref for a single-commit PR.
+    for (const file of changedFiles) {
+      const { data: blob } = await octokit.request('POST /repos/{owner}/{repo}/git/blobs', {
+        owner: org,
+        repo: repoName,
+        content: file.content,
+        encoding: 'base64'
+      });
+      tree.push({ path: file.path, mode: '100644', type: 'blob', sha: blob.sha });
+    }
+
+    const { data: newTree } = await octokit.request('POST /repos/{owner}/{repo}/git/trees', {
       owner: org,
       repo: repoName,
-      ref: `heads/${defaultBranch}`
+      base_tree: baseTreeSha,
+      tree
     });
-    const baseSha = refData.object.sha;
 
-    // Create a new branch
-    const branchName = `bulk-org-settings-sync/${Date.now()}`;
+    const { data: commit } = await octokit.request('POST /repos/{owner}/{repo}/git/commits', {
+      owner: org,
+      repo: repoName,
+      message: `Sync ${repoName} files from organization settings`,
+      tree: newTree.sha,
+      parents: [baseSha]
+    });
+
     await octokit.request('POST /repos/{owner}/{repo}/git/refs', {
       owner: org,
       repo: repoName,
       ref: `refs/heads/${branchName}`,
-      sha: baseSha
+      sha: commit.sha
     });
-
-    // Commit each file to the new branch
-    for (const file of changedFiles) {
-      await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
-        owner: org,
-        repo: repoName,
-        path: file.path,
-        message: `Sync ${file.path} from organization settings`,
-        content: file.content,
-        branch: branchName,
-        ...(file.sha ? { sha: file.sha } : {})
-      });
-    }
 
     // Create a pull request
     const { data: pr } = await octokit.request('POST /repos/{owner}/{repo}/pulls', {
