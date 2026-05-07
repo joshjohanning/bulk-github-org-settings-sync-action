@@ -79,6 +79,20 @@ inputs:
     description: 'Delete unmanaged rulesets'
   dry-run:
     description: 'Dry run mode'
+  org-name:
+    description: 'Organization display name'
+  org-description:
+    description: 'Organization description'
+  org-company:
+    description: 'Company name'
+  org-location:
+    description: 'Location'
+  org-email:
+    description: 'Publicly visible email'
+  org-twitter-username:
+    description: 'Twitter/X username'
+  org-blog:
+    description: 'Blog/website URL'
 `;
 
 // Per-test mock file content and YAML results
@@ -172,6 +186,11 @@ const {
   getMemberPrivilegesFromInputs,
   syncMemberPrivileges,
   MEMBER_PRIVILEGE_SETTINGS,
+  ORG_PROFILE_SETTINGS,
+  parseOrgProfile,
+  getOrgProfileFromInputs,
+  mergeOrgProfile,
+  syncOrgProfile,
   validateOrgConfig,
   resetKnownOrgConfigKeysCache,
   resolveFilePath,
@@ -2962,6 +2981,202 @@ orgs:
         default_repository_permission: 'read',
         members_can_fork_private_repositories: true // per-org override
       });
+    });
+  });
+
+  // ─── Organization Profile ──────────────────────────────────────────────
+
+  describe('ORG_PROFILE_SETTINGS', () => {
+    test('should have 7 settings defined', () => {
+      expect(ORG_PROFILE_SETTINGS.size).toBe(7);
+    });
+
+    test('should have unique API keys', () => {
+      const apiKeys = new Set();
+      for (const [, setting] of ORG_PROFILE_SETTINGS) {
+        expect(apiKeys.has(setting.apiKey)).toBe(false);
+        apiKeys.add(setting.apiKey);
+      }
+    });
+  });
+
+  describe('parseOrgProfile', () => {
+    test('should parse valid string settings', () => {
+      const result = parseOrgProfile({
+        'org-name': 'My Org',
+        'org-description': 'A test org',
+        'org-blog': 'https://example.com'
+      });
+      expect(result).toEqual({
+        name: 'My Org',
+        description: 'A test org',
+        blog: 'https://example.com'
+      });
+    });
+
+    test('should throw for unknown key', () => {
+      expect(() => parseOrgProfile({ 'org-name': 'test', 'unknown-key': 'val' })).toThrow(
+        /Unknown org profile key "unknown-key"/
+      );
+    });
+
+    test('should throw for non-string value', () => {
+      expect(() => parseOrgProfile({ 'org-name': 123 })).toThrow(/must be a string/);
+    });
+
+    test('should throw for non-object config', () => {
+      expect(() => parseOrgProfile('not-an-object')).toThrow(/expected a key-value map/);
+    });
+
+    test('should include org context in error messages', () => {
+      expect(() => parseOrgProfile({ 'bad-key': 'val' }, 'my-org')).toThrow(/for org "my-org"/);
+    });
+  });
+
+  describe('getOrgProfileFromInputs', () => {
+    test('should return null when no org profile inputs are set', () => {
+      mockCore.getInput.mockReturnValue('');
+      const result = getOrgProfileFromInputs();
+      expect(result).toBeNull();
+    });
+
+    test('should parse string inputs', () => {
+      mockCore.getInput.mockImplementation(name => {
+        if (name === 'org-name') return 'My Org';
+        if (name === 'org-email') return 'org@example.com';
+        return '';
+      });
+      const result = getOrgProfileFromInputs();
+      expect(result).toEqual({
+        name: 'My Org',
+        email: 'org@example.com'
+      });
+    });
+  });
+
+  describe('mergeOrgProfile', () => {
+    test('should merge base and override settings', () => {
+      const result = mergeOrgProfile({ name: 'Base', blog: 'https://base.com' }, { name: 'Override' });
+      expect(result).toEqual({ name: 'Override', blog: 'https://base.com' });
+    });
+
+    test('should return base when overrides are empty', () => {
+      const result = mergeOrgProfile({ name: 'Base' }, {});
+      expect(result).toEqual({ name: 'Base' });
+    });
+  });
+
+  describe('syncOrgProfile', () => {
+    test('should detect and apply changes', async () => {
+      mockRequest.mockResolvedValueOnce({
+        data: { name: 'Old Name', description: 'Old desc', blog: '' }
+      });
+      mockRequest.mockResolvedValueOnce({ data: {} });
+
+      const result = await syncOrgProfile(
+        mockOctokit,
+        'test-org',
+        { name: 'New Name', description: 'New desc' },
+        false
+      );
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].status).toBe('changed');
+      expect(mockRequest).toHaveBeenCalledWith('PATCH /orgs/{org}', {
+        org: 'test-org',
+        name: 'New Name',
+        description: 'New desc'
+      });
+    });
+
+    test('should detect no changes for identical settings', async () => {
+      mockRequest.mockResolvedValueOnce({
+        data: { name: 'Same', description: 'Same desc' }
+      });
+
+      const result = await syncOrgProfile(mockOctokit, 'test-org', { name: 'Same', description: 'Same desc' }, false);
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults).toHaveLength(0);
+      expect(mockRequest).toHaveBeenCalledTimes(1); // only GET
+    });
+
+    test('should handle dry-run mode without making API changes', async () => {
+      mockRequest.mockResolvedValueOnce({
+        data: { name: 'Old Name' }
+      });
+
+      const result = await syncOrgProfile(mockOctokit, 'test-org', { name: 'New Name' }, true);
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].status).toBe('changed');
+      expect(mockRequest).toHaveBeenCalledTimes(1); // only GET, no PATCH
+    });
+
+    test('should handle GET API error gracefully', async () => {
+      mockRequest.mockRejectedValueOnce(new Error('Not found'));
+
+      const result = await syncOrgProfile(mockOctokit, 'test-org', { name: 'New' }, false);
+
+      expect(result.failed).toBe(true);
+      expect(result.subResults[0].status).toBe('warning');
+    });
+
+    test('should handle PATCH API error gracefully', async () => {
+      mockRequest.mockResolvedValueOnce({ data: { name: 'Old' } });
+      mockRequest.mockRejectedValueOnce(new Error('Forbidden'));
+
+      const result = await syncOrgProfile(mockOctokit, 'test-org', { name: 'New' }, false);
+
+      expect(result.failed).toBe(true);
+      expect(result.subResults[0].status).toBe('warning');
+    });
+  });
+
+  describe('parseOrganizations with org profile inputs', () => {
+    test('should use org profile from inputs', () => {
+      const inputProfile = { name: 'My Org', blog: 'https://example.com' };
+
+      const result = parseOrganizations('org1', '', '', [], false, '', null, inputProfile);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].orgProfile).toEqual({
+        name: 'My Org',
+        blog: 'https://example.com'
+      });
+    });
+
+    test('should layer per-org overrides on top of inputs', () => {
+      const inputProfile = { name: 'Base Name', blog: 'https://base.com' };
+
+      const orgsYaml = `orgs:
+  - org: my-org
+  - org: my-other-org
+    org-profile:
+      org-name: Override Name
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+
+      const result = parseOrganizations('', '/mock/orgs.yml', '', [], false, '', null, inputProfile);
+
+      expect(result).toHaveLength(2);
+      expect(result[0].orgProfile).toEqual({
+        name: 'Base Name',
+        blog: 'https://base.com'
+      });
+      expect(result[1].orgProfile).toEqual({
+        name: 'Override Name',
+        blog: 'https://base.com'
+      });
+    });
+  });
+
+  describe('validateOrgConfig with org-profile', () => {
+    test('should not warn for valid org-profile key', () => {
+      validateOrgConfig({ org: 'my-org', 'org-profile': { 'org-name': 'Test' } }, 'my-org');
+      expect(mockCore.warning).not.toHaveBeenCalled();
     });
   });
 });

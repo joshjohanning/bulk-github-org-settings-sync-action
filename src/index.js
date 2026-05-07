@@ -45,7 +45,8 @@ function getKnownOrgConfigKeys() {
   // 'custom-properties' is inline property definitions (YAML-only, not an action input)
   // 'issue-types' is inline issue type definitions (YAML-only, not an action input)
   // 'member-privileges' is inline member privilege overrides (YAML-only, not an action input)
-  const keys = new Set(['org', 'custom-properties', 'issue-types', 'member-privileges']);
+  // 'org-profile' is inline organization profile overrides (YAML-only, not an action input)
+  const keys = new Set(['org', 'custom-properties', 'issue-types', 'member-privileges', 'org-profile']);
 
   try {
     const __filename = url.fileURLToPath(import.meta.url);
@@ -140,6 +141,21 @@ export const MEMBER_PRIVILEGE_SETTINGS = new Map([
     'display-commenter-full-name-setting-enabled',
     { apiKey: 'display_commenter_full_name_setting_enabled', type: 'boolean' }
   ]
+]);
+
+/**
+ * Supported organization profile settings.
+ * Maps YAML key (hyphenated) to API key (snake_case) and expected type.
+ * @type {Map<string, { apiKey: string, type: string }>}
+ */
+export const ORG_PROFILE_SETTINGS = new Map([
+  ['org-name', { apiKey: 'name', type: 'string' }],
+  ['org-description', { apiKey: 'description', type: 'string' }],
+  ['org-company', { apiKey: 'company', type: 'string' }],
+  ['org-location', { apiKey: 'location', type: 'string' }],
+  ['org-email', { apiKey: 'email', type: 'string' }],
+  ['org-twitter-username', { apiKey: 'twitter_username', type: 'string' }],
+  ['org-blog', { apiKey: 'blog', type: 'string' }]
 ]);
 
 /**
@@ -368,7 +384,8 @@ function formatSubResultSummary(subResult) {
  * @param {boolean} [deleteUnmanagedRulesets] - Whether to delete rulesets not in config
  * @param {string} [issueTypesFile] - Path to issue types YAML file (base for all orgs)
  * @param {Object|null} [memberPrivilegesFromInputs] - Member privileges parsed from action inputs (base for all orgs)
- * @returns {Array<{ org: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, issueTypes?: Array, memberPrivileges?: Object }>} Parsed org configs
+ * @param {Object|null} [orgProfileFromInputs] - Org profile parsed from action inputs (base for all orgs)
+ * @returns {Array<{ org: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, issueTypes?: Array, memberPrivileges?: Object, orgProfile?: Object }>} Parsed org configs
  */
 export function parseOrganizations(
   organizationsInput,
@@ -377,7 +394,8 @@ export function parseOrganizations(
   rulesetsFiles,
   deleteUnmanagedRulesets,
   issueTypesFile,
-  memberPrivilegesFromInputs
+  memberPrivilegesFromInputs,
+  orgProfileFromInputs
 ) {
   // Load base custom properties from separate file (applies to all orgs)
   let baseCustomProperties = null;
@@ -395,6 +413,12 @@ export function parseOrganizations(
   let baseMemberPrivileges = null;
   if (memberPrivilegesFromInputs) {
     baseMemberPrivileges = { ...memberPrivilegesFromInputs };
+  }
+
+  // Load base org profile from direct action inputs.
+  let baseOrgProfile = null;
+  if (orgProfileFromInputs) {
+    baseOrgProfile = { ...orgProfileFromInputs };
   }
 
   if (organizationsFile) {
@@ -460,6 +484,11 @@ export function parseOrganizations(
           orgConfig.memberPrivileges || {}
         );
       }
+
+      // Per-org org-profile layer on top of base org profile
+      if (baseOrgProfile || orgConfig.orgProfile) {
+        orgConfig.orgProfile = mergeOrgProfile(baseOrgProfile || {}, orgConfig.orgProfile || {});
+      }
     }
 
     return orgConfigs;
@@ -484,7 +513,8 @@ export function parseOrganizations(
     ...(baseIssueTypes ? { issueTypes: baseIssueTypes } : {}),
     ...(rulesetsFiles && rulesetsFiles.length > 0 ? { rulesetsFiles } : {}),
     ...(deleteUnmanagedRulesets !== undefined ? { deleteUnmanagedRulesets } : {}),
-    ...(baseMemberPrivileges ? { memberPrivileges: baseMemberPrivileges } : {})
+    ...(baseMemberPrivileges ? { memberPrivileges: baseMemberPrivileges } : {}),
+    ...(baseOrgProfile ? { orgProfile: baseOrgProfile } : {})
   }));
 }
 
@@ -536,6 +566,18 @@ export function mergeIssueTypes(baseIssueTypes, orgIssueTypes) {
  */
 export function mergeMemberPrivileges(basePrivileges, orgPrivileges) {
   return { ...basePrivileges, ...orgPrivileges };
+}
+
+/**
+ * Merge base org profile with per-org overrides.
+ * Per-org settings override base settings with the same key.
+ * Base settings not overridden are preserved.
+ * @param {Object} baseProfile - Base org profile settings (API-keyed)
+ * @param {Object} orgProfile - Per-org org profile overrides (API-keyed)
+ * @returns {Object} Merged profile
+ */
+export function mergeOrgProfile(baseProfile, orgProfile) {
+  return { ...baseProfile, ...orgProfile };
 }
 
 /**
@@ -631,6 +673,10 @@ export function parseOrganizationsFile(filePath) {
 
     if (Object.prototype.hasOwnProperty.call(orgConfig, 'member-privileges')) {
       result.memberPrivileges = parseMemberPrivileges(orgConfig['member-privileges'], orgConfig.org);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'org-profile')) {
+      result.orgProfile = parseOrgProfile(orgConfig['org-profile'], orgConfig.org);
     }
 
     return result;
@@ -1098,6 +1144,61 @@ export function getMemberPrivilegesFromInputs() {
   return Object.keys(result).length > 0 ? result : null;
 }
 
+// ─── Organization Profile Parsing ───────────────────────────────────────────────
+
+/**
+ * Parse and validate an organization profile YAML config object (inline or from file).
+ * Converts YAML keys (hyphenated) to API keys (snake_case) and validates types.
+ * @param {Object} config - Raw key-value map from YAML
+ * @param {string} [context] - Context for error messages (e.g., org name)
+ * @returns {Object} Normalized profile with API keys
+ */
+export function parseOrgProfile(config, context) {
+  if (typeof config !== 'object' || config === null || Array.isArray(config)) {
+    const label = context ? ` for org "${context}"` : '';
+    throw new Error(`Invalid org-profile${label}: expected a key-value map`);
+  }
+
+  const normalized = {};
+  const label = context ? ` for org "${context}"` : '';
+
+  for (const [yamlKey, value] of Object.entries(config)) {
+    const setting = ORG_PROFILE_SETTINGS.get(yamlKey);
+    if (!setting) {
+      throw new Error(
+        `Unknown org profile key "${yamlKey}"${label}. ` +
+          `Valid keys: ${Array.from(ORG_PROFILE_SETTINGS.keys()).join(', ')}`
+      );
+    }
+
+    if (typeof value !== 'string') {
+      throw new Error(`Org profile "${yamlKey}"${label} must be a string, got "${typeof value}"`);
+    }
+
+    normalized[setting.apiKey] = value;
+  }
+
+  return normalized;
+}
+
+/**
+ * Build organization profile settings from action inputs.
+ * Reads each org profile setting from core.getInput() and returns
+ * a normalized object with API keys for any non-empty inputs.
+ * @returns {Object|null} Normalized profile with API keys, or null if no inputs set
+ */
+export function getOrgProfileFromInputs() {
+  const result = {};
+
+  for (const [yamlKey, setting] of ORG_PROFILE_SETTINGS) {
+    const raw = core.getInput(yamlKey);
+    if (raw === '') continue;
+    result[setting.apiKey] = raw;
+  }
+
+  return Object.keys(result).length > 0 ? result : null;
+}
+
 // ─── Custom Properties Sync ─────────────────────────────────────────────────────
 
 /**
@@ -1354,6 +1455,107 @@ export async function syncMemberPrivileges(octokit, org, desiredSettings, dryRun
         'member-privileges-update',
         SubResultStatus.WARNING,
         `Failed to update member privileges: ${error.message}`
+      );
+      return { subResults, failed: true };
+    }
+  }
+
+  return { subResults, failed: false };
+}
+
+// ─── Organization Profile Sync ──────────────────────────────────────────────────
+
+/**
+ * Build a reverse lookup from API key to YAML key for org profile settings.
+ * @returns {Map<string, string>}
+ */
+function buildProfileApiToYamlKeyMap() {
+  const map = new Map();
+  for (const [yamlKey, setting] of ORG_PROFILE_SETTINGS) {
+    map.set(setting.apiKey, yamlKey);
+  }
+  return map;
+}
+
+const PROFILE_API_TO_YAML_KEY = buildProfileApiToYamlKeyMap();
+
+/**
+ * Sync organization profile settings for an organization.
+ * Fetches current org settings via GET, compares with desired values,
+ * and applies a single PATCH if any settings differ.
+ *
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} org - Organization name
+ * @param {Object} desiredSettings - Desired org profile settings (API-keyed)
+ * @param {boolean} dryRun - Preview mode
+ * @returns {Promise<Object>} Result object with subResults
+ */
+export async function syncOrgProfile(octokit, org, desiredSettings, dryRun) {
+  const subResults = [];
+  const wouldPrefix = dryRun ? 'Would ' : '';
+
+  // Fetch current organization settings
+  let currentOrg;
+  try {
+    const { data } = await octokit.request('GET /orgs/{org}', { org });
+    currentOrg = data;
+  } catch (error) {
+    core.warning(`  ⚠️  Failed to fetch organization settings: ${error.message}`);
+    subResults.push(
+      createSubResult(
+        'org-profile-update',
+        SubResultStatus.WARNING,
+        `Failed to fetch organization settings: ${error.message}`
+      )
+    );
+    return { subResults, failed: true };
+  }
+
+  // Compare each desired setting with current
+  const patch = {};
+  const changes = [];
+
+  for (const [apiKey, desiredValue] of Object.entries(desiredSettings)) {
+    const currentValue = currentOrg[apiKey] || '';
+    const yamlKey = PROFILE_API_TO_YAML_KEY.get(apiKey) || apiKey;
+
+    if (currentValue !== desiredValue) {
+      patch[apiKey] = desiredValue;
+      changes.push(`${yamlKey}: ${currentValue} → ${desiredValue}`);
+    }
+  }
+
+  if (changes.length === 0) {
+    core.info(`  ✅ Organization profile unchanged`);
+    return { subResults, failed: false };
+  }
+
+  // Log changes
+  for (const change of changes) {
+    core.info(`  🏢 ${wouldPrefix}Update ${change}`);
+  }
+
+  subResults.push(
+    createSubResult(
+      'org-profile-update',
+      SubResultStatus.CHANGED,
+      `${wouldPrefix}update ${changes.length} profile field(s): ${changes.join(', ')}`
+    )
+  );
+
+  // Apply the patch
+  if (!dryRun) {
+    try {
+      await octokit.request('PATCH /orgs/{org}', {
+        org,
+        ...patch
+      });
+    } catch (error) {
+      core.warning(`  ⚠️  Failed to update organization profile: ${error.message}`);
+      subResults[subResults.length - 1] = createSubResult(
+        'org-profile-update',
+        SubResultStatus.WARNING,
+        `Failed to update organization profile: ${error.message}`
       );
       return { subResults, failed: true };
     }
@@ -1638,6 +1840,7 @@ export async function run() {
     const issueTypesFile = core.getInput('issue-types-file');
     const deleteUnmanagedIssueTypes = getBooleanInput('delete-unmanaged-issue-types') ?? false;
     const memberPrivilegesFromInputs = getMemberPrivilegesFromInputs();
+    const orgProfileFromInputs = getOrgProfileFromInputs();
     const dryRun = getBooleanInput('dry-run') ?? false;
 
     core.info('Starting Bulk GitHub Organization Settings Sync Action...');
@@ -1658,7 +1861,8 @@ export async function run() {
       rulesetsFiles,
       deleteUnmanagedRulesets,
       issueTypesFile,
-      memberPrivilegesFromInputs
+      memberPrivilegesFromInputs,
+      orgProfileFromInputs
     );
 
     // Check that at least one setting type is specified
@@ -1666,12 +1870,14 @@ export async function run() {
     const hasRulesets = orgList.some(o => o.rulesetsFiles && o.rulesetsFiles.length > 0);
     const hasIssueTypes = orgList.some(o => o.issueTypes && o.issueTypes.length > 0);
     const hasMemberPrivileges = orgList.some(o => o.memberPrivileges && Object.keys(o.memberPrivileges).length > 0);
-    if (!hasCustomProperties && !hasRulesets && !hasIssueTypes && !hasMemberPrivileges) {
+    const hasOrgProfileSettings = orgList.some(o => o.orgProfile && Object.keys(o.orgProfile).length > 0);
+    if (!hasCustomProperties && !hasRulesets && !hasIssueTypes && !hasMemberPrivileges && !hasOrgProfileSettings) {
       throw new Error(
         'At least one setting must be specified. Provide custom properties via ' +
           '"organizations-file" or via "organizations" + "custom-properties-file" inputs, ' +
-          'provide issue types via "issue-types-file", rulesets via "rulesets-file", or member privileges via ' +
-          'individual inputs (e.g., "default-repository-permission").'
+          'provide issue types via "issue-types-file", rulesets via "rulesets-file", member privileges via ' +
+          'individual inputs (e.g., "default-repository-permission"), or org profile via ' +
+          'individual inputs (e.g., "org-name", "org-description").'
       );
     }
 
@@ -1781,6 +1987,21 @@ export async function run() {
             result.error = result.error
               ? `${result.error}; Member privileges sync failed`
               : 'Member privileges sync failed';
+          }
+        }
+
+        // Sync organization profile
+        if (orgConfig.orgProfile && Object.keys(orgConfig.orgProfile).length > 0) {
+          const fieldCount = Object.keys(orgConfig.orgProfile).length;
+          core.info(`  🏢 Syncing organization profile (${fieldCount} field(s))...`);
+          const opResult = await syncOrgProfile(octokit, org, orgConfig.orgProfile, dryRun);
+          result.subResults.push(...opResult.subResults);
+
+          if (opResult.failed) {
+            result.success = false;
+            result.error = result.error
+              ? `${result.error}; Organization profile sync failed`
+              : 'Organization profile sync failed';
           }
         }
 

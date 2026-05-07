@@ -552,6 +552,50 @@ By default, syncing issue types will create or update the specified types, but w
 
 ---
 
+## Syncing Organization Profile
+
+Sync organization profile/branding fields across organizations. These control the public-facing identity of the organization.
+
+Set organization profile fields directly as action inputs:
+
+```yml
+- name: Sync Organization Settings
+  uses: joshjohanning/bulk-github-org-settings-sync-action@v1
+  with:
+    github-token: ${{ secrets.ORG_ADMIN_TOKEN }}
+    organizations: 'my-org'
+    org-name: 'My Organization'
+    org-description: 'Building great things'
+    org-company: 'My Company Inc.'
+    org-location: 'San Francisco, CA'
+    org-email: 'contact@myorg.com'
+    org-twitter-username: 'myorg'
+    org-blog: 'https://myorg.com'
+```
+
+**Behavior:**
+
+- Only fields included in the config are managed — omitted fields remain unchanged
+- If a field already matches the config, no API call is made
+- Fields are applied via a single `PATCH /orgs/{org}` call per organization
+
+### Per-Org Organization Profile Overrides
+
+In `orgs.yml`, use `org-profile` to override specific fields for an org:
+
+```yaml
+orgs:
+  - org: my-org
+    # inherits base org profile action inputs
+
+  - org: my-other-org
+    org-profile:
+      org-name: 'Different Name' # override base
+      org-description: 'Custom description for this org'
+```
+
+---
+
 ## Syncing Member Privileges
 
 Sync organization-level member privilege settings (repository policies) across organizations. These control what members can do within the organization, such as creating repositories, forking private repos, and managing pages.
@@ -633,6 +677,13 @@ orgs:
 | `delete-unmanaged-properties`                 | Delete custom properties not defined in the configuration file                      | No       | `false`                 |
 | `issue-types-file`                            | Path to a YAML file defining issue type definitions                                 | No       |                         |
 | `delete-unmanaged-issue-types`                | Delete issue types not defined in the configuration file                            | No       | `false`                 |
+| `org-name`                                    | Organization display name                                                           | No       |                         |
+| `org-description`                             | Organization description (max 160 chars)                                            | No       |                         |
+| `org-company`                                 | Company name                                                                        | No       |                         |
+| `org-location`                                | Location                                                                            | No       |                         |
+| `org-email`                                   | Publicly visible email                                                              | No       |                         |
+| `org-twitter-username`                        | Twitter/X username                                                                  | No       |                         |
+| `org-blog`                                    | Blog/website URL                                                                    | No       |                         |
 | `default-repository-permission`               | Default permission for org members: `read`, `write`, `admin`, `none`                | No       |                         |
 | `members-can-create-repositories`             | Whether members can create repositories                                             | No       |                         |
 | `members-can-create-public-repositories`      | Whether members can create public repositories                                      | No       |                         |

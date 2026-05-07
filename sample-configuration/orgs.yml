@@ -20,6 +20,10 @@
 # Member privileges can be defined as direct action inputs. Per-org
 # member-privileges overrides layer on top — settings with the same key
 # override the base value.
+#
+# Organization profile fields can be defined as direct action inputs. Per-org
+# org-profile overrides layer on top — fields with the same key override the
+# base value.
 
 orgs:
   # Org that inherits all base properties from custom-properties-file as-is
@@ -60,7 +64,10 @@ orgs:
     member-privileges:
       members-can-fork-private-repositories: true # Override the base setting for this org
       members-can-create-internal-repositories: true # GHEC/GHES only
-
+    # Per-org organization profile overrides (layers on top of base action inputs)
+    org-profile:
+      org-name: 'My Other Org'
+      org-description: 'Custom description for this org'
 
 # ---
 # Alternative: fully self-contained (no base custom-properties-file needed)
