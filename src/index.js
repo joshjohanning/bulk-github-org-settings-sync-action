@@ -45,7 +45,16 @@ function getKnownOrgConfigKeys() {
   // 'custom-properties' is inline property definitions (YAML-only, not an action input)
   // 'issue-types' is inline issue type definitions (YAML-only, not an action input)
   // 'member-privileges' is inline member privilege overrides (YAML-only, not an action input)
-  const keys = new Set(['org', 'custom-properties', 'issue-types', 'member-privileges']);
+  // 'custom-org-roles' is inline org role definitions (YAML-only, not an action input)
+  // 'custom-repo-roles' is inline repo role definitions (YAML-only, not an action input)
+  const keys = new Set([
+    'org',
+    'custom-properties',
+    'issue-types',
+    'member-privileges',
+    'custom-org-roles',
+    'custom-repo-roles'
+  ]);
 
   try {
     const __filename = url.fileURLToPath(import.meta.url);
@@ -107,6 +116,18 @@ const KNOWN_CUSTOM_PROPERTY_KEYS = new Set([
  * Used to warn about typos or unknown keys.
  */
 const KNOWN_ISSUE_TYPE_KEYS = new Set(['name', 'description', 'color', 'is-enabled']);
+
+/**
+ * Known keys for custom organization role definitions in the YAML file.
+ * Used to warn about typos or unknown keys.
+ */
+const KNOWN_CUSTOM_ORG_ROLE_KEYS = new Set(['name', 'description', 'permissions']);
+
+/**
+ * Known keys for custom repository role definitions in the YAML file.
+ * Used to warn about typos or unknown keys.
+ */
+const KNOWN_CUSTOM_REPO_ROLE_KEYS = new Set(['name', 'description', 'base-role', 'permissions']);
 
 /**
  * Supported member privilege settings.
@@ -228,6 +249,28 @@ export function validateOrgConfig(orgConfig, orgName) {
     }
   }
 
+  // Validate delete-unmanaged-org-roles value if present
+  if (Object.prototype.hasOwnProperty.call(orgConfig, 'delete-unmanaged-org-roles')) {
+    const val = orgConfig['delete-unmanaged-org-roles'];
+    if (typeof val !== 'boolean') {
+      core.warning(
+        `⚠️  Invalid "delete-unmanaged-org-roles" value for organization "${orgName}": ` +
+          `expected true or false, got "${val}". This setting will be ignored.`
+      );
+    }
+  }
+
+  // Validate delete-unmanaged-repo-roles value if present
+  if (Object.prototype.hasOwnProperty.call(orgConfig, 'delete-unmanaged-repo-roles')) {
+    const val = orgConfig['delete-unmanaged-repo-roles'];
+    if (typeof val !== 'boolean') {
+      core.warning(
+        `⚠️  Invalid "delete-unmanaged-repo-roles" value for organization "${orgName}": ` +
+          `expected true or false, got "${val}". This setting will be ignored.`
+      );
+    }
+  }
+
   // member-privileges is fully validated by parseMemberPrivileges(), which throws contextual errors.
 }
 
@@ -237,7 +280,13 @@ export function validateOrgConfig(orgConfig, orgName) {
  * File-path config keys that should be resolved against base-path.
  * @type {string[]}
  */
-const FILE_PATH_CONFIG_KEYS = ['custom-properties-file', 'issue-types-file', 'rulesets-file'];
+const FILE_PATH_CONFIG_KEYS = [
+  'custom-properties-file',
+  'issue-types-file',
+  'rulesets-file',
+  'custom-org-roles-file',
+  'custom-repo-roles-file'
+];
 
 /**
  * Resolve a single file path against a base path.
@@ -320,7 +369,13 @@ const SYNC_KIND_LABELS = Object.freeze({
   'member-privileges-update': 'member privileges (updated)',
   'ruleset-create': 'ruleset (created)',
   'ruleset-update': 'ruleset (updated)',
-  'ruleset-delete': 'ruleset (deleted)'
+  'ruleset-delete': 'ruleset (deleted)',
+  'custom-org-role-create': 'custom org role (created)',
+  'custom-org-role-update': 'custom org role (updated)',
+  'custom-org-role-delete': 'custom org role (deleted)',
+  'custom-repo-role-create': 'custom repo role (created)',
+  'custom-repo-role-update': 'custom repo role (updated)',
+  'custom-repo-role-delete': 'custom repo role (deleted)'
 });
 
 /**
@@ -368,7 +423,9 @@ function formatSubResultSummary(subResult) {
  * @param {boolean} [deleteUnmanagedRulesets] - Whether to delete rulesets not in config
  * @param {string} [issueTypesFile] - Path to issue types YAML file (base for all orgs)
  * @param {Object|null} [memberPrivilegesFromInputs] - Member privileges parsed from action inputs (base for all orgs)
- * @returns {Array<{ org: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, issueTypes?: Array, memberPrivileges?: Object }>} Parsed org configs
+ * @param {string} [customOrgRolesFile] - Path to custom org roles YAML file (base for all orgs)
+ * @param {string} [customRepoRolesFile] - Path to custom repo roles YAML file (base for all orgs)
+ * @returns {Array<{ org: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, issueTypes?: Array, memberPrivileges?: Object, customOrgRoles?: Array, customRepoRoles?: Array }>} Parsed org configs
  */
 export function parseOrganizations(
   organizationsInput,
@@ -377,7 +434,9 @@ export function parseOrganizations(
   rulesetsFiles,
   deleteUnmanagedRulesets,
   issueTypesFile,
-  memberPrivilegesFromInputs
+  memberPrivilegesFromInputs,
+  customOrgRolesFile,
+  customRepoRolesFile
 ) {
   // Load base custom properties from separate file (applies to all orgs)
   let baseCustomProperties = null;
@@ -395,6 +454,18 @@ export function parseOrganizations(
   let baseMemberPrivileges = null;
   if (memberPrivilegesFromInputs) {
     baseMemberPrivileges = { ...memberPrivilegesFromInputs };
+  }
+
+  // Load base custom org roles from separate file (applies to all orgs)
+  let baseCustomOrgRoles = null;
+  if (customOrgRolesFile) {
+    baseCustomOrgRoles = parseCustomOrgRolesFile(customOrgRolesFile);
+  }
+
+  // Load base custom repo roles from separate file (applies to all orgs)
+  let baseCustomRepoRoles = null;
+  if (customRepoRolesFile) {
+    baseCustomRepoRoles = parseCustomRepoRolesFile(customRepoRolesFile);
   }
 
   if (organizationsFile) {
@@ -460,6 +531,46 @@ export function parseOrganizations(
           orgConfig.memberPrivileges || {}
         );
       }
+
+      // Per-org custom-org-roles-file overrides the base for this org
+      let orgOrgRolesBase = baseCustomOrgRoles;
+      if (orgConfig.customOrgRolesFile) {
+        try {
+          orgOrgRolesBase = parseCustomOrgRolesFile(orgConfig.customOrgRolesFile);
+        } catch (error) {
+          throw new Error(
+            `Failed to parse custom org roles file "${orgConfig.customOrgRolesFile}" for organization "${orgConfig.org}": ${error.message}`,
+            { cause: error }
+          );
+        }
+      }
+
+      if (orgOrgRolesBase) {
+        orgConfig.customOrgRoles = mergeCustomRoles(orgOrgRolesBase, orgConfig.customOrgRoles || []);
+      }
+
+      // Clean up the intermediate field
+      delete orgConfig.customOrgRolesFile;
+
+      // Per-org custom-repo-roles-file overrides the base for this org
+      let orgRepoRolesBase = baseCustomRepoRoles;
+      if (orgConfig.customRepoRolesFile) {
+        try {
+          orgRepoRolesBase = parseCustomRepoRolesFile(orgConfig.customRepoRolesFile);
+        } catch (error) {
+          throw new Error(
+            `Failed to parse custom repo roles file "${orgConfig.customRepoRolesFile}" for organization "${orgConfig.org}": ${error.message}`,
+            { cause: error }
+          );
+        }
+      }
+
+      if (orgRepoRolesBase) {
+        orgConfig.customRepoRoles = mergeCustomRoles(orgRepoRolesBase, orgConfig.customRepoRoles || []);
+      }
+
+      // Clean up the intermediate field
+      delete orgConfig.customRepoRolesFile;
     }
 
     return orgConfigs;
@@ -484,7 +595,9 @@ export function parseOrganizations(
     ...(baseIssueTypes ? { issueTypes: baseIssueTypes } : {}),
     ...(rulesetsFiles && rulesetsFiles.length > 0 ? { rulesetsFiles } : {}),
     ...(deleteUnmanagedRulesets !== undefined ? { deleteUnmanagedRulesets } : {}),
-    ...(baseMemberPrivileges ? { memberPrivileges: baseMemberPrivileges } : {})
+    ...(baseMemberPrivileges ? { memberPrivileges: baseMemberPrivileges } : {}),
+    ...(baseCustomOrgRoles ? { customOrgRoles: baseCustomOrgRoles } : {}),
+    ...(baseCustomRepoRoles ? { customRepoRoles: baseCustomRepoRoles } : {})
   }));
 }
 
@@ -521,6 +634,24 @@ export function mergeIssueTypes(baseIssueTypes, orgIssueTypes) {
 
   for (const orgType of orgIssueTypes) {
     merged.set(orgType.name, { ...orgType });
+  }
+
+  return Array.from(merged.values());
+}
+
+/**
+ * Merge base custom roles with per-org overrides.
+ * Per-org roles override base roles with the same name.
+ * Base roles not overridden are preserved.
+ * @param {Array<Object>} baseRoles - Base custom role definitions
+ * @param {Array<Object>} orgRoles - Per-org custom role overrides
+ * @returns {Array<Object>} Merged roles
+ */
+export function mergeCustomRoles(baseRoles, orgRoles) {
+  const merged = new Map(baseRoles.map(r => [r.name, { ...r }]));
+
+  for (const orgRole of orgRoles) {
+    merged.set(orgRole.name, { ...orgRole });
   }
 
   return Array.from(merged.values());
@@ -631,6 +762,50 @@ export function parseOrganizationsFile(filePath) {
 
     if (Object.prototype.hasOwnProperty.call(orgConfig, 'member-privileges')) {
       result.memberPrivileges = parseMemberPrivileges(orgConfig['member-privileges'], orgConfig.org);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'custom-org-roles-file')) {
+      const rolesFile = orgConfig['custom-org-roles-file'];
+      if (typeof rolesFile !== 'string' || rolesFile.trim() === '') {
+        throw new Error(`Invalid "custom-org-roles-file" for org "${orgConfig.org}": expected a non-empty string`);
+      }
+      result.customOrgRolesFile = rolesFile.trim();
+    }
+
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'custom-org-roles')) {
+      if (!Array.isArray(orgConfig['custom-org-roles'])) {
+        throw new Error(`Invalid "custom-org-roles" for org "${orgConfig.org}": expected an array`);
+      }
+      result.customOrgRoles = normalizeCustomOrgRoles(orgConfig['custom-org-roles']);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'delete-unmanaged-org-roles')) {
+      const val = orgConfig['delete-unmanaged-org-roles'];
+      if (typeof val === 'boolean') {
+        result.deleteUnmanagedOrgRoles = val;
+      }
+    }
+
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'custom-repo-roles-file')) {
+      const rolesFile = orgConfig['custom-repo-roles-file'];
+      if (typeof rolesFile !== 'string' || rolesFile.trim() === '') {
+        throw new Error(`Invalid "custom-repo-roles-file" for org "${orgConfig.org}": expected a non-empty string`);
+      }
+      result.customRepoRolesFile = rolesFile.trim();
+    }
+
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'custom-repo-roles')) {
+      if (!Array.isArray(orgConfig['custom-repo-roles'])) {
+        throw new Error(`Invalid "custom-repo-roles" for org "${orgConfig.org}": expected an array`);
+      }
+      result.customRepoRoles = normalizeCustomRepoRoles(orgConfig['custom-repo-roles']);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'delete-unmanaged-repo-roles')) {
+      const val = orgConfig['delete-unmanaged-repo-roles'];
+      if (typeof val === 'boolean') {
+        result.deleteUnmanagedRepoRoles = val;
+      }
     }
 
     return result;
@@ -997,6 +1172,444 @@ export async function syncIssueTypes(octokit, org, desiredIssueTypes, deleteUnma
             core.warning(`  ⚠️  Failed to delete issue type "${existing.name}": ${error.message}`);
             subResults[subResults.length - 1] = createSubResult(
               'issue-type-delete',
+              SubResultStatus.WARNING,
+              `Failed to delete "${existing.name}": ${error.message}`
+            );
+          }
+        }
+      }
+    }
+  }
+
+  return { subResults, failed: hasFailed };
+}
+
+// ─── Custom Organization Roles Parsing & Sync ───────────────────────────────────
+
+/**
+ * Parse a standalone custom organization roles YAML file.
+ * @param {string} filePath - Path to the YAML file
+ * @returns {Array<Object>} Normalized custom org role definitions
+ */
+export function parseCustomOrgRolesFile(filePath) {
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`Custom organization roles file not found: ${filePath}`);
+  }
+
+  const content = fs.readFileSync(filePath, 'utf8');
+  const roles = yaml.load(content);
+
+  if (!Array.isArray(roles)) {
+    throw new Error(`Invalid custom organization roles file format: expected an array in ${filePath}`);
+  }
+
+  return normalizeCustomOrgRoles(roles);
+}
+
+/**
+ * Normalize custom organization role definitions from YAML format to API format.
+ * @param {Array<Object>} roles - Custom org role definitions from YAML
+ * @returns {Array<Object>} Normalized roles
+ */
+export function normalizeCustomOrgRoles(roles) {
+  return roles.map((role, index) => {
+    if (typeof role !== 'object' || role === null || Array.isArray(role)) {
+      throw new Error(`Custom organization role entry at index ${index} must be a key-value map`);
+    }
+    if (!role.name) {
+      throw new Error('Each custom organization role must have a "name" field');
+    }
+    if (!role.permissions || !Array.isArray(role.permissions) || role.permissions.length === 0) {
+      throw new Error(`Custom organization role "${role.name}" must have a non-empty "permissions" array`);
+    }
+
+    // Validate known keys
+    for (const key of Object.keys(role)) {
+      if (!KNOWN_CUSTOM_ORG_ROLE_KEYS.has(key)) {
+        core.warning(
+          `⚠️  Unknown key "${key}" found for custom organization role "${role.name}". ` +
+            `This key may not exist or may have a typo.`
+        );
+      }
+    }
+
+    return {
+      name: role.name,
+      description: role.description || null,
+      permissions: role.permissions.map(p => String(p))
+    };
+  });
+}
+
+/**
+ * Compare two custom organization role definitions to check if they differ.
+ * @param {Object} existing - Current role from API
+ * @param {Object} desired - Desired role from config
+ * @returns {{ changed: boolean, changes: Array<string> }}
+ */
+export function compareCustomOrgRole(existing, desired) {
+  const changes = [];
+
+  const existingDesc = existing.description || null;
+  const desiredDesc = desired.description || null;
+  if (existingDesc !== desiredDesc) {
+    changes.push(`description updated`);
+  }
+
+  const existingPerms = [...(existing.permissions || [])].sort();
+  const desiredPerms = [...(desired.permissions || [])].sort();
+  if (JSON.stringify(existingPerms) !== JSON.stringify(desiredPerms)) {
+    changes.push(`permissions updated`);
+  }
+
+  return { changed: changes.length > 0, changes };
+}
+
+/**
+ * Sync custom organization role definitions for an organization.
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} org - Organization name
+ * @param {Array<Object>} desiredRoles - Desired custom org role definitions
+ * @param {boolean} deleteUnmanaged - Whether to delete roles not in config
+ * @param {boolean} dryRun - Preview mode
+ * @returns {Promise<Object>} Result object with subResults
+ */
+export async function syncCustomOrgRoles(octokit, org, desiredRoles, deleteUnmanaged, dryRun) {
+  const subResults = [];
+  const wouldPrefix = dryRun ? 'Would ' : '';
+  let hasFailed = false;
+
+  // Fetch current custom org roles
+  let existingRoles;
+  try {
+    const { data } = await octokit.request('GET /orgs/{org}/organization-roles', { org });
+    existingRoles = data.roles || [];
+  } catch (error) {
+    if (error.status === 404) {
+      existingRoles = [];
+    } else {
+      throw error;
+    }
+  }
+
+  const existingMap = new Map(existingRoles.map(r => [r.name, r]));
+  const desiredMap = new Map(desiredRoles.map(r => [r.name, r]));
+
+  // Determine creates and updates
+  for (const desired of desiredRoles) {
+    const existing = existingMap.get(desired.name);
+
+    if (!existing) {
+      // New role
+      core.info(`  🆕 ${wouldPrefix}Create custom org role: ${desired.name}`);
+      subResults.push(
+        createSubResult('custom-org-role-create', SubResultStatus.CHANGED, `${wouldPrefix}create "${desired.name}"`)
+      );
+
+      if (!dryRun) {
+        try {
+          await octokit.request('POST /orgs/{org}/organization-roles', {
+            org,
+            name: desired.name,
+            ...(desired.description != null ? { description: desired.description } : {}),
+            permissions: desired.permissions
+          });
+        } catch (error) {
+          hasFailed = true;
+          core.warning(`  ⚠️  Failed to create custom org role "${desired.name}": ${error.message}`);
+          subResults[subResults.length - 1] = createSubResult(
+            'custom-org-role-create',
+            SubResultStatus.WARNING,
+            `Failed to create "${desired.name}": ${error.message}`
+          );
+        }
+      }
+    } else {
+      // Check for updates
+      const { changed, changes } = compareCustomOrgRole(existing, desired);
+      if (changed) {
+        core.info(`  📝 ${wouldPrefix}Update custom org role: ${desired.name} (${changes.join(', ')})`);
+        subResults.push(
+          createSubResult(
+            'custom-org-role-update',
+            SubResultStatus.CHANGED,
+            `${wouldPrefix}update "${desired.name}" (${changes.join(', ')})`
+          )
+        );
+
+        if (!dryRun) {
+          try {
+            await octokit.request('PATCH /orgs/{org}/organization-roles/{role_id}', {
+              org,
+              role_id: existing.id,
+              name: desired.name,
+              ...(desired.description != null ? { description: desired.description } : {}),
+              permissions: desired.permissions
+            });
+          } catch (error) {
+            hasFailed = true;
+            core.warning(`  ⚠️  Failed to update custom org role "${desired.name}": ${error.message}`);
+            subResults[subResults.length - 1] = createSubResult(
+              'custom-org-role-update',
+              SubResultStatus.WARNING,
+              `Failed to update "${desired.name}": ${error.message}`
+            );
+          }
+        }
+      } else {
+        core.info(`  ✅ Custom org role unchanged: ${desired.name}`);
+      }
+    }
+  }
+
+  // Determine and apply deletions
+  if (deleteUnmanaged) {
+    for (const existing of existingRoles) {
+      if (!desiredMap.has(existing.name)) {
+        core.info(`  🗑️ ${wouldPrefix}Delete custom org role: ${existing.name}`);
+        subResults.push(
+          createSubResult('custom-org-role-delete', SubResultStatus.CHANGED, `${wouldPrefix}delete "${existing.name}"`)
+        );
+
+        if (!dryRun) {
+          try {
+            await octokit.request('DELETE /orgs/{org}/organization-roles/{role_id}', {
+              org,
+              role_id: existing.id
+            });
+          } catch (error) {
+            hasFailed = true;
+            core.warning(`  ⚠️  Failed to delete custom org role "${existing.name}": ${error.message}`);
+            subResults[subResults.length - 1] = createSubResult(
+              'custom-org-role-delete',
+              SubResultStatus.WARNING,
+              `Failed to delete "${existing.name}": ${error.message}`
+            );
+          }
+        }
+      }
+    }
+  }
+
+  return { subResults, failed: hasFailed };
+}
+
+// ─── Custom Repository Roles Parsing & Sync ─────────────────────────────────────
+
+/**
+ * Parse a standalone custom repository roles YAML file.
+ * @param {string} filePath - Path to the YAML file
+ * @returns {Array<Object>} Normalized custom repo role definitions
+ */
+export function parseCustomRepoRolesFile(filePath) {
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`Custom repository roles file not found: ${filePath}`);
+  }
+
+  const content = fs.readFileSync(filePath, 'utf8');
+  const roles = yaml.load(content);
+
+  if (!Array.isArray(roles)) {
+    throw new Error(`Invalid custom repository roles file format: expected an array in ${filePath}`);
+  }
+
+  return normalizeCustomRepoRoles(roles);
+}
+
+/**
+ * Normalize custom repository role definitions from YAML format to API format.
+ * @param {Array<Object>} roles - Custom repo role definitions from YAML
+ * @returns {Array<Object>} Normalized roles
+ */
+export function normalizeCustomRepoRoles(roles) {
+  const validBaseRoles = ['read', 'triage', 'write', 'maintain'];
+
+  return roles.map((role, index) => {
+    if (typeof role !== 'object' || role === null || Array.isArray(role)) {
+      throw new Error(`Custom repository role entry at index ${index} must be a key-value map`);
+    }
+    if (!role.name) {
+      throw new Error('Each custom repository role must have a "name" field');
+    }
+    if (!role['base-role']) {
+      throw new Error(`Custom repository role "${role.name}" must have a "base-role" field`);
+    }
+    if (!validBaseRoles.includes(role['base-role'])) {
+      throw new Error(
+        `Custom repository role "${role.name}" has invalid base-role "${role['base-role']}". ` +
+          `Valid values: ${validBaseRoles.join(', ')}`
+      );
+    }
+    if (!role.permissions || !Array.isArray(role.permissions) || role.permissions.length === 0) {
+      throw new Error(`Custom repository role "${role.name}" must have a non-empty "permissions" array`);
+    }
+
+    // Validate known keys
+    for (const key of Object.keys(role)) {
+      if (!KNOWN_CUSTOM_REPO_ROLE_KEYS.has(key)) {
+        core.warning(
+          `⚠️  Unknown key "${key}" found for custom repository role "${role.name}". ` +
+            `This key may not exist or may have a typo.`
+        );
+      }
+    }
+
+    return {
+      name: role.name,
+      description: role.description || null,
+      base_role: role['base-role'],
+      permissions: role.permissions.map(p => String(p))
+    };
+  });
+}
+
+/**
+ * Compare two custom repository role definitions to check if they differ.
+ * @param {Object} existing - Current role from API
+ * @param {Object} desired - Desired role from config
+ * @returns {{ changed: boolean, changes: Array<string> }}
+ */
+export function compareCustomRepoRole(existing, desired) {
+  const changes = [];
+
+  const existingDesc = existing.description || null;
+  const desiredDesc = desired.description || null;
+  if (existingDesc !== desiredDesc) {
+    changes.push(`description updated`);
+  }
+
+  if ((existing.base_role || null) !== (desired.base_role || null)) {
+    changes.push(`base_role: ${existing.base_role} → ${desired.base_role}`);
+  }
+
+  const existingPerms = [...(existing.permissions || [])].sort();
+  const desiredPerms = [...(desired.permissions || [])].sort();
+  if (JSON.stringify(existingPerms) !== JSON.stringify(desiredPerms)) {
+    changes.push(`permissions updated`);
+  }
+
+  return { changed: changes.length > 0, changes };
+}
+
+/**
+ * Sync custom repository role definitions for an organization.
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} org - Organization name
+ * @param {Array<Object>} desiredRoles - Desired custom repo role definitions
+ * @param {boolean} deleteUnmanaged - Whether to delete roles not in config
+ * @param {boolean} dryRun - Preview mode
+ * @returns {Promise<Object>} Result object with subResults
+ */
+export async function syncCustomRepoRoles(octokit, org, desiredRoles, deleteUnmanaged, dryRun) {
+  const subResults = [];
+  const wouldPrefix = dryRun ? 'Would ' : '';
+  let hasFailed = false;
+
+  // Fetch current custom repo roles
+  let existingRoles;
+  try {
+    const { data } = await octokit.request('GET /orgs/{org}/custom-repository-roles', { org });
+    existingRoles = data.custom_roles || [];
+  } catch (error) {
+    if (error.status === 404) {
+      existingRoles = [];
+    } else {
+      throw error;
+    }
+  }
+
+  const existingMap = new Map(existingRoles.map(r => [r.name, r]));
+  const desiredMap = new Map(desiredRoles.map(r => [r.name, r]));
+
+  // Determine creates and updates
+  for (const desired of desiredRoles) {
+    const existing = existingMap.get(desired.name);
+
+    if (!existing) {
+      // New role
+      core.info(`  🆕 ${wouldPrefix}Create custom repo role: ${desired.name}`);
+      subResults.push(
+        createSubResult('custom-repo-role-create', SubResultStatus.CHANGED, `${wouldPrefix}create "${desired.name}"`)
+      );
+
+      if (!dryRun) {
+        try {
+          await octokit.request('POST /orgs/{org}/custom-repository-roles', {
+            org,
+            name: desired.name,
+            ...(desired.description != null ? { description: desired.description } : {}),
+            base_role: desired.base_role,
+            permissions: desired.permissions
+          });
+        } catch (error) {
+          hasFailed = true;
+          core.warning(`  ⚠️  Failed to create custom repo role "${desired.name}": ${error.message}`);
+          subResults[subResults.length - 1] = createSubResult(
+            'custom-repo-role-create',
+            SubResultStatus.WARNING,
+            `Failed to create "${desired.name}": ${error.message}`
+          );
+        }
+      }
+    } else {
+      // Check for updates
+      const { changed, changes } = compareCustomRepoRole(existing, desired);
+      if (changed) {
+        core.info(`  📝 ${wouldPrefix}Update custom repo role: ${desired.name} (${changes.join(', ')})`);
+        subResults.push(
+          createSubResult(
+            'custom-repo-role-update',
+            SubResultStatus.CHANGED,
+            `${wouldPrefix}update "${desired.name}" (${changes.join(', ')})`
+          )
+        );
+
+        if (!dryRun) {
+          try {
+            await octokit.request('PATCH /orgs/{org}/custom-repository-roles/{role_id}', {
+              org,
+              role_id: existing.id,
+              name: desired.name,
+              ...(desired.description != null ? { description: desired.description } : {}),
+              base_role: desired.base_role,
+              permissions: desired.permissions
+            });
+          } catch (error) {
+            hasFailed = true;
+            core.warning(`  ⚠️  Failed to update custom repo role "${desired.name}": ${error.message}`);
+            subResults[subResults.length - 1] = createSubResult(
+              'custom-repo-role-update',
+              SubResultStatus.WARNING,
+              `Failed to update "${desired.name}": ${error.message}`
+            );
+          }
+        }
+      } else {
+        core.info(`  ✅ Custom repo role unchanged: ${desired.name}`);
+      }
+    }
+  }
+
+  // Determine and apply deletions
+  if (deleteUnmanaged) {
+    for (const existing of existingRoles) {
+      if (!desiredMap.has(existing.name)) {
+        core.info(`  🗑️ ${wouldPrefix}Delete custom repo role: ${existing.name}`);
+        subResults.push(
+          createSubResult('custom-repo-role-delete', SubResultStatus.CHANGED, `${wouldPrefix}delete "${existing.name}"`)
+        );
+
+        if (!dryRun) {
+          try {
+            await octokit.request('DELETE /orgs/{org}/custom-repository-roles/{role_id}', {
+              org,
+              role_id: existing.id
+            });
+          } catch (error) {
+            hasFailed = true;
+            core.warning(`  ⚠️  Failed to delete custom repo role "${existing.name}": ${error.message}`);
+            subResults[subResults.length - 1] = createSubResult(
+              'custom-repo-role-delete',
               SubResultStatus.WARNING,
               `Failed to delete "${existing.name}": ${error.message}`
             );
@@ -1638,6 +2251,10 @@ export async function run() {
     const issueTypesFile = core.getInput('issue-types-file');
     const deleteUnmanagedIssueTypes = getBooleanInput('delete-unmanaged-issue-types') ?? false;
     const memberPrivilegesFromInputs = getMemberPrivilegesFromInputs();
+    const customOrgRolesFile = core.getInput('custom-org-roles-file');
+    const deleteUnmanagedOrgRoles = getBooleanInput('delete-unmanaged-org-roles') ?? false;
+    const customRepoRolesFile = core.getInput('custom-repo-roles-file');
+    const deleteUnmanagedRepoRoles = getBooleanInput('delete-unmanaged-repo-roles') ?? false;
     const dryRun = getBooleanInput('dry-run') ?? false;
 
     core.info('Starting Bulk GitHub Organization Settings Sync Action...');
@@ -1658,7 +2275,9 @@ export async function run() {
       rulesetsFiles,
       deleteUnmanagedRulesets,
       issueTypesFile,
-      memberPrivilegesFromInputs
+      memberPrivilegesFromInputs,
+      customOrgRolesFile,
+      customRepoRolesFile
     );
 
     // Check that at least one setting type is specified
@@ -1666,12 +2285,22 @@ export async function run() {
     const hasRulesets = orgList.some(o => o.rulesetsFiles && o.rulesetsFiles.length > 0);
     const hasIssueTypes = orgList.some(o => o.issueTypes && o.issueTypes.length > 0);
     const hasMemberPrivileges = orgList.some(o => o.memberPrivileges && Object.keys(o.memberPrivileges).length > 0);
-    if (!hasCustomProperties && !hasRulesets && !hasIssueTypes && !hasMemberPrivileges) {
+    const hasCustomOrgRoles = orgList.some(o => o.customOrgRoles && o.customOrgRoles.length > 0);
+    const hasCustomRepoRoles = orgList.some(o => o.customRepoRoles && o.customRepoRoles.length > 0);
+    if (
+      !hasCustomProperties &&
+      !hasRulesets &&
+      !hasIssueTypes &&
+      !hasMemberPrivileges &&
+      !hasCustomOrgRoles &&
+      !hasCustomRepoRoles
+    ) {
       throw new Error(
         'At least one setting must be specified. Provide custom properties via ' +
           '"organizations-file" or via "organizations" + "custom-properties-file" inputs, ' +
-          'provide issue types via "issue-types-file", rulesets via "rulesets-file", or member privileges via ' +
-          'individual inputs (e.g., "default-repository-permission").'
+          'provide issue types via "issue-types-file", rulesets via "rulesets-file", ' +
+          'custom org roles via "custom-org-roles-file", custom repo roles via "custom-repo-roles-file", ' +
+          'or member privileges via individual inputs (e.g., "default-repository-permission").'
       );
     }
 
@@ -1693,6 +2322,14 @@ export async function run() {
 
     if (deleteUnmanagedIssueTypes) {
       core.info('⚠️  delete-unmanaged-issue-types is enabled: issue types not in config will be deleted');
+    }
+
+    if (deleteUnmanagedOrgRoles) {
+      core.info('⚠️  delete-unmanaged-org-roles is enabled: custom org roles not in config will be deleted');
+    }
+
+    if (deleteUnmanagedRepoRoles) {
+      core.info('⚠️  delete-unmanaged-repo-roles is enabled: custom repo roles not in config will be deleted');
     }
 
     // Process organizations
@@ -1781,6 +2418,46 @@ export async function run() {
             result.error = result.error
               ? `${result.error}; Member privileges sync failed`
               : 'Member privileges sync failed';
+          }
+        }
+
+        // Sync custom organization roles
+        if (orgConfig.customOrgRoles && orgConfig.customOrgRoles.length > 0) {
+          core.info(`  👤 Syncing custom org roles (${orgConfig.customOrgRoles.length} defined)...`);
+          const orResult = await syncCustomOrgRoles(
+            octokit,
+            org,
+            orgConfig.customOrgRoles,
+            orgConfig.deleteUnmanagedOrgRoles ?? deleteUnmanagedOrgRoles,
+            dryRun
+          );
+          result.subResults.push(...orResult.subResults);
+
+          if (orResult.failed) {
+            result.success = false;
+            result.error = result.error
+              ? `${result.error}; Custom org roles sync failed`
+              : 'Custom org roles sync failed';
+          }
+        }
+
+        // Sync custom repository roles
+        if (orgConfig.customRepoRoles && orgConfig.customRepoRoles.length > 0) {
+          core.info(`  📦 Syncing custom repo roles (${orgConfig.customRepoRoles.length} defined)...`);
+          const rrResult = await syncCustomRepoRoles(
+            octokit,
+            org,
+            orgConfig.customRepoRoles,
+            orgConfig.deleteUnmanagedRepoRoles ?? deleteUnmanagedRepoRoles,
+            dryRun
+          );
+          result.subResults.push(...rrResult.subResults);
+
+          if (rrResult.failed) {
+            result.success = false;
+            result.error = result.error
+              ? `${result.error}; Custom repo roles sync failed`
+              : 'Custom repo roles sync failed';
           }
         }
 

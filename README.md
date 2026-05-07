@@ -552,6 +552,147 @@ By default, syncing issue types will create or update the specified types, but w
 
 ---
 
+## Syncing Custom Organization Roles
+
+> [!IMPORTANT]
+> Custom organization roles require **GitHub Enterprise Cloud (GHEC)**.
+
+Sync custom organization roles across organizations. These define custom roles with specific organization-level permissions that can be assigned to members.
+
+> [!TIP]
+> 📄 **See full examples:** [sample-configuration/custom-org-roles.yml](sample-configuration/custom-org-roles.yml)
+
+Create a YAML file defining your custom organization roles:
+
+**`custom-org-roles.yml`:**
+
+```yaml
+- name: Security Auditor
+  description: 'Can view security alerts and manage security settings'
+  permissions:
+    - read_audit_log
+    - manage_organization_security
+
+- name: CI/CD Manager
+  description: 'Can manage Actions settings and self-hosted runners'
+  permissions:
+    - manage_organization_actions_settings
+    - manage_organization_runners
+```
+
+Then reference it in your workflow:
+
+```yml
+- name: Sync Organization Settings
+  uses: joshjohanning/bulk-github-org-settings-sync-action@v1
+  with:
+    github-token: ${{ secrets.ORG_ADMIN_TOKEN }}
+    organizations: 'my-org,my-other-org'
+    custom-org-roles-file: './custom-org-roles.yml'
+    delete-unmanaged-org-roles: false
+```
+
+**Behavior:**
+
+- Creates new roles that don't exist yet
+- Updates roles that differ from the config (description or permissions)
+- Only applies changes when the role definition differs from what's already configured
+- In dry-run mode, shows what would be changed without applying
+
+### `delete-unmanaged-org-roles`
+
+When `delete-unmanaged-org-roles: true`:
+
+- Creates and updates roles from the config
+- **Deletes all other custom org roles not defined in the config**
+- In dry-run mode, shows which roles would be deleted without actually deleting them
+
+---
+
+## Syncing Custom Repository Roles
+
+> [!IMPORTANT]
+> Custom repository roles require **GitHub Enterprise Cloud (GHEC)**.
+
+Sync custom repository roles across organizations. These define custom roles that extend a base role (read, triage, write, maintain) with additional repository-level permissions.
+
+> [!TIP]
+> 📄 **See full examples:** [sample-configuration/custom-repo-roles.yml](sample-configuration/custom-repo-roles.yml)
+
+Create a YAML file defining your custom repository roles:
+
+**`custom-repo-roles.yml`:**
+
+```yaml
+- name: Contractor
+  description: 'Write access without sensitive settings'
+  base-role: write
+  permissions:
+    - delete_alerts_code_scanning
+
+- name: Release Manager
+  description: 'Can manage releases and deployments'
+  base-role: maintain
+  permissions:
+    - manage_deploy_keys
+    - manage_webhooks
+```
+
+Then reference it in your workflow:
+
+```yml
+- name: Sync Organization Settings
+  uses: joshjohanning/bulk-github-org-settings-sync-action@v1
+  with:
+    github-token: ${{ secrets.ORG_ADMIN_TOKEN }}
+    organizations: 'my-org,my-other-org'
+    custom-repo-roles-file: './custom-repo-roles.yml'
+    delete-unmanaged-repo-roles: false
+```
+
+**Behavior:**
+
+- Creates new roles that don't exist yet
+- Updates roles that differ from the config (description, base role, or permissions)
+- Only applies changes when the role definition differs from what's already configured
+- In dry-run mode, shows what would be changed without applying
+
+### `delete-unmanaged-repo-roles`
+
+When `delete-unmanaged-repo-roles: true`:
+
+- Creates and updates roles from the config
+- **Deletes all other custom repo roles not defined in the config**
+- In dry-run mode, shows which roles would be deleted without actually deleting them
+
+### Per-Org Custom Role Overrides
+
+In `orgs.yml`, you can override custom roles per organization using inline definitions or per-org files:
+
+```yaml
+orgs:
+  - org: my-org
+    # inherits base roles from custom-org-roles-file / custom-repo-roles-file
+
+  - org: my-other-org
+    custom-org-roles-file: './config/other-org-roles.yml' # Use different file for this org
+    custom-org-roles:
+      - name: Security Auditor
+        description: 'Override for this org'
+        permissions:
+          - read_audit_log
+    custom-repo-roles:
+      - name: Contractor
+        description: 'Override for this org'
+        base-role: write
+        permissions:
+          - delete_alerts_code_scanning
+    delete-unmanaged-org-roles: true
+    delete-unmanaged-repo-roles: true
+```
+
+---
+
 ## Syncing Member Privileges
 
 Sync organization-level member privilege settings (repository policies) across organizations. These control what members can do within the organization, such as creating repositories, forking private repos, and managing pages.
@@ -653,12 +794,16 @@ orgs:
 | `readers-can-create-discussions`              | Whether users with read access can create discussions                               | No       |                         |
 | `members-can-view-dependency-insights`        | Whether members can view dependency insights                                        | No       |                         |
 | `display-commenter-full-name-setting-enabled` | Whether to display commenter full name in issues and PRs                            | No       |                         |
-| `rulesets-file`                               | Comma-separated paths to JSON files, each with a single org ruleset config          | No       |                         |
+| `rulesets-file`                               | Comma-separated paths to JSON files, each with a single org ruleset config          | No       | `false`                 |
 | `delete-unmanaged-rulesets`                   | Delete all other rulesets besides those being synced                                | No       | `false`                 |
+| `custom-org-roles-file`                       | Path to a YAML file defining custom organization role definitions (GHEC only)       | No       |                         |
+| `delete-unmanaged-org-roles`                  | Delete custom org roles not defined in the configuration file                       | No       | `false`                 |
+| `custom-repo-roles-file`                      | Path to a YAML file defining custom repository role definitions (GHEC only)         | No       |                         |
+| `delete-unmanaged-repo-roles`                 | Delete custom repo roles not defined in the configuration file                      | No       | `false`                 |
 | `dry-run`                                     | Preview changes without applying them                                               | No       | `false`                 |
 
 > [!NOTE]
-> You must provide either `organizations` or `organizations-file`. The `custom-properties-file`, `issue-types-file`, and `rulesets-file` inputs provide base settings for all orgs and can be combined with either approach. Member privilege settings can be provided as individual inputs (e.g., `default-repository-permission`). Per-org overrides in `organizations-file` layer on top of the base.
+> You must provide either `organizations` or `organizations-file`. The `custom-properties-file`, `issue-types-file`, `rulesets-file`, `custom-org-roles-file`, and `custom-repo-roles-file` inputs provide base settings for all orgs and can be combined with either approach. Member privilege settings can be provided as individual inputs (e.g., `default-repository-permission`). Per-org overrides in `organizations-file` layer on top of the base.
 
 ## Action Outputs
 

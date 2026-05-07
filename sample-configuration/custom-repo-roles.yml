@@ -1,0 +1,22 @@
+# Custom repository roles configuration
+# Use with: custom-repo-roles-file: './custom-repo-roles.yml'
+#
+# Requires GitHub Enterprise Cloud (GHEC)
+#
+# Each role defines a name, optional description, a base role, and additional permissions.
+# Valid base roles: read, triage, write, maintain
+# See GitHub docs for available repository permissions:
+# https://docs.github.com/en/enterprise-cloud@latest/organizations/managing-peoples-access-to-your-organization-with-roles/managing-custom-repository-roles-for-an-organization
+
+- name: Contractor
+  description: 'Write access without sensitive settings'
+  base-role: write
+  permissions:
+    - delete_alerts_code_scanning
+
+- name: Release Manager
+  description: 'Can manage releases and deployments'
+  base-role: maintain
+  permissions:
+    - manage_deploy_keys
+    - manage_webhooks
