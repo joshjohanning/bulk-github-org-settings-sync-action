@@ -608,7 +608,7 @@ export function mergeOrgProfile(baseProfile, orgProfile) {
 /**
  * Parse the organizations YAML config file.
  * @param {string} filePath - Path to the YAML file
- * @returns {Array<{ org: string, customPropertiesFile?: string, customProperties?: Array, issueTypesFile?: string, issueTypes?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, deleteUnmanagedProperties?: boolean, deleteUnmanagedIssueTypes?: boolean, memberPrivileges?: Object }>}
+ * @returns {Array<{ org: string, customPropertiesFile?: string, customProperties?: Array, issueTypesFile?: string, issueTypes?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, deleteUnmanagedProperties?: boolean, deleteUnmanagedIssueTypes?: boolean, memberPrivileges?: Object, orgProfile?: Object }>}
  */
 export function parseOrganizationsFile(filePath) {
   if (!fs.existsSync(filePath)) {
@@ -700,8 +700,22 @@ export function parseOrganizationsFile(filePath) {
       result.memberPrivileges = parseMemberPrivileges(orgConfig['member-privileges'], orgConfig.org);
     }
 
+    const topLevelOrgProfile = {};
+    for (const key of ORG_PROFILE_SETTINGS.keys()) {
+      if (Object.prototype.hasOwnProperty.call(orgConfig, key)) {
+        topLevelOrgProfile[key] = orgConfig[key];
+      }
+    }
+
+    if (Object.keys(topLevelOrgProfile).length > 0) {
+      result.orgProfile = parseOrgProfile(topLevelOrgProfile, orgConfig.org);
+    }
+
     if (Object.prototype.hasOwnProperty.call(orgConfig, 'org-profile')) {
-      result.orgProfile = parseOrgProfile(orgConfig['org-profile'], orgConfig.org);
+      result.orgProfile = mergeOrgProfile(
+        result.orgProfile || {},
+        parseOrgProfile(orgConfig['org-profile'], orgConfig.org)
+      );
     }
 
     return result;

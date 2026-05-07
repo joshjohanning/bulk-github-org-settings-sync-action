@@ -3209,6 +3209,42 @@ orgs:
         blog: 'https://base.com'
       });
     });
+
+    test('should support top-level org profile aliases in orgs file', () => {
+      const orgsYaml = `orgs:
+  - org: my-org
+    org-name: Top Level Name
+    org-blog: ' https://example.com '
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+
+      const result = parseOrganizations('', '/mock/orgs.yml');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].orgProfile).toEqual({
+        name: 'Top Level Name',
+        blog: 'https://example.com'
+      });
+    });
+
+    test('should let nested org-profile override top-level aliases', () => {
+      const orgsYaml = `orgs:
+  - org: my-org
+    org-name: Top Level Name
+    org-profile:
+      org-name: Nested Name
+      org-description: Nested description
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+
+      const result = parseOrganizations('', '/mock/orgs.yml');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].orgProfile).toEqual({
+        name: 'Nested Name',
+        description: 'Nested description'
+      });
+    });
   });
 
   describe('validateOrgConfig with org-profile', () => {
