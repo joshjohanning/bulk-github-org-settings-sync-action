@@ -1425,7 +1425,7 @@ export function parseCustomRepoRolesFile(filePath) {
  * @returns {Array<Object>} Normalized roles
  */
 export function normalizeCustomRepoRoles(roles) {
-  const validBaseRoles = ['read', 'triage', 'write', 'maintain'];
+  const validBaseRoles = ['read', 'triage', 'write', 'maintain', 'admin'];
 
   return roles.map((role, index) => {
     if (typeof role !== 'object' || role === null || Array.isArray(role)) {

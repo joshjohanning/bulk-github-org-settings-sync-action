@@ -3050,6 +3050,12 @@ orgs:
       ]);
     });
 
+    test('should allow admin base-role', () => {
+      const result = normalizeCustomRepoRoles([{ name: 'Admin Plus', 'base-role': 'admin', permissions: ['x'] }]);
+
+      expect(result[0].base_role).toBe('admin');
+    });
+
     test('should throw if role has no base-role', () => {
       expect(() => normalizeCustomRepoRoles([{ name: 'Test', permissions: ['x'] }])).toThrow(
         'must have a "base-role" field'
@@ -3057,8 +3063,8 @@ orgs:
     });
 
     test('should throw for invalid base-role', () => {
-      expect(() => normalizeCustomRepoRoles([{ name: 'Test', 'base-role': 'admin', permissions: ['x'] }])).toThrow(
-        'invalid base-role "admin"'
+      expect(() => normalizeCustomRepoRoles([{ name: 'Test', 'base-role': 'superadmin', permissions: ['x'] }])).toThrow(
+        'invalid base-role "superadmin"'
       );
     });
 

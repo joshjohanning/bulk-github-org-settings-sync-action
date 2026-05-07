@@ -614,7 +614,7 @@ When `delete-unmanaged-org-roles: true`:
 > [!IMPORTANT]
 > Custom repository roles require **GitHub Enterprise Cloud (GHEC)**.
 
-Sync custom repository roles across organizations. These define custom roles that extend a base role (read, triage, write, maintain) with additional repository-level permissions.
+Sync custom repository roles across organizations. These define custom roles that extend a base role (read, triage, write, maintain, admin) with additional repository-level permissions.
 
 > [!TIP]
 > 📄 **See full examples:** [sample-configuration/custom-repo-roles.yml](sample-configuration/custom-repo-roles.yml)

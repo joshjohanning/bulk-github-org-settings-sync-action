@@ -4,7 +4,7 @@
 # Requires GitHub Enterprise Cloud (GHEC)
 #
 # Each role defines a name, optional description, a base role, and additional permissions.
-# Valid base roles: read, triage, write, maintain
+# Valid base roles: read, triage, write, maintain, admin
 # See GitHub docs for available repository permissions:
 # https://docs.github.com/en/enterprise-cloud@latest/organizations/managing-peoples-access-to-your-organization-with-roles/managing-custom-repository-roles-for-an-organization
 
