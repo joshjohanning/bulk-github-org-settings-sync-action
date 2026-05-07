@@ -194,25 +194,7 @@ export function validateOrgConfig(orgConfig, orgName) {
     }
   }
 
-  // Validate member-privileges keys if present
-  if (Object.prototype.hasOwnProperty.call(orgConfig, 'member-privileges')) {
-    const memberPrivileges = orgConfig['member-privileges'];
-    if (memberPrivileges !== null && typeof memberPrivileges === 'object' && !Array.isArray(memberPrivileges)) {
-      for (const key of Object.keys(memberPrivileges)) {
-        if (!MEMBER_PRIVILEGE_SETTINGS.has(key)) {
-          core.warning(
-            `⚠️  Unknown member privilege key "${key}" found for organization "${orgName}". ` +
-              `This setting may not exist or may have a typo.`
-          );
-        }
-      }
-    } else if (memberPrivileges !== undefined) {
-      core.warning(
-        `⚠️  Invalid "member-privileges" value for organization "${orgName}": ` +
-          `expected a key-value map. This configuration will fail validation.`
-      );
-    }
-  }
+  // member-privileges is fully validated by parseMemberPrivileges(), which throws contextual errors.
 }
 
 // ─── SubResult model (mirrors bulk-github-repo-settings-sync-action PR #120) ─

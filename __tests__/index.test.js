@@ -1956,7 +1956,7 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
       expect(mockCore.warning).not.toHaveBeenCalled();
     });
 
-    test('should warn for unknown member privilege key', () => {
+    test('should leave unknown member privilege keys to parser validation', () => {
       validateOrgConfig(
         {
           org: 'my-org',
@@ -1966,9 +1966,7 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
         },
         'my-org'
       );
-      expect(mockCore.warning).toHaveBeenCalledWith(
-        expect.stringContaining('Unknown member privilege key "invalid-privilege-key"')
-      );
+      expect(mockCore.warning).not.toHaveBeenCalled();
     });
   });
 
