@@ -112,6 +112,26 @@ inputs:
     required: false
     default: 'false'
 
+  # === Actions Policy ===
+  actions-policy-allowed-actions:
+    description: 'Allowed GitHub Actions policy: all, local_only, or selected'
+    required: false
+  actions-policy-default-workflow-permissions:
+    description: 'Default GITHUB_TOKEN permissions for workflows: read or write'
+    required: false
+  actions-policy-actions-can-approve-pull-request-reviews:
+    description: 'Whether GitHub Actions can approve pull request reviews'
+    required: false
+  actions-policy-github-owned-allowed:
+    description: 'Whether GitHub-owned actions are allowed (only when allowed-actions is selected)'
+    required: false
+  actions-policy-verified-allowed:
+    description: 'Whether actions from GitHub Marketplace verified creators are allowed (only when allowed-actions is selected)'
+    required: false
+  actions-allow-list-file:
+    description: 'Path to a YAML file defining allowed actions/reusable workflow patterns (only when allowed-actions is selected)'
+    required: false
+
   # === Execution Options ===
   dry-run:
     description: 'Preview changes without applying them (logs what would be changed)'

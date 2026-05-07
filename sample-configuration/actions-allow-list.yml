@@ -1,0 +1,18 @@
+# Actions allow list configuration for bulk-github-org-settings-sync-action
+# Use with: actions-allow-list-file: './actions-allow-list.yml'
+#
+# This file defines which third-party actions and reusable workflows are
+# allowed when the organization's allowed-actions policy is set to "selected".
+# Each entry is a pattern string supporting wildcards.
+#
+# Pattern format:
+#   owner/repo@ref     - Allow a specific action at a specific ref
+#   owner/repo@*       - Allow a specific action at any ref
+#   owner/*            - Allow all actions from an owner
+
+actions:
+  - actions/checkout@*
+  - actions/setup-node@*
+  - actions/cache@*
+  - actions/upload-artifact@*
+  - actions/download-artifact@*

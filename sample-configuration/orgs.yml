@@ -60,7 +60,14 @@ orgs:
     member-privileges:
       members-can-fork-private-repositories: true # Override the base setting for this org
       members-can-create-internal-repositories: true # GHEC/GHES only
-
+    # Per-org actions policy overrides (layers on top of base action inputs)
+    actions-policy:
+      allowed-actions: selected # Override the base actions policy for this org
+      default-workflow-permissions: read
+      actions-can-approve-pull-request-reviews: false
+      github-owned-allowed: true
+      verified-allowed: true
+    # actions-allow-list-file: './config/actions-allow-list.yml' # Override allow list for this org
 
 # ---
 # Alternative: fully self-contained (no base custom-properties-file needed)
