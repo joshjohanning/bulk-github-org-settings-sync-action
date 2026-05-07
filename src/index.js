@@ -1516,7 +1516,7 @@ export async function syncOrgProfile(octokit, org, desiredSettings, dryRun) {
   const changes = [];
 
   for (const [apiKey, desiredValue] of Object.entries(desiredSettings)) {
-    const currentValue = currentOrg[apiKey] || '';
+    const currentValue = currentOrg[apiKey] ?? '';
     const yamlKey = PROFILE_API_TO_YAML_KEY.get(apiKey) || apiKey;
 
     if (currentValue !== desiredValue) {
