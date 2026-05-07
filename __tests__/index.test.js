@@ -8,7 +8,8 @@ import { jest } from '@jest/globals';
 
 const mockFs = {
   readFileSync: jest.fn(),
-  existsSync: jest.fn()
+  existsSync: jest.fn(),
+  readdirSync: jest.fn()
 };
 // CJS modules expose named exports and a default that mirrors them
 mockFs.default = mockFs;
@@ -77,6 +78,10 @@ inputs:
     description: 'Rulesets file'
   delete-unmanaged-rulesets:
     description: 'Delete unmanaged rulesets'
+  dot-github-source-dir:
+    description: 'Source dir for .github repo sync'
+  dot-github-private-source-dir:
+    description: 'Source dir for .github-private repo sync'
   dry-run:
     description: 'Dry run mode'
 `;
@@ -175,7 +180,8 @@ const {
   validateOrgConfig,
   resetKnownOrgConfigKeysCache,
   resolveFilePath,
-  applyBasePathToOrgConfig
+  applyBasePathToOrgConfig,
+  syncDotGithubRepo
 } = await import('../src/index.js');
 
 describe('Bulk GitHub Organization Settings Sync Action', () => {
@@ -2962,6 +2968,195 @@ orgs:
         default_repository_permission: 'read',
         members_can_fork_private_repositories: true // per-org override
       });
+    });
+  });
+
+  // ─── syncDotGithubRepo ────────────────────────────────────────────────
+
+  describe('syncDotGithubRepo', () => {
+    test('should return no changes when source dir is empty', async () => {
+      mockFs.readdirSync.mockReturnValue([]);
+
+      const result = await syncDotGithubRepo(mockOctokit, 'my-org', '/source', '.github', false);
+
+      expect(result.subResults).toHaveLength(0);
+      expect(result.failed).toBe(false);
+    });
+
+    test('should detect file changes and create PR', async () => {
+      // Mock local directory listing
+      mockFs.readdirSync.mockImplementation(dirPath => {
+        if (dirPath === '/source') {
+          return [{ name: 'profile', isDirectory: () => true, isFile: () => false }];
+        }
+        if (dirPath.endsWith('/profile')) {
+          return [{ name: 'README.md', isDirectory: () => false, isFile: () => true }];
+        }
+        return [];
+      });
+
+      // Mock reading local file
+      mockFs.readFileSync.mockImplementation((filePath, _encoding) => {
+        if (filePath === '/source/profile/README.md') {
+          return Buffer.from('# New Content');
+        }
+        if (typeof filePath === 'string' && filePath.endsWith('action.yml')) {
+          return mockActionYmlContent;
+        }
+        throw new Error(`ENOENT: ${filePath}`);
+      });
+
+      // Mock octokit calls
+      mockRequest
+        // GET repo info
+        .mockResolvedValueOnce({ data: { default_branch: 'main' } })
+        // GET contents (file exists remotely with different content)
+        .mockResolvedValueOnce({
+          data: { sha: 'abc123', content: Buffer.from('# Old Content').toString('base64') }
+        })
+        // GET git ref
+        .mockResolvedValueOnce({ data: { object: { sha: 'base-sha-123' } } })
+        // POST create branch
+        .mockResolvedValueOnce({ data: {} })
+        // PUT file content
+        .mockResolvedValueOnce({ data: {} })
+        // POST create PR
+        .mockResolvedValueOnce({ data: { number: 42, html_url: 'https://github.com/my-org/.github/pull/42' } });
+
+      const result = await syncDotGithubRepo(mockOctokit, 'my-org', '/source', '.github', false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].status).toBe('changed');
+      expect(result.subResults[0].message).toContain('PR #42');
+      expect(result.failed).toBe(false);
+    });
+
+    test('should report would-sync in dry-run mode', async () => {
+      mockFs.readdirSync.mockImplementation(dirPath => {
+        if (dirPath === '/source') {
+          return [{ name: 'README.md', isDirectory: () => false, isFile: () => true }];
+        }
+        return [];
+      });
+
+      mockFs.readFileSync.mockImplementation((filePath, _encoding) => {
+        if (filePath === '/source/README.md') {
+          return Buffer.from('# New');
+        }
+        if (typeof filePath === 'string' && filePath.endsWith('action.yml')) {
+          return mockActionYmlContent;
+        }
+        throw new Error(`ENOENT: ${filePath}`);
+      });
+
+      mockRequest.mockResolvedValueOnce({ data: { default_branch: 'main' } }).mockRejectedValueOnce({ status: 404 }); // File doesn't exist remotely
+
+      const result = await syncDotGithubRepo(mockOctokit, 'my-org', '/source', '.github', true);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].status).toBe('changed');
+      expect(result.subResults[0].message).toContain('Would');
+      // Should NOT call git ref/branch/PR creation in dry-run
+      expect(mockRequest).toHaveBeenCalledTimes(2);
+    });
+
+    test('should handle repo not found gracefully', async () => {
+      mockFs.readdirSync.mockReturnValue([{ name: 'file.txt', isDirectory: () => false, isFile: () => true }]);
+      mockFs.readFileSync.mockImplementation((filePath, _encoding) => {
+        if (filePath === '/source/file.txt') return Buffer.from('content');
+        if (typeof filePath === 'string' && filePath.endsWith('action.yml')) return mockActionYmlContent;
+        throw new Error(`ENOENT: ${filePath}`);
+      });
+
+      const notFoundError = new Error('Not Found');
+      notFoundError.status = 404;
+      mockRequest.mockRejectedValueOnce(notFoundError);
+
+      const result = await syncDotGithubRepo(mockOctokit, 'my-org', '/source', '.github', false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].status).toBe('warning');
+      expect(result.subResults[0].message).toContain('not found');
+      expect(result.failed).toBe(true);
+    });
+
+    test('should report no changes when files match', async () => {
+      const content = '# Same content';
+      mockFs.readdirSync.mockImplementation(dirPath => {
+        if (dirPath === '/source') {
+          return [{ name: 'README.md', isDirectory: () => false, isFile: () => true }];
+        }
+        return [];
+      });
+
+      mockFs.readFileSync.mockImplementation((filePath, _encoding) => {
+        if (filePath === '/source/README.md') return Buffer.from(content);
+        if (typeof filePath === 'string' && filePath.endsWith('action.yml')) return mockActionYmlContent;
+        throw new Error(`ENOENT: ${filePath}`);
+      });
+
+      mockRequest.mockResolvedValueOnce({ data: { default_branch: 'main' } }).mockResolvedValueOnce({
+        data: { sha: 'abc', content: Buffer.from(content).toString('base64') }
+      });
+
+      const result = await syncDotGithubRepo(mockOctokit, 'my-org', '/source', '.github', false);
+
+      expect(result.subResults).toHaveLength(0);
+      expect(result.failed).toBe(false);
+    });
+
+    test('should use dot-github-private-sync kind for .github-private repo', async () => {
+      mockFs.readdirSync.mockImplementation(dirPath => {
+        if (dirPath === '/source') {
+          return [{ name: 'file.md', isDirectory: () => false, isFile: () => true }];
+        }
+        return [];
+      });
+
+      mockFs.readFileSync.mockImplementation((filePath, _encoding) => {
+        if (filePath === '/source/file.md') return Buffer.from('new content');
+        if (typeof filePath === 'string' && filePath.endsWith('action.yml')) return mockActionYmlContent;
+        throw new Error(`ENOENT: ${filePath}`);
+      });
+
+      mockRequest.mockResolvedValueOnce({ data: { default_branch: 'main' } }).mockRejectedValueOnce({ status: 404 });
+
+      const result = await syncDotGithubRepo(mockOctokit, 'my-org', '/source', '.github-private', true);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('dot-github-private-sync');
+    });
+  });
+
+  // ─── parseOrganizations with dot-github inputs ────────────────────────
+
+  describe('parseOrganizations with dot-github inputs', () => {
+    test('should pass dot-github-source-dir to all orgs from simple input', () => {
+      const result = parseOrganizations('org1,org2', '', '', [], false, '', null, '/source', '/private-source');
+
+      expect(result).toHaveLength(2);
+      expect(result[0].dotGithubSourceDir).toBe('/source');
+      expect(result[0].dotGithubPrivateSourceDir).toBe('/private-source');
+      expect(result[1].dotGithubSourceDir).toBe('/source');
+      expect(result[1].dotGithubPrivateSourceDir).toBe('/private-source');
+    });
+
+    test('should allow per-org dot-github-source-dir override in orgs file', () => {
+      setMockFileContent(
+        `
+orgs:
+  - org: org1
+    dot-github-source-dir: './custom-dir'
+  - org: org2
+`,
+        '/mock/orgs.yml'
+      );
+
+      const result = parseOrganizations('', '/mock/orgs.yml', '', [], false, '', null, '/base-source', '');
+
+      expect(result).toHaveLength(2);
+      expect(result[0].dotGithubSourceDir).toBe('./custom-dir');
+      expect(result[1].dotGithubSourceDir).toBe('/base-source');
     });
   });
 });

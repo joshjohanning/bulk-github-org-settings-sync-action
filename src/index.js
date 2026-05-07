@@ -237,7 +237,13 @@ export function validateOrgConfig(orgConfig, orgName) {
  * File-path config keys that should be resolved against base-path.
  * @type {string[]}
  */
-const FILE_PATH_CONFIG_KEYS = ['custom-properties-file', 'issue-types-file', 'rulesets-file'];
+const FILE_PATH_CONFIG_KEYS = [
+  'custom-properties-file',
+  'issue-types-file',
+  'rulesets-file',
+  'dot-github-source-dir',
+  'dot-github-private-source-dir'
+];
 
 /**
  * Resolve a single file path against a base path.
@@ -320,7 +326,9 @@ const SYNC_KIND_LABELS = Object.freeze({
   'member-privileges-update': 'member privileges (updated)',
   'ruleset-create': 'ruleset (created)',
   'ruleset-update': 'ruleset (updated)',
-  'ruleset-delete': 'ruleset (deleted)'
+  'ruleset-delete': 'ruleset (deleted)',
+  'dot-github-sync': '.github repo (synced)',
+  'dot-github-private-sync': '.github-private repo (synced)'
 });
 
 /**
@@ -368,7 +376,9 @@ function formatSubResultSummary(subResult) {
  * @param {boolean} [deleteUnmanagedRulesets] - Whether to delete rulesets not in config
  * @param {string} [issueTypesFile] - Path to issue types YAML file (base for all orgs)
  * @param {Object|null} [memberPrivilegesFromInputs] - Member privileges parsed from action inputs (base for all orgs)
- * @returns {Array<{ org: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, issueTypes?: Array, memberPrivileges?: Object }>} Parsed org configs
+ * @param {string} [dotGithubSourceDir] - Path to source directory for .github repo sync
+ * @param {string} [dotGithubPrivateSourceDir] - Path to source directory for .github-private repo sync
+ * @returns {Array<{ org: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, issueTypes?: Array, memberPrivileges?: Object, dotGithubSourceDir?: string, dotGithubPrivateSourceDir?: string }>} Parsed org configs
  */
 export function parseOrganizations(
   organizationsInput,
@@ -377,7 +387,9 @@ export function parseOrganizations(
   rulesetsFiles,
   deleteUnmanagedRulesets,
   issueTypesFile,
-  memberPrivilegesFromInputs
+  memberPrivilegesFromInputs,
+  dotGithubSourceDir,
+  dotGithubPrivateSourceDir
 ) {
   // Load base custom properties from separate file (applies to all orgs)
   let baseCustomProperties = null;
@@ -460,6 +472,16 @@ export function parseOrganizations(
           orgConfig.memberPrivileges || {}
         );
       }
+
+      // Per-org dot-github-source-dir (falls back to base input)
+      if (!orgConfig.dotGithubSourceDir && dotGithubSourceDir) {
+        orgConfig.dotGithubSourceDir = dotGithubSourceDir;
+      }
+
+      // Per-org dot-github-private-source-dir (falls back to base input)
+      if (!orgConfig.dotGithubPrivateSourceDir && dotGithubPrivateSourceDir) {
+        orgConfig.dotGithubPrivateSourceDir = dotGithubPrivateSourceDir;
+      }
     }
 
     return orgConfigs;
@@ -484,7 +506,9 @@ export function parseOrganizations(
     ...(baseIssueTypes ? { issueTypes: baseIssueTypes } : {}),
     ...(rulesetsFiles && rulesetsFiles.length > 0 ? { rulesetsFiles } : {}),
     ...(deleteUnmanagedRulesets !== undefined ? { deleteUnmanagedRulesets } : {}),
-    ...(baseMemberPrivileges ? { memberPrivileges: baseMemberPrivileges } : {})
+    ...(baseMemberPrivileges ? { memberPrivileges: baseMemberPrivileges } : {}),
+    ...(dotGithubSourceDir ? { dotGithubSourceDir } : {}),
+    ...(dotGithubPrivateSourceDir ? { dotGithubPrivateSourceDir } : {})
   }));
 }
 
@@ -631,6 +655,20 @@ export function parseOrganizationsFile(filePath) {
 
     if (Object.prototype.hasOwnProperty.call(orgConfig, 'member-privileges')) {
       result.memberPrivileges = parseMemberPrivileges(orgConfig['member-privileges'], orgConfig.org);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'dot-github-source-dir')) {
+      const val = orgConfig['dot-github-source-dir'];
+      if (typeof val === 'string' && val.trim() !== '') {
+        result.dotGithubSourceDir = val.trim();
+      }
+    }
+
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'dot-github-private-source-dir')) {
+      const val = orgConfig['dot-github-private-source-dir'];
+      if (typeof val === 'string' && val.trim() !== '') {
+        result.dotGithubPrivateSourceDir = val.trim();
+      }
     }
 
     return result;
@@ -1607,6 +1645,201 @@ export async function syncOrgRulesets(octokit, org, rulesetFilePaths, deleteUnma
   return { subResults, failed: hasFailed };
 }
 
+// ─── .github / .github-private Repository Sync ──────────────────────────────────
+
+/**
+ * Recursively list all files in a directory, returning relative paths.
+ * @param {string} dirPath - Root directory to scan
+ * @param {string} [prefix] - Internal prefix for recursion
+ * @returns {string[]} Array of relative file paths (using forward slashes)
+ */
+export function listFilesRecursively(dirPath, prefix = '') {
+  const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+  const files = [];
+
+  for (const entry of entries) {
+    const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      files.push(...listFilesRecursively(path.join(dirPath, entry.name), relativePath));
+    } else if (entry.isFile()) {
+      files.push(relativePath);
+    }
+  }
+
+  return files;
+}
+
+/**
+ * Sync a local directory to a .github or .github-private repository via PR.
+ * Compares local files against the repo's default branch, and creates a PR
+ * if there are differences.
+ *
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} org - Organization name
+ * @param {string} sourceDir - Path to the local source directory
+ * @param {string} repoName - Target repo name ('.github' or '.github-private')
+ * @param {boolean} dryRun - Preview mode
+ * @returns {Promise<Object>} Result object with subResults
+ */
+export async function syncDotGithubRepo(octokit, org, sourceDir, repoName, dryRun) {
+  const subResults = [];
+  const wouldPrefix = dryRun ? 'Would ' : '';
+  let hasFailed = false;
+  const kindLabel = repoName === '.github-private' ? 'dot-github-private-sync' : 'dot-github-sync';
+
+  // List local files
+  let localFiles;
+  try {
+    localFiles = listFilesRecursively(sourceDir);
+  } catch (error) {
+    throw new Error(`Failed to read source directory "${sourceDir}": ${error.message}`);
+  }
+
+  if (localFiles.length === 0) {
+    core.info(`  📁 No files found in source directory "${sourceDir}"`);
+    return { subResults, failed: false };
+  }
+
+  core.info(`  📁 Found ${localFiles.length} file(s) in source directory`);
+
+  // Fetch repo info to get default branch
+  let defaultBranch;
+  try {
+    const { data: repoData } = await octokit.request('GET /repos/{owner}/{repo}', {
+      owner: org,
+      repo: repoName
+    });
+    defaultBranch = repoData.default_branch;
+  } catch (error) {
+    if (error.status === 404) {
+      core.warning(`  ⚠️  Repository "${org}/${repoName}" not found — skipping`);
+      subResults.push(createSubResult(kindLabel, SubResultStatus.WARNING, `Repository "${org}/${repoName}" not found`));
+      return { subResults, failed: true };
+    }
+    throw error;
+  }
+
+  // Compare each local file with the remote version
+  const changedFiles = [];
+
+  for (const filePath of localFiles) {
+    const localContent = fs.readFileSync(path.join(sourceDir, filePath));
+    const localBase64 = localContent.toString('base64');
+
+    let remoteSha = null;
+    let remoteBase64 = null;
+    try {
+      const { data } = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
+        owner: org,
+        repo: repoName,
+        path: filePath,
+        ref: defaultBranch
+      });
+      remoteSha = data.sha;
+      remoteBase64 = data.content ? data.content.replace(/\n/g, '') : '';
+    } catch (error) {
+      if (error.status !== 404) {
+        core.warning(`  ⚠️  Failed to fetch "${filePath}" from ${org}/${repoName}: ${error.message}`);
+        subResults.push(
+          createSubResult(
+            kindLabel,
+            SubResultStatus.WARNING,
+            `Failed to fetch "${filePath}" from ${org}/${repoName}: ${error.message}`
+          )
+        );
+        hasFailed = true;
+        continue;
+      }
+      // 404 means file doesn't exist remotely — it will be created
+    }
+
+    if (localBase64 !== remoteBase64) {
+      changedFiles.push({ path: filePath, content: localBase64, sha: remoteSha });
+    }
+  }
+
+  if (changedFiles.length === 0) {
+    core.info(`  ✅ ${org}/${repoName} is already up to date`);
+    return { subResults, failed: false };
+  }
+
+  const changesSummary = changedFiles.map(f => (f.sha ? `update ${f.path}` : `create ${f.path}`)).join(', ');
+  core.info(`  📝 ${wouldPrefix}Sync ${changedFiles.length} file(s) to ${org}/${repoName}: ${changesSummary}`);
+  subResults.push(
+    createSubResult(
+      kindLabel,
+      SubResultStatus.CHANGED,
+      `${wouldPrefix}sync ${changedFiles.length} file(s) to ${org}/${repoName} (${changesSummary})`
+    )
+  );
+
+  if (dryRun) {
+    return { subResults, failed: false };
+  }
+
+  // Create a PR with the changes
+  try {
+    // Get the SHA of the default branch HEAD
+    const { data: refData } = await octokit.request('GET /repos/{owner}/{repo}/git/ref/{ref}', {
+      owner: org,
+      repo: repoName,
+      ref: `heads/${defaultBranch}`
+    });
+    const baseSha = refData.object.sha;
+
+    // Create a new branch
+    const branchName = `bulk-org-settings-sync/${Date.now()}`;
+    await octokit.request('POST /repos/{owner}/{repo}/git/refs', {
+      owner: org,
+      repo: repoName,
+      ref: `refs/heads/${branchName}`,
+      sha: baseSha
+    });
+
+    // Commit each file to the new branch
+    for (const file of changedFiles) {
+      await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
+        owner: org,
+        repo: repoName,
+        path: file.path,
+        message: `Sync ${file.path} from organization settings`,
+        content: file.content,
+        branch: branchName,
+        ...(file.sha ? { sha: file.sha } : {})
+      });
+    }
+
+    // Create a pull request
+    const { data: pr } = await octokit.request('POST /repos/{owner}/{repo}/pulls', {
+      owner: org,
+      repo: repoName,
+      title: `Sync ${repoName} files from organization settings`,
+      body: `This PR was created automatically by the Bulk GitHub Organization Settings Sync Action.\n\n**Files changed:**\n${changedFiles.map(f => `- \`${f.path}\` (${f.sha ? 'updated' : 'created'})`).join('\n')}`,
+      head: branchName,
+      base: defaultBranch
+    });
+
+    core.info(`  🔗 Created PR #${pr.number}: ${pr.html_url}`);
+
+    // Update sub-result with PR link
+    subResults[subResults.length - 1] = createSubResult(
+      kindLabel,
+      SubResultStatus.CHANGED,
+      `sync ${changedFiles.length} file(s) to ${org}/${repoName} — PR #${pr.number}`
+    );
+  } catch (error) {
+    core.warning(`  ⚠️  Failed to create sync PR for ${org}/${repoName}: ${error.message}`);
+    subResults[subResults.length - 1] = createSubResult(
+      kindLabel,
+      SubResultStatus.WARNING,
+      `Failed to create sync PR for ${org}/${repoName}: ${error.message}`
+    );
+    hasFailed = true;
+  }
+
+  return { subResults, failed: hasFailed };
+}
+
 // ─── Result helpers ─────────────────────────────────────────────────────────────
 
 /**
@@ -1637,6 +1870,8 @@ export async function run() {
     const deleteUnmanagedRulesets = getBooleanInput('delete-unmanaged-rulesets') ?? false;
     const issueTypesFile = core.getInput('issue-types-file');
     const deleteUnmanagedIssueTypes = getBooleanInput('delete-unmanaged-issue-types') ?? false;
+    const dotGithubSourceDir = core.getInput('dot-github-source-dir') || '';
+    const dotGithubPrivateSourceDir = core.getInput('dot-github-private-source-dir') || '';
     const memberPrivilegesFromInputs = getMemberPrivilegesFromInputs();
     const dryRun = getBooleanInput('dry-run') ?? false;
 
@@ -1658,7 +1893,9 @@ export async function run() {
       rulesetsFiles,
       deleteUnmanagedRulesets,
       issueTypesFile,
-      memberPrivilegesFromInputs
+      memberPrivilegesFromInputs,
+      dotGithubSourceDir,
+      dotGithubPrivateSourceDir
     );
 
     // Check that at least one setting type is specified
@@ -1666,12 +1903,22 @@ export async function run() {
     const hasRulesets = orgList.some(o => o.rulesetsFiles && o.rulesetsFiles.length > 0);
     const hasIssueTypes = orgList.some(o => o.issueTypes && o.issueTypes.length > 0);
     const hasMemberPrivileges = orgList.some(o => o.memberPrivileges && Object.keys(o.memberPrivileges).length > 0);
-    if (!hasCustomProperties && !hasRulesets && !hasIssueTypes && !hasMemberPrivileges) {
+    const hasDotGithub = orgList.some(o => o.dotGithubSourceDir);
+    const hasDotGithubPrivate = orgList.some(o => o.dotGithubPrivateSourceDir);
+    if (
+      !hasCustomProperties &&
+      !hasRulesets &&
+      !hasIssueTypes &&
+      !hasMemberPrivileges &&
+      !hasDotGithub &&
+      !hasDotGithubPrivate
+    ) {
       throw new Error(
         'At least one setting must be specified. Provide custom properties via ' +
           '"organizations-file" or via "organizations" + "custom-properties-file" inputs, ' +
-          'provide issue types via "issue-types-file", rulesets via "rulesets-file", or member privileges via ' +
-          'individual inputs (e.g., "default-repository-permission").'
+          'provide issue types via "issue-types-file", rulesets via "rulesets-file", ' +
+          'member privileges via individual inputs (e.g., "default-repository-permission"), ' +
+          'or .github/.github-private repo sync via "dot-github-source-dir"/"dot-github-private-source-dir".'
       );
     }
 
@@ -1781,6 +2028,38 @@ export async function run() {
             result.error = result.error
               ? `${result.error}; Member privileges sync failed`
               : 'Member privileges sync failed';
+          }
+        }
+
+        // Sync .github repo
+        if (orgConfig.dotGithubSourceDir) {
+          core.info(`  📁 Syncing .github repo from "${orgConfig.dotGithubSourceDir}"...`);
+          const dgResult = await syncDotGithubRepo(octokit, org, orgConfig.dotGithubSourceDir, '.github', dryRun);
+          result.subResults.push(...dgResult.subResults);
+
+          if (dgResult.failed) {
+            result.success = false;
+            result.error = result.error ? `${result.error}; .github repo sync failed` : '.github repo sync failed';
+          }
+        }
+
+        // Sync .github-private repo
+        if (orgConfig.dotGithubPrivateSourceDir) {
+          core.info(`  📁 Syncing .github-private repo from "${orgConfig.dotGithubPrivateSourceDir}"...`);
+          const dgpResult = await syncDotGithubRepo(
+            octokit,
+            org,
+            orgConfig.dotGithubPrivateSourceDir,
+            '.github-private',
+            dryRun
+          );
+          result.subResults.push(...dgpResult.subResults);
+
+          if (dgpResult.failed) {
+            result.success = false;
+            result.error = result.error
+              ? `${result.error}; .github-private repo sync failed`
+              : '.github-private repo sync failed';
           }
         }
 

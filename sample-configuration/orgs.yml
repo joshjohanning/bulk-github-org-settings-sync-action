@@ -60,7 +60,9 @@ orgs:
     member-privileges:
       members-can-fork-private-repositories: true # Override the base setting for this org
       members-can-create-internal-repositories: true # GHEC/GHES only
-
+    # Per-org .github repo source directory override
+    # dot-github-source-dir: './config/dot-github/other-org'
+    # dot-github-private-source-dir: './config/dot-github-private/other-org'
 
 # ---
 # Alternative: fully self-contained (no base custom-properties-file needed)

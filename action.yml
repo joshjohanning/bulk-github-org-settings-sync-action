@@ -103,6 +103,14 @@ inputs:
     description: 'Whether to display commenter full name in issues and PRs'
     required: false
 
+  # === .github / .github-private Repository Sync ===
+  dot-github-source-dir:
+    description: 'Path to a local directory whose contents should be synced to the .github repository in each target organization (creates a PR with changes)'
+    required: false
+  dot-github-private-source-dir:
+    description: 'Path to a local directory whose contents should be synced to the .github-private repository in each target organization (creates a PR with changes)'
+    required: false
+
   # === Rulesets ===
   rulesets-file:
     description: 'Comma-separated paths to JSON files, each containing a single organization ruleset configuration to sync'
