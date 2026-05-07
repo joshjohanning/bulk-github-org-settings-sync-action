@@ -45,7 +45,7 @@ function getKnownOrgConfigKeys() {
   // 'custom-properties' is inline property definitions (YAML-only, not an action input)
   // 'issue-types' is inline issue type definitions (YAML-only, not an action input)
   // 'member-privileges' is inline member privilege overrides (YAML-only, not an action input)
-  // 'actions-policy' is inline actions policy overrides (YAML-only, not an action input)
+  // 'actions-policy' is inline actions policy overrides (YAML-only; individual settings are also available as action inputs)
   const keys = new Set(['org', 'custom-properties', 'issue-types', 'member-privileges', 'actions-policy']);
 
   try {
@@ -395,12 +395,13 @@ function formatSubResultSummary(subResult) {
  * Supports two modes:
  *   1. organizations-file: YAML file with full org + settings config
  * Supports layering: base settings from action inputs (custom-properties-file, rulesets-file, direct
- * member privilege inputs, and direct actions policy inputs) are merged with per-org overrides from organizations-file.
+ * member privilege inputs, direct actions policy inputs, and actions-allow-list-file) are merged with
+ * per-org overrides from organizations-file.
  * Per-org properties override base properties with the same name; base properties
  * not overridden are preserved.
  *
- * Per-org custom-properties-file, rulesets-file, or actions-allow-list-file in the organizations file
- * overrides the corresponding base file from the action input for that org.
+ * Per-org custom-properties-file, issue-types-file, rulesets-file, or actions-allow-list-file in the
+ * organizations file overrides the corresponding base file from the action input for that org.
  *
  * Modes:
  *   1. organizations-file (optionally combined with custom-properties-file / rulesets-file / direct member privilege inputs / direct actions policy inputs for base settings)
