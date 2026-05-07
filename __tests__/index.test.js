@@ -1107,6 +1107,11 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
       expect(() => normalizeIssueTypes([{ description: 'No name' }])).toThrow('must have a "name" field');
     });
 
+    test('should throw for non-object entries', () => {
+      expect(() => normalizeIssueTypes([null])).toThrow('Issue type entry at index 0 must be a key-value map');
+      expect(() => normalizeIssueTypes([['Bug']])).toThrow('Issue type entry at index 0 must be a key-value map');
+    });
+
     test('should handle is-enabled set to false', () => {
       const result = normalizeIssueTypes([{ name: 'Deprecated', 'is-enabled': false }]);
       expect(result[0].is_enabled).toBe(false);

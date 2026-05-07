@@ -750,7 +750,10 @@ export function parseIssueTypesFile(filePath) {
  * @returns {Array<Object>} Normalized issue types
  */
 export function normalizeIssueTypes(issueTypes) {
-  return issueTypes.map(it => {
+  return issueTypes.map((it, index) => {
+    if (typeof it !== 'object' || it === null || Array.isArray(it)) {
+      throw new Error(`Issue type entry at index ${index} must be a key-value map`);
+    }
     if (!it.name) {
       throw new Error('Each issue type must have a "name" field');
     }
