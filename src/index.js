@@ -352,7 +352,7 @@ function createSubResult(kind, status, message) {
 }
 
 /**
- * Fetch organization settings, optionally reusing a per-run cache.
+ * Fetch organization settings, optionally reusing a cache shared by sync calls for the current org.
  * @param {Octokit} octokit - Octokit instance
  * @param {string} org - Organization name
  * @param {Map<string, Promise<Object>>} [orgSettingsCache] - Cache shared across org settings sync calls
@@ -1098,7 +1098,7 @@ export async function syncIssueTypes(octokit, org, desiredIssueTypes, deleteUnma
 
 /**
  * Parse and validate a member privileges YAML config object (inline or from file).
- * Converts YAML keys (hyphenated) to API keys (snake_case) and validates types.
+ * Converts YAML keys (hyphenated) to GitHub REST API parameter names and validates types.
  * @param {Object} config - Raw key-value map from YAML
  * @param {string} [context] - Context for error messages (e.g., org name)
  * @returns {Object} Normalized privileges with API keys
