@@ -489,7 +489,7 @@ function formatSubResultSummary(subResult) {
  * @param {string} [codeSecurityConfigurationsFile] - Path to code security configurations YAML file (base for all orgs)
  * @param {Object|null} [actionsPolicyFromInputs] - Actions policy parsed from action inputs (base for all orgs)
  * @param {string} [actionsAllowListFile] - Path to actions allow list YAML file (base for all orgs)
- * @returns {Array<{ org: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, issueTypes?: Array, memberPrivileges?: Object, codeSecurityConfigurations?: Array, actionsPolicy?: Object, actionsAllowList?: string[] }>} Parsed org configs
+ * @returns {Array<{ org: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, issueTypes?: Array, memberPrivileges?: Object, codeSecurityConfigurations?: Array, deleteUnmanagedCodeSecurityConfigurations?: boolean, actionsPolicy?: Object, actionsAllowList?: string[] }>} Parsed org configs
  */
 export function parseOrganizations(
   organizationsInput,
