@@ -2435,6 +2435,13 @@ const CODE_SECURITY_ATTACH_SCOPE_VALUES = new Set([
   'selected'
 ]);
 const CODE_SECURITY_DEFAULT_FOR_NEW_REPOS_VALUES = new Set(['all', 'none', 'private_and_internal', 'public']);
+const CODE_SECURITY_ATTACH_SCOPE_PRIORITY = new Map([
+  ['all', 1],
+  ['all_without_configurations', 2],
+  ['public', 3],
+  ['private_or_internal', 3],
+  ['selected', 4]
+]);
 const CODE_SECURITY_OPTION_FIELDS = [
   'dependency_graph_autosubmit_action_options',
   'code_scanning_default_setup_options',
@@ -2488,6 +2495,29 @@ function normalizeRepositoryIdsValue(value, configName) {
   }
 
   return ids;
+}
+
+function normalizeRepositoryNamesValue(value, configName) {
+  const rawNames = Array.isArray(value) ? value : String(value).split(',');
+  const names = [];
+
+  for (const rawName of rawNames) {
+    const normalized = String(rawName).trim();
+    if (!normalized) {
+      continue;
+    }
+    if (!names.includes(normalized)) {
+      names.push(normalized);
+    }
+  }
+
+  if (names.length === 0) {
+    throw new Error(
+      `Code security configuration "${configName}" field "selected_repositories" must contain at least one repository name`
+    );
+  }
+
+  return names;
 }
 
 function validateUniqueCodeSecurityConfigurationNames(configs) {
@@ -2616,6 +2646,11 @@ export function normalizeCodeSecurityConfigurations(configs) {
       normalized.selected_repository_ids = normalizeRepositoryIdsValue(selectedRepositoryIds, normalized.name);
     }
 
+    const selectedRepositories = getCodeSecurityConfigValue(config, 'selected_repositories');
+    if (selectedRepositories !== undefined && selectedRepositories !== null) {
+      normalized.selected_repositories = normalizeRepositoryNamesValue(selectedRepositories, normalized.name);
+    }
+
     const defaultForNewRepos = getCodeSecurityConfigValue(config, 'default_for_new_repos');
     if (defaultForNewRepos !== undefined && defaultForNewRepos !== null) {
       normalized.default_for_new_repos = normalizeCodeSecurityEnumValue(
@@ -2626,14 +2661,17 @@ export function normalizeCodeSecurityConfigurations(configs) {
       );
     }
 
-    if (normalized.attach_scope === 'selected' && !normalized.selected_repository_ids) {
+    const hasSelectedTargets =
+      (normalized.selected_repository_ids && normalized.selected_repository_ids.length > 0) ||
+      (normalized.selected_repositories && normalized.selected_repositories.length > 0);
+    if (normalized.attach_scope === 'selected' && !hasSelectedTargets) {
       throw new Error(
-        `Code security configuration "${normalized.name}" must include "selected_repository_ids" when attach_scope is "selected"`
+        `Code security configuration "${normalized.name}" must include "selected_repository_ids" or "selected_repositories" when attach_scope is "selected"`
       );
     }
-    if (normalized.attach_scope !== 'selected' && normalized.selected_repository_ids) {
+    if (normalized.attach_scope !== 'selected' && hasSelectedTargets) {
       throw new Error(
-        `Code security configuration "${normalized.name}" can only include "selected_repository_ids" when attach_scope is "selected"`
+        `Code security configuration "${normalized.name}" can only include selected repository targets when attach_scope is "selected"`
       );
     }
 
@@ -2682,6 +2720,7 @@ function stripCodeSecurityConfigManagementFields(config) {
   const stripped = { ...config };
   delete stripped.attach_scope;
   delete stripped.selected_repository_ids;
+  delete stripped.selected_repositories;
   delete stripped.default_for_new_repos;
   return stripped;
 }
@@ -2713,6 +2752,75 @@ export function compareCodeSecurityConfiguration(existing, desired) {
   return { changed: changes.length > 0, changes };
 }
 
+function validateCodeSecurityDefaultAssignments(desiredConfigs) {
+  const byTarget = new Map();
+  const defaults = desiredConfigs.filter(c => c.default_for_new_repos !== undefined);
+
+  if (defaults.length <= 1) {
+    return;
+  }
+
+  for (const config of defaults) {
+    const target = config.default_for_new_repos;
+    if (target === 'none' && defaults.length > 1) {
+      throw new Error(
+        `Code security configuration "${config.name}" sets default_for_new_repos to "none", ` +
+          'which cannot be combined with other default_for_new_repos assignments.'
+      );
+    }
+    if (target === 'all' && defaults.length > 1) {
+      throw new Error(
+        `Code security configuration "${config.name}" sets default_for_new_repos to "all", ` +
+          'which conflicts with other default_for_new_repos assignments.'
+      );
+    }
+    if (byTarget.has(target)) {
+      throw new Error(
+        `Multiple code security configurations set default_for_new_repos to "${target}": ` +
+          `"${byTarget.get(target)}" and "${config.name}".`
+      );
+    }
+    byTarget.set(target, config.name);
+  }
+
+  if (byTarget.has('all') && (byTarget.has('public') || byTarget.has('private_and_internal'))) {
+    throw new Error('default_for_new_repos value "all" cannot be combined with "public" or "private_and_internal".');
+  }
+}
+
+async function resolveSelectedRepositoryIds(octokit, org, selectedRepositoryIds, selectedRepositories, repoCache) {
+  const ids = [...(selectedRepositoryIds || [])];
+  const names = selectedRepositories || [];
+
+  if (names.length > 0) {
+    if (!repoCache.byName || !repoCache.byFullName) {
+      const repos = await octokit.paginate('GET /orgs/{org}/repos', {
+        org,
+        type: 'all',
+        per_page: 100
+      });
+      repoCache.byName = new Map(repos.map(repo => [repo.name.toLowerCase(), repo.id]));
+      repoCache.byFullName = new Map(repos.map(repo => [repo.full_name.toLowerCase(), repo.id]));
+    }
+
+    for (const repoName of names) {
+      const normalized = repoName.toLowerCase();
+      const fullName = normalized.includes('/') ? normalized : `${org.toLowerCase()}/${normalized}`;
+      const id = repoCache.byFullName.get(fullName) ?? repoCache.byName.get(normalized);
+
+      if (!id) {
+        throw new Error(`Repository "${repoName}" was not found in organization "${org}"`);
+      }
+
+      if (!ids.includes(id)) {
+        ids.push(id);
+      }
+    }
+  }
+
+  return ids.sort((a, b) => a - b);
+}
+
 /**
  * Sync code security configurations for an organization.
  * @param {Octokit} octokit - Octokit instance
@@ -2726,8 +2834,10 @@ export async function syncCodeSecurityConfigurations(octokit, org, desiredConfig
   const subResults = [];
   const wouldPrefix = dryRun ? 'Would ' : '';
   let hasFailed = false;
+  const repoCache = {};
 
   validateUniqueCodeSecurityConfigurationNames(desiredConfigs);
+  validateCodeSecurityDefaultAssignments(desiredConfigs);
 
   // Fetch current code security configurations
   let existingConfigs;
@@ -2854,42 +2964,66 @@ export async function syncCodeSecurityConfigurations(octokit, org, desiredConfig
     }
   }
 
-  // Apply optional attachment/default behavior to managed configurations.
-  for (const desired of desiredConfigs) {
+  // Apply attachment behavior (selected scope last so it can override broader scopes like "all").
+  const attachConfigs = desiredConfigs
+    .filter(config => config.attach_scope)
+    .slice()
+    .sort(
+      (a, b) =>
+        (CODE_SECURITY_ATTACH_SCOPE_PRIORITY.get(a.attach_scope) || 99) -
+        (CODE_SECURITY_ATTACH_SCOPE_PRIORITY.get(b.attach_scope) || 99)
+    );
+
+  for (const desired of attachConfigs) {
     const configId = syncedConfigIds.get(desired.name) || existingMap.get(desired.name)?.id;
     if (!configId) {
       continue;
     }
 
-    if (desired.attach_scope) {
-      const attachResult = await syncCodeSecurityConfigurationAttachment(
-        octokit,
-        org,
-        configId,
-        desired.name,
-        desired.attach_scope,
-        desired.selected_repository_ids,
-        dryRun
-      );
-      subResults.push(...attachResult.subResults);
-      if (attachResult.failed) {
-        hasFailed = true;
-      }
+    const selectedIds = await resolveSelectedRepositoryIds(
+      octokit,
+      org,
+      desired.selected_repository_ids,
+      desired.selected_repositories,
+      repoCache
+    );
+
+    const attachResult = await syncCodeSecurityConfigurationAttachment(
+      octokit,
+      org,
+      configId,
+      desired.name,
+      desired.attach_scope,
+      selectedIds,
+      dryRun
+    );
+    subResults.push(...attachResult.subResults);
+    if (attachResult.failed) {
+      hasFailed = true;
+    }
+  }
+
+  // Apply default-for-new-repos behavior.
+  for (const desired of desiredConfigs) {
+    if (desired.default_for_new_repos === undefined) {
+      continue;
+    }
+    const configId = syncedConfigIds.get(desired.name) || existingMap.get(desired.name)?.id;
+    if (!configId) {
+      continue;
     }
 
-    if (desired.default_for_new_repos !== undefined) {
-      const defaultResult = await syncCodeSecurityConfigurationDefault(
-        octokit,
-        org,
-        configId,
-        desired.name,
-        desired.default_for_new_repos,
-        dryRun
-      );
-      subResults.push(...defaultResult.subResults);
-      if (defaultResult.failed) {
-        hasFailed = true;
-      }
+    const defaultResult = await syncCodeSecurityConfigurationDefault(
+      octokit,
+      org,
+      configId,
+      desired.name,
+      desired.default_for_new_repos,
+      dryRun
+    );
+    subResults.push(...defaultResult.subResults);
+    if (defaultResult.failed) {
+      hasFailed = true;
     }
   }
 

@@ -3170,6 +3170,7 @@ orgs:
           description: 'Config with assignment',
           'attach-scope': 'selected',
           'selected-repository-ids': ['123', 456],
+          'selected-repositories': ['my-org/repo-a', 'repo-b'],
           'default-for-new-repos': 'private_and_internal'
         }
       ]);
@@ -3179,6 +3180,7 @@ orgs:
         description: 'Config with assignment',
         attach_scope: 'selected',
         selected_repository_ids: [123, 456],
+        selected_repositories: ['my-org/repo-a', 'repo-b'],
         default_for_new_repos: 'private_and_internal'
       });
     });
@@ -3192,7 +3194,7 @@ orgs:
             'attach-scope': 'selected'
           }
         ])
-      ).toThrow('must include "selected_repository_ids" when attach_scope is "selected"');
+      ).toThrow('must include "selected_repository_ids" or "selected_repositories" when attach_scope is "selected"');
     });
 
     test('should throw when repository ids are provided for non-selected scope', () => {
@@ -3205,7 +3207,7 @@ orgs:
             'selected-repository-ids': [123]
           }
         ])
-      ).toThrow('can only include "selected_repository_ids" when attach_scope is "selected"');
+      ).toThrow('can only include selected repository targets when attach_scope is "selected"');
     });
   });
 
@@ -3591,6 +3593,90 @@ orgs:
       );
     });
 
+    test('should resolve selected repositories by name and attach using ids', async () => {
+      const attachConfig = [
+        {
+          name: 'High risk',
+          description: 'High risk config',
+          attach_scope: 'selected',
+          selected_repositories: ['my-org/repo-a', 'repo-b']
+        }
+      ];
+
+      mockPaginate.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/code-security/configurations') {
+          return Promise.resolve([
+            { id: 1, name: 'High risk', description: 'High risk config', target_type: 'organization' }
+          ]);
+        }
+        if (route === 'GET /orgs/{org}/repos') {
+          return Promise.resolve([
+            { id: 123, name: 'repo-a', full_name: 'my-org/repo-a' },
+            { id: 456, name: 'repo-b', full_name: 'my-org/repo-b' }
+          ]);
+        }
+        if (route === 'GET /orgs/{org}/code-security/configurations/{configuration_id}/repositories') {
+          return Promise.resolve([]);
+        }
+        return Promise.resolve([]);
+      });
+      mockRequest.mockResolvedValue({ data: [] });
+
+      const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', attachConfig, false, false);
+
+      expect(result.failed).toBe(false);
+      expect(mockRequest).toHaveBeenCalledWith(
+        'POST /orgs/{org}/code-security/configurations/{configuration_id}/attach',
+        expect.objectContaining({
+          org: 'my-org',
+          configuration_id: 1,
+          scope: 'selected',
+          selected_repository_ids: [123, 456]
+        })
+      );
+    });
+
+    test('should apply selected scope after all scope', async () => {
+      const attachConfig = [
+        {
+          name: 'All scope',
+          description: 'All repos',
+          attach_scope: 'all'
+        },
+        {
+          name: 'Selected scope',
+          description: 'Selected repos',
+          attach_scope: 'selected',
+          selected_repository_ids: [123]
+        }
+      ];
+
+      mockPaginate.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/code-security/configurations') {
+          return Promise.resolve([
+            { id: 1, name: 'All scope', description: 'All repos', target_type: 'organization' },
+            { id: 2, name: 'Selected scope', description: 'Selected repos', target_type: 'organization' }
+          ]);
+        }
+        if (route === 'GET /orgs/{org}/code-security/configurations/{configuration_id}/repositories') {
+          return Promise.resolve([]);
+        }
+        return Promise.resolve([]);
+      });
+      mockRequest.mockResolvedValue({ data: [] });
+
+      await syncCodeSecurityConfigurations(mockOctokit, 'my-org', attachConfig, false, false);
+
+      const attachCalls = mockRequest.mock.calls.filter(
+        call => call[0] === 'POST /orgs/{org}/code-security/configurations/{configuration_id}/attach'
+      );
+      expect(attachCalls).toHaveLength(2);
+      expect(attachCalls[0][1]).toEqual(expect.objectContaining({ configuration_id: 1, scope: 'all' }));
+      expect(attachCalls[1][1]).toEqual(
+        expect.objectContaining({ configuration_id: 2, scope: 'selected', selected_repository_ids: [123] })
+      );
+    });
+
     test('should set default for new repositories when configured', async () => {
       const defaultConfig = [
         {
@@ -3677,6 +3763,24 @@ orgs:
       expect(mockPaginate).not.toHaveBeenCalled();
       expect(mockRequest).not.toHaveBeenCalled();
     });
+
+    test('should throw when multiple configurations define conflicting defaults', async () => {
+      await expect(
+        syncCodeSecurityConfigurations(
+          mockOctokit,
+          'my-org',
+          [
+            { name: 'Config A', description: 'A', default_for_new_repos: 'all' },
+            { name: 'Config B', description: 'B', default_for_new_repos: 'public' }
+          ],
+          false,
+          false
+        )
+      ).rejects.toThrow('conflicts with other');
+
+      expect(mockPaginate).not.toHaveBeenCalled();
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
   });
 
   // ─── parseOrganizations with code security configurations ─────────────
@@ -3750,6 +3854,7 @@ orgs:
         description: Org override
         attach-scope: selected
         selected-repository-ids: [123]
+        selected-repositories: [repo-a]
         default-for-new-repos: private_and_internal
 `;
       const cscYaml = `- name: Base config
@@ -3778,6 +3883,7 @@ orgs:
           advanced_security: 'enabled',
           attach_scope: 'selected',
           selected_repository_ids: [123],
+          selected_repositories: ['repo-a'],
           default_for_new_repos: 'private_and_internal'
         }
       ]);

@@ -9,7 +9,8 @@
 # The enforcement field accepts: enforced or unenforced
 # Optional assignment fields:
 # - attach-scope: all | all_without_configurations | public | private_or_internal | selected
-# - selected-repository-ids: required when attach-scope is selected
+# - selected-repository-ids: optional when attach-scope is selected
+# - selected-repositories: optional repo names/full names when attach-scope is selected
 # - default-for-new-repos: all | none | public | private_and_internal
 #
 # Requires GitHub Advanced Security (GHAS) license for advanced_security features.
@@ -30,9 +31,9 @@
   private_vulnerability_reporting: enabled
   enforcement: enforced
   attach-scope: selected
-  selected-repository-ids:
-    - 123456789
-    - 234567890
+  selected-repositories:
+    - my-org/high-risk-service
+    - app-api
   default-for-new-repos: private_and_internal
 
 - name: Standard settings

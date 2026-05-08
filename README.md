@@ -672,7 +672,8 @@ All enablement fields accept: `enabled`, `disabled`, or `not_set`. The `enforcem
 You can also configure how each code security configuration is applied:
 
 - `attach-scope`: attach to `all`, `all_without_configurations`, `public`, `private_or_internal`, or `selected` repositories
-- `selected-repository-ids`: required when `attach-scope: selected`
+- `selected-repository-ids`: optional repository IDs when `attach-scope: selected`
+- `selected-repositories`: optional repository names (for example `repo-a` or `my-org/repo-a`) when `attach-scope: selected`
 - `default-for-new-repos`: set default for newly created repos (`all`, `none`, `public`, `private_and_internal`)
 
 Example:
@@ -682,9 +683,19 @@ Example:
   description: Security configuration for high risk repositories
   advanced_security: enabled
   attach-scope: selected
-  selected-repository-ids: [123456789, 234567890]
+  selected-repositories: [my-org/high-risk-service, app-api]
   default-for-new-repos: private_and_internal
 ```
+
+When both `selected-repository-ids` and `selected-repositories` are provided, the action merges them into one selected repository set.
+
+If multiple configurations use `attach-scope`, broader scopes are applied first and `selected` is applied last, so selected repositories can override broad assignments.
+
+For `default-for-new-repos`, values must not conflict:
+
+- `none` cannot be combined with any other default assignment.
+- `all` cannot be combined with `public` or `private_and_internal`.
+- You cannot define the same default target more than once.
 
 ### Per-Org Code Security Configuration Overrides
 
