@@ -32,7 +32,7 @@
   enforcement: enforced
   attach-scope: selected
   selected-repositories:
-    - my-org/high-risk-service
+    - high-risk-service
     - app-api
   default-for-new-repos: private_and_internal
 

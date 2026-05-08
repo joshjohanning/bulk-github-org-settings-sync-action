@@ -76,7 +76,7 @@ orgs:
         secret_scanning_push_protection: enabled
         enforcement: enforced
         attach-scope: selected
-        selected-repositories: [my-other-org/high-risk-service, app-api]
+        selected-repositories: [high-risk-service, app-api]
         default-for-new-repos: private_and_internal
 
     # actions-allow-list-file: './config/actions-allow-list.yml' # Override allow list for this org

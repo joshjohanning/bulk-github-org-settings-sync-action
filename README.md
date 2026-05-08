@@ -673,7 +673,7 @@ You can also configure how each code security configuration is applied:
 
 - `attach-scope`: attach to `all`, `all_without_configurations`, `public`, `private_or_internal`, or `selected` repositories
 - `selected-repository-ids`: optional repository IDs when `attach-scope: selected`
-- `selected-repositories`: optional repository names (for example `repo-a` or `my-org/repo-a`) when `attach-scope: selected`
+- `selected-repositories`: optional repository names (for example `high-risk-service` or `app-api`) when `attach-scope: selected`
 - `default-for-new-repos`: set default for newly created repos (`all`, `none`, `public`, `private_and_internal`)
 
 Example:
@@ -683,11 +683,11 @@ Example:
   description: Security configuration for high risk repositories
   advanced_security: enabled
   attach-scope: selected
-  selected-repositories: [my-org/high-risk-service, app-api]
+  selected-repositories: [high-risk-service, app-api]
   default-for-new-repos: private_and_internal
 ```
 
-When both `selected-repository-ids` and `selected-repositories` are provided, the action merges them into one selected repository set.
+When both `selected-repository-ids` and `selected-repositories` are provided, the action merges them into one selected repository set. Repository names are matched within the org — the `org/repo` full-name format is accepted but the org prefix is not required.
 
 If multiple configurations use `attach-scope`, broader scopes are applied first and `selected` is applied last, so selected repositories can override broad assignments.
 
