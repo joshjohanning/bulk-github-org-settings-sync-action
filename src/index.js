@@ -3328,7 +3328,7 @@ export async function syncOrgRulesets(octokit, org, rulesetFilePaths, deleteUnma
  * @returns {string[]} Array of relative file paths (using forward slashes)
  */
 export function listFilesRecursively(dirPath, prefix = '') {
-  const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+  const entries = fs.readdirSync(dirPath, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
   const files = [];
 
   for (const entry of entries) {
@@ -3341,6 +3341,10 @@ export function listFilesRecursively(dirPath, prefix = '') {
   }
 
   return files;
+}
+
+function getLocalGitFileMode(filePath) {
+  return fs.statSync(filePath).mode & 0o111 ? '100755' : '100644';
 }
 
 /**
@@ -3379,7 +3383,7 @@ function getDotGithubSyncBranchName(repoName) {
 
 /**
  * Format a bounded changed-files list for pull request bodies.
- * @param {Array<{ path: string, sha?: string|null }>} changedFiles - Changed files
+ * @param {Array<{ path: string, sha?: string|null, mode?: string }>} changedFiles - Changed files
  * @param {number} [limit] - Maximum files to list inline
  * @returns {string} Markdown list
  */
@@ -3395,7 +3399,7 @@ function formatChangedFilesForPullRequest(changedFiles, limit = 50) {
 
 /**
  * Format a bounded changed-files summary for logs and action outputs.
- * @param {Array<{ path: string, sha?: string|null }>} changedFiles - Changed files
+ * @param {Array<{ path: string, sha?: string|null, mode?: string }>} changedFiles - Changed files
  * @param {number} [limit] - Maximum files to list inline
  * @returns {string} Comma-separated summary
  */
@@ -3534,7 +3538,12 @@ export async function syncDotGithubRepo(octokit, org, sourceDir, repoName, dryRu
     }
 
     if (localSha !== remoteEntry?.sha) {
-      changedFiles.push({ path: filePath, content: localContent.toString('base64'), sha: remoteEntry?.sha || null });
+      changedFiles.push({
+        path: filePath,
+        content: localContent.toString('base64'),
+        sha: remoteEntry?.sha || null,
+        mode: remoteEntry?.mode || getLocalGitFileMode(path.join(sourceDir, filePath))
+      });
     }
   }
 
@@ -3572,7 +3581,7 @@ export async function syncDotGithubRepo(octokit, org, sourceDir, repoName, dryRu
         content: file.content,
         encoding: 'base64'
       });
-      tree.push({ path: file.path, mode: '100644', type: 'blob', sha: blob.sha });
+      tree.push({ path: file.path, mode: file.mode, type: 'blob', sha: blob.sha });
     }
 
     const { data: newTree } = await octokit.request('POST /repos/{owner}/{repo}/git/trees', {

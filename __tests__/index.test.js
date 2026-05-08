@@ -10,7 +10,8 @@ import * as crypto from 'crypto';
 const mockFs = {
   readFileSync: jest.fn(),
   existsSync: jest.fn(),
-  readdirSync: jest.fn()
+  readdirSync: jest.fn(),
+  statSync: jest.fn()
 };
 // CJS modules expose named exports and a default that mirrors them
 mockFs.default = mockFs;
@@ -140,6 +141,8 @@ function setupDefaultMocks() {
     if (testMockFiles[filePath] !== undefined) return testMockFiles[filePath];
     throw new Error(`ENOENT: no such file or directory, open '${filePath}'`);
   });
+
+  mockFs.statSync.mockReturnValue({ mode: 0o100644 });
 }
 
 /**
@@ -233,6 +236,7 @@ const {
   resetKnownOrgConfigKeysCache,
   resolveFilePath,
   applyBasePathToOrgConfig,
+  listFilesRecursively,
   syncDotGithubRepo,
   parseCodeSecurityConfigurationsFile,
   normalizeCodeSecurityConfigurations,
@@ -3130,6 +3134,27 @@ orgs:
   // ─── syncDotGithubRepo ────────────────────────────────────────────────
 
   describe('syncDotGithubRepo', () => {
+    test('should list files in deterministic sorted order', () => {
+      mockFs.readdirSync.mockImplementation(dirPath => {
+        if (dirPath === '/source') {
+          return [
+            { name: 'z.txt', isDirectory: () => false, isFile: () => true },
+            { name: 'nested', isDirectory: () => true, isFile: () => false },
+            { name: 'a.txt', isDirectory: () => false, isFile: () => true }
+          ];
+        }
+        if (dirPath === '/source/nested') {
+          return [
+            { name: 'b.txt', isDirectory: () => false, isFile: () => true },
+            { name: 'a.txt', isDirectory: () => false, isFile: () => true }
+          ];
+        }
+        return [];
+      });
+
+      expect(listFilesRecursively('/source')).toEqual(['a.txt', 'nested/a.txt', 'nested/b.txt', 'z.txt']);
+    });
+
     test('should return no changes when source dir is empty', async () => {
       mockFs.readdirSync.mockReturnValue([]);
 
@@ -3172,7 +3197,7 @@ orgs:
         .mockResolvedValueOnce({ data: { tree: { sha: 'base-tree-sha' } } })
         // GET recursive tree (file exists remotely with different content)
         .mockResolvedValueOnce({
-          data: { tree: [{ path: 'profile/README.md', type: 'blob', mode: '100644', sha: 'old-blob-sha' }] }
+          data: { tree: [{ path: 'profile/README.md', type: 'blob', mode: '100755', sha: 'old-blob-sha' }] }
         })
         // POST blob
         .mockResolvedValueOnce({ data: { sha: 'new-blob-sha' } })
@@ -3205,6 +3230,12 @@ orgs:
         message: 'Sync .github files from organization settings',
         tree: 'new-tree-sha',
         parents: ['base-sha-123']
+      });
+      expect(mockRequest).toHaveBeenCalledWith('POST /repos/{owner}/{repo}/git/trees', {
+        owner: 'my-org',
+        repo: '.github',
+        base_tree: 'base-tree-sha',
+        tree: [{ path: 'profile/README.md', mode: '100755', type: 'blob', sha: 'new-blob-sha' }]
       });
       expect(mockRequest).not.toHaveBeenCalledWith('PUT /repos/{owner}/{repo}/contents/{path}', expect.any(Object));
     });
@@ -3291,7 +3322,7 @@ orgs:
 
       expect(result.subResults).toHaveLength(1);
       expect(result.subResults[0].message).toContain('...and 2 more file(s)');
-      expect(result.subResults[0].message).not.toContain('file-11.txt');
+      expect(result.subResults[0].message).not.toContain('file-9.txt');
       expect(mockCore.info).toHaveBeenCalledWith(expect.stringContaining('...and 2 more file(s)'));
     });
 
