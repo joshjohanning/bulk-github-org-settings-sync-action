@@ -3195,7 +3195,14 @@ orgs:
     });
 
     test('should override by name', () => {
-      const base = [{ name: 'Config A', description: 'Base A', advanced_security: 'enabled' }];
+      const base = [
+        {
+          name: 'Config A',
+          description: 'Base A',
+          advanced_security: 'enabled',
+          secret_scanning: 'enabled'
+        }
+      ];
       const org = [{ name: 'Config A', description: 'Override A', advanced_security: 'disabled' }];
 
       const result = mergeCodeSecurityConfigurations(base, org);
@@ -3203,6 +3210,7 @@ orgs:
       expect(result).toHaveLength(1);
       expect(result[0].description).toBe('Override A');
       expect(result[0].advanced_security).toBe('disabled');
+      expect(result[0].secret_scanning).toBe('enabled');
     });
   });
 

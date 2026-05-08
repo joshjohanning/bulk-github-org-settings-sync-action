@@ -45,6 +45,7 @@ function getKnownOrgConfigKeys() {
   // 'custom-properties' is inline property definitions (YAML-only, not an action input)
   // 'issue-types' is inline issue type definitions (YAML-only, not an action input)
   // 'member-privileges' is inline member privilege overrides (YAML-only, not an action input)
+  // 'code-security-configurations' is inline code security configuration overrides (YAML-only, not an action input)
   const keys = new Set([
     'org',
     'custom-properties',
@@ -1866,7 +1867,7 @@ export function mergeCodeSecurityConfigurations(baseConfigs, orgConfigs) {
   const merged = new Map(baseConfigs.map(c => [c.name, { ...c }]));
 
   for (const orgConfig of orgConfigs) {
-    merged.set(orgConfig.name, { ...orgConfig });
+    merged.set(orgConfig.name, { ...(merged.get(orgConfig.name) || {}), ...orgConfig });
   }
 
   return Array.from(merged.values());
