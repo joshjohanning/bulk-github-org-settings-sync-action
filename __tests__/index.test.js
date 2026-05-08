@@ -3104,6 +3104,15 @@ orgs:
         ])
       ).toThrow('must be a key-value map');
     });
+
+    test('should throw for duplicate names', () => {
+      expect(() =>
+        normalizeCodeSecurityConfigurations([
+          { name: 'Duplicate', description: 'First' },
+          { name: 'Duplicate', description: 'Second' }
+        ])
+      ).toThrow('Duplicate code security configuration name "Duplicate"');
+    });
   });
 
   // ─── compareCodeSecurityConfiguration ─────────────────────────────────
@@ -3376,6 +3385,24 @@ orgs:
 
       // Should not delete the global config
       expect(result.subResults).toHaveLength(0);
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    test('should throw before API calls when desired configurations contain duplicate names', async () => {
+      await expect(
+        syncCodeSecurityConfigurations(
+          mockOctokit,
+          'my-org',
+          [
+            { name: 'Duplicate', description: 'First' },
+            { name: 'Duplicate', description: 'Second' }
+          ],
+          false,
+          false
+        )
+      ).rejects.toThrow('Duplicate code security configuration name "Duplicate"');
+
+      expect(mockPaginate).not.toHaveBeenCalled();
       expect(mockRequest).not.toHaveBeenCalled();
     });
   });

@@ -597,7 +597,7 @@ export function mergeMemberPrivileges(basePrivileges, orgPrivileges) {
 /**
  * Parse the organizations YAML config file.
  * @param {string} filePath - Path to the YAML file
- * @returns {Array<{ org: string, customPropertiesFile?: string, customProperties?: Array, issueTypesFile?: string, issueTypes?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, deleteUnmanagedProperties?: boolean, deleteUnmanagedIssueTypes?: boolean, memberPrivileges?: Object }>}
+ * @returns {Array<{ org: string, customPropertiesFile?: string, customProperties?: Array, issueTypesFile?: string, issueTypes?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, deleteUnmanagedProperties?: boolean, deleteUnmanagedIssueTypes?: boolean, memberPrivileges?: Object, codeSecurityConfigurationsFile?: string, codeSecurityConfigurations?: Array, deleteUnmanagedCodeSecurityConfigurations?: boolean }>}
  */
 export function parseOrganizationsFile(filePath) {
   if (!fs.existsSync(filePath)) {
@@ -1735,6 +1735,20 @@ function normalizeCodeSecurityOptionsValue(value, field, configName) {
   return value;
 }
 
+function validateUniqueCodeSecurityConfigurationNames(configs) {
+  const seenNames = new Map();
+
+  for (const [index, config] of configs.entries()) {
+    const name = config.name;
+    if (seenNames.has(name)) {
+      throw new Error(
+        `Duplicate code security configuration name "${name}" at indexes ${seenNames.get(name)} and ${index}`
+      );
+    }
+    seenNames.set(name, index);
+  }
+}
+
 /**
  * Parse a standalone code security configurations YAML file.
  * @param {string} filePath - Path to the YAML file
@@ -1762,7 +1776,7 @@ export function parseCodeSecurityConfigurationsFile(filePath) {
  * @returns {Array<Object>} Normalized configurations ready for API calls
  */
 export function normalizeCodeSecurityConfigurations(configs) {
-  return configs.map((config, index) => {
+  const normalizedConfigs = configs.map((config, index) => {
     if (typeof config !== 'object' || config === null || Array.isArray(config)) {
       throw new Error(`Code security configuration entry at index ${index} must be a key-value map`);
     }
@@ -1834,6 +1848,10 @@ export function normalizeCodeSecurityConfigurations(configs) {
 
     return normalized;
   });
+
+  validateUniqueCodeSecurityConfigurationNames(normalizedConfigs);
+
+  return normalizedConfigs;
 }
 
 /**
@@ -1908,6 +1926,8 @@ export async function syncCodeSecurityConfigurations(octokit, org, desiredConfig
   const subResults = [];
   const wouldPrefix = dryRun ? 'Would ' : '';
   let hasFailed = false;
+
+  validateUniqueCodeSecurityConfigurationNames(desiredConfigs);
 
   // Fetch current code security configurations
   let existingConfigs;
