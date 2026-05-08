@@ -635,10 +635,10 @@ Set actions policy settings directly as action inputs:
     github-token: ${{ secrets.ORG_ADMIN_TOKEN }}
     organizations: 'my-org'
     actions-policy-allowed-actions: selected
-    actions-policy-default-workflow-permissions: read
-    actions-policy-actions-can-approve-pull-request-reviews: false
     actions-policy-github-owned-allowed: true
     actions-policy-verified-allowed: true
+    actions-policy-default-workflow-permissions: read
+    actions-policy-actions-can-approve-pull-request-reviews: false
     actions-allow-list-file: './actions-allow-list.yml'
 ```
 
@@ -655,10 +655,10 @@ Set actions policy settings directly as action inputs:
 | Setting                                    | Type    | Description                                                                              |
 | ------------------------------------------ | ------- | ---------------------------------------------------------------------------------------- |
 | `allowed-actions`                          | string  | Allowed actions policy: `all`, `local_only`, or `selected`                               |
-| `default-workflow-permissions`             | string  | Default `GITHUB_TOKEN` permissions for workflows: `read` or `write`                      |
-| `actions-can-approve-pull-request-reviews` | boolean | Whether GitHub Actions can approve pull request reviews                                  |
 | `github-owned-allowed`                     | boolean | Allow GitHub-owned actions (when `allowed-actions` is `selected`)                        |
 | `verified-allowed`                         | boolean | Allow GitHub Marketplace verified creator actions (when `allowed-actions` is `selected`) |
+| `default-workflow-permissions`             | string  | Default `GITHUB_TOKEN` permissions for workflows: `read` or `write`                      |
+| `actions-can-approve-pull-request-reviews` | boolean | Whether GitHub Actions can approve pull request reviews                                  |
 
 ### Actions Allow List File
 
@@ -725,10 +725,10 @@ orgs:
 | `rulesets-file`                                           | Comma-separated paths to JSON files, each with a single org ruleset config          | No       |                         |
 | `delete-unmanaged-rulesets`                               | Delete all other rulesets besides those being synced                                | No       | `false`                 |
 | `actions-policy-allowed-actions`                          | Allowed GitHub Actions policy: `all`, `local_only`, or `selected`                   | No       |                         |
-| `actions-policy-default-workflow-permissions`             | Default `GITHUB_TOKEN` permissions for workflows: `read` or `write`                 | No       |                         |
-| `actions-policy-actions-can-approve-pull-request-reviews` | Whether GitHub Actions can approve pull request reviews                             | No       |                         |
 | `actions-policy-github-owned-allowed`                     | Whether GitHub-owned actions are allowed (when `allowed-actions` is `selected`)     | No       |                         |
 | `actions-policy-verified-allowed`                         | Whether verified creator actions are allowed (when `allowed-actions` is `selected`) | No       |                         |
+| `actions-policy-default-workflow-permissions`             | Default `GITHUB_TOKEN` permissions for workflows: `read` or `write`                 | No       |                         |
+| `actions-policy-actions-can-approve-pull-request-reviews` | Whether GitHub Actions can approve pull request reviews                             | No       |                         |
 | `actions-allow-list-file`                                 | Path to YAML file with allowed action/reusable workflow patterns                    | No       |                         |
 | `dry-run`                                                 | Preview changes without applying them                                               | No       | `false`                 |
 
