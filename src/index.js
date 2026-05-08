@@ -1721,7 +1721,7 @@ export async function syncActionsPolicy(octokit, org, desiredSettings, allowList
     if (result.failed) return { subResults, failed: true };
   }
 
-  // 3. Sync /actions/permissions/selected-actions (github_owned_allowed, verified_allowed, patterns)
+  // 3. Sync /actions/permissions/selected-actions (github_owned_allowed, verified_allowed, patterns_allowed)
   if (Object.keys(selectedActionsSettings).length > 0 || allowList) {
     let selectedActionsEnabled = permissionsSettings.allowed_actions === 'selected';
     let selectedActionsBlockReason = '';
