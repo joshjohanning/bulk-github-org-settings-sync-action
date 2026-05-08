@@ -277,6 +277,31 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
       expect(mockCore.warning).not.toHaveBeenCalled();
     });
 
+    test('should warn for member privilege keys at the org top level', () => {
+      validateOrgConfig({ org: 'my-org', 'default-repository-permission': 'read' }, 'my-org');
+      expect(mockCore.warning).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'Configuration key "default-repository-permission" for organization "my-org" must be nested under "member-privileges"'
+        )
+      );
+    });
+
+    test('should warn for actions policy input keys at the org top level', () => {
+      validateOrgConfig({ org: 'my-org', 'actions-policy-allowed-actions': 'selected' }, 'my-org');
+      expect(mockCore.warning).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'Configuration key "actions-policy-allowed-actions" for organization "my-org" must be nested under "actions-policy" as "allowed-actions"'
+        )
+      );
+    });
+
+    test('should warn for base-only action inputs at the org top level', () => {
+      validateOrgConfig({ org: 'my-org', 'dry-run': true }, 'my-org');
+      expect(mockCore.warning).toHaveBeenCalledWith(
+        expect.stringContaining('Action input "dry-run" is not supported as a per-org configuration key')
+      );
+    });
+
     test('should warn for unknown issue type key', () => {
       validateOrgConfig(
         {

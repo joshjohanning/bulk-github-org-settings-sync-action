@@ -176,6 +176,27 @@ export const ACTIONS_POLICY_SETTINGS = new Map([
 ]);
 
 /**
+ * Org-level keys parsed from organizations-file entries.
+ * Some action inputs are base-only and must not be accepted silently as
+ * per-org keys because parseOrganizationsFile() will otherwise ignore them.
+ * @type {Set<string>}
+ */
+const ORG_CONFIG_TOP_LEVEL_KEYS = new Set([
+  'org',
+  'custom-properties',
+  'custom-properties-file',
+  'delete-unmanaged-properties',
+  'issue-types',
+  'issue-types-file',
+  'delete-unmanaged-issue-types',
+  'rulesets-file',
+  'delete-unmanaged-rulesets',
+  'member-privileges',
+  'actions-policy',
+  'actions-allow-list-file'
+]);
+
+/**
  * Validate organization configuration and warn about unknown keys.
  * @param {Object} orgConfig - Organization configuration object from YAML
  * @param {string} orgName - Organization name for logging context
@@ -188,6 +209,33 @@ export function validateOrgConfig(orgConfig, orgName) {
   const knownKeys = getCachedKnownOrgConfigKeys();
 
   for (const key of Object.keys(orgConfig)) {
+    if (MEMBER_PRIVILEGE_SETTINGS.has(key)) {
+      core.warning(
+        `⚠️  Configuration key "${key}" for organization "${orgName}" must be nested under "member-privileges". ` +
+          `This top-level value will be ignored.`
+      );
+      continue;
+    }
+
+    if (key.startsWith('actions-policy-')) {
+      const nestedKey = key.slice('actions-policy-'.length);
+      if (ACTIONS_POLICY_SETTINGS.has(nestedKey)) {
+        core.warning(
+          `⚠️  Configuration key "${key}" for organization "${orgName}" must be nested under "actions-policy" ` +
+            `as "${nestedKey}". This top-level value will be ignored.`
+        );
+        continue;
+      }
+    }
+
+    if (knownKeys.has(key) && !ORG_CONFIG_TOP_LEVEL_KEYS.has(key)) {
+      core.warning(
+        `⚠️  Action input "${key}" is not supported as a per-org configuration key for organization "${orgName}". ` +
+          `This top-level value will be ignored.`
+      );
+      continue;
+    }
+
     if (!knownKeys.has(key)) {
       core.warning(
         `⚠️  Unknown configuration key "${key}" found for organization "${orgName}". ` +
