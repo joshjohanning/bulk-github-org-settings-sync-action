@@ -709,8 +709,7 @@ For `attach-scope`, the following combinations are invalid and will fail the run
 
 - The same broad scope (`all`, `all_without_configurations`, `public`, `private_or_internal`) cannot appear on more than one configuration.
 - `all` cannot be combined with `all_without_configurations`, `public`, or `private_or_internal`.
-- `all_without_configurations` cannot be combined with `public` or `private_or_internal`.
-- `public` and `private_or_internal` cannot be used together (they cover all repositories, equivalent to `all`).
+- `all_without_configurations` cannot be combined with `public` or `private_or_internal` (unconfigured repos in those visibility categories would be targeted by both).
 - `selected` may appear on multiple configurations, but each repository may only be targeted by one of them — overlapping repo sets across `selected`-scope configurations will fail the run.
 
 For `default-for-new-repos`, values must not conflict:

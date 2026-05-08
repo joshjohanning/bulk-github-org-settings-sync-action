@@ -4117,24 +4117,24 @@ orgs:
       expect(mockRequest).not.toHaveBeenCalled();
     });
 
-    test('should throw when public and private_or_internal are combined (covers all repos)', async () => {
-      await expect(
-        syncCodeSecurityConfigurations(
-          mockOctokit,
-          'my-org',
-          [
-            { name: 'Config A', description: 'A', attach_scope: 'public' },
-            { name: 'Config B', description: 'B', attach_scope: 'private_or_internal' }
-          ],
-          false,
-          false
-        )
-      ).rejects.toThrow(
-        '"Config A" and "Config B" have conflicting attach scopes: "public" and "private_or_internal" together cover all repositories'
-      );
+    test('should allow public and private_or_internal scopes together (disjoint repo sets)', async () => {
+      const configs = [
+        { name: 'Public config', description: 'Public repos', attach_scope: 'public' },
+        { name: 'Private config', description: 'Private repos', attach_scope: 'private_or_internal' }
+      ];
 
-      expect(mockPaginate).not.toHaveBeenCalled();
-      expect(mockRequest).not.toHaveBeenCalled();
+      mockPaginate.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/code-security/configurations') {
+          return Promise.resolve([
+            { id: 1, name: 'Public config', description: 'Public repos', target_type: 'organization' },
+            { id: 2, name: 'Private config', description: 'Private repos', target_type: 'organization' }
+          ]);
+        }
+        return Promise.resolve([]);
+      });
+      mockRequest.mockResolvedValue({ data: [] });
+
+      await expect(syncCodeSecurityConfigurations(mockOctokit, 'my-org', configs, false, false)).resolves.not.toThrow();
     });
 
     test('should allow all and selected attach scopes together (override pattern)', async () => {
@@ -4269,6 +4269,33 @@ orgs:
         'Repository ID 123 is claimed by multiple code security configurations with attach_scope "selected": "By name" and "By property"'
       );
 
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    test('should throw on overlapping selected IDs for brand-new configs before any create mutations', async () => {
+      const configs = [
+        {
+          name: 'New Config A',
+          description: 'New config A',
+          attach_scope: 'selected',
+          selected_repository_ids: [123, 456]
+        },
+        {
+          name: 'New Config B',
+          description: 'New config B',
+          attach_scope: 'selected',
+          selected_repository_ids: [456, 789]
+        }
+      ];
+
+      // Neither config exists yet
+      mockPaginate.mockResolvedValue([]);
+
+      await expect(syncCodeSecurityConfigurations(mockOctokit, 'my-org', configs, false, false)).rejects.toThrow(
+        'Repository ID 456 is claimed by multiple code security configurations with attach_scope "selected": "New Config A" and "New Config B"'
+      );
+
+      // No create/update/delete API calls should have been made
       expect(mockRequest).not.toHaveBeenCalled();
     });
   });

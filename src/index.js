@@ -2833,13 +2833,6 @@ function validateCodeSecurityAttachScopeAssignments(configs) {
       }
     }
   }
-
-  if (scopeToConfig.has('public') && scopeToConfig.has('private_or_internal')) {
-    throw new Error(
-      `Code security configurations "${scopeToConfig.get('public')}" and "${scopeToConfig.get('private_or_internal')}" ` +
-        `have conflicting attach scopes: "public" and "private_or_internal" together cover all repositories.`
-    );
-  }
 }
 
 function validateCodeSecurityDefaultAssignments(desiredConfigs) {
@@ -2982,6 +2975,33 @@ export async function syncCodeSecurityConfigurations(octokit, org, desiredConfig
   validateCodeSecurityAttachScopeAssignments(desiredConfigs);
   validateCodeSecurityDefaultAssignments(desiredConfigs);
 
+  // Validate that selected-scope configs target disjoint repo sets before any mutations.
+  // Must happen at runtime (not in normalizeCodeSecurityConfigurations) because name/property
+  // resolution requires API calls. Runs before mutations to prevent partial state on conflict.
+  const selectedDesiredConfigs = desiredConfigs.filter(c => c.attach_scope === 'selected');
+  if (selectedDesiredConfigs.length > 1) {
+    const claimedByConfig = new Map(); // repoId → configName
+    for (const desired of selectedDesiredConfigs) {
+      const ids = await resolveSelectedRepositoryIds(
+        octokit,
+        org,
+        desired.selected_repository_ids,
+        desired.selected_repositories,
+        desired.selected_repositories_by_property,
+        repoCache
+      );
+      for (const id of ids) {
+        if (claimedByConfig.has(id)) {
+          throw new Error(
+            `Repository ID ${id} is claimed by multiple code security configurations ` +
+              `with attach_scope "selected": "${claimedByConfig.get(id)}" and "${desired.name}".`
+          );
+        }
+        claimedByConfig.set(id, desired.name);
+      }
+    }
+  }
+
   // Fetch current code security configurations
   let existingConfigs;
   try {
@@ -3117,53 +3137,20 @@ export async function syncCodeSecurityConfigurations(octokit, org, desiredConfig
         (CODE_SECURITY_ATTACH_SCOPE_PRIORITY.get(b.attach_scope) || 99)
     );
 
-  // Pre-resolve IDs for selected-scope configs and validate they target disjoint repo sets.
-  // Must happen at runtime (not in normalizeCodeSecurityConfigurations) because name/property
-  // resolution requires API calls that we can't make during pure normalization.
-  const resolvedIdsCache = new Map(); // configName → number[]
-  const selectedAttachConfigs = attachConfigs.filter(c => c.attach_scope === 'selected');
-  if (selectedAttachConfigs.length > 1) {
-    const claimedByConfig = new Map(); // repoId → configName
-    for (const desired of selectedAttachConfigs) {
-      const configId = syncedConfigIds.get(desired.name) || existingMap.get(desired.name)?.id;
-      if (!configId) continue;
-      const ids = await resolveSelectedRepositoryIds(
-        octokit,
-        org,
-        desired.selected_repository_ids,
-        desired.selected_repositories,
-        desired.selected_repositories_by_property,
-        repoCache
-      );
-      resolvedIdsCache.set(desired.name, ids);
-      for (const id of ids) {
-        if (claimedByConfig.has(id)) {
-          throw new Error(
-            `Repository ID ${id} is claimed by multiple code security configurations ` +
-              `with attach_scope "selected": "${claimedByConfig.get(id)}" and "${desired.name}".`
-          );
-        }
-        claimedByConfig.set(id, desired.name);
-      }
-    }
-  }
-
   for (const desired of attachConfigs) {
     const configId = syncedConfigIds.get(desired.name) || existingMap.get(desired.name)?.id;
     if (!configId) {
       continue;
     }
 
-    const selectedIds = resolvedIdsCache.has(desired.name)
-      ? resolvedIdsCache.get(desired.name)
-      : await resolveSelectedRepositoryIds(
-          octokit,
-          org,
-          desired.selected_repository_ids,
-          desired.selected_repositories,
-          desired.selected_repositories_by_property,
-          repoCache
-        );
+    const selectedIds = await resolveSelectedRepositoryIds(
+      octokit,
+      org,
+      desired.selected_repository_ids,
+      desired.selected_repositories,
+      desired.selected_repositories_by_property,
+      repoCache
+    );
 
     const attachResult = await syncCodeSecurityConfigurationAttachment(
       octokit,
