@@ -81,6 +81,18 @@ inputs:
     description: 'Code security configurations file'
   delete-unmanaged-code-security-configurations:
     description: 'Delete unmanaged code security configurations'
+  actions-policy-allowed-actions:
+    description: 'Allowed actions policy'
+  actions-policy-default-workflow-permissions:
+    description: 'Default workflow permissions'
+  actions-policy-actions-can-approve-pull-request-reviews:
+    description: 'Actions can approve PRs'
+  actions-policy-github-owned-allowed:
+    description: 'GitHub-owned actions allowed'
+  actions-policy-verified-allowed:
+    description: 'Verified actions allowed'
+  actions-allow-list-file:
+    description: 'Actions allow list file'
   dry-run:
     description: 'Dry run mode'
 `;
@@ -176,6 +188,12 @@ const {
   getMemberPrivilegesFromInputs,
   syncMemberPrivileges,
   MEMBER_PRIVILEGE_SETTINGS,
+  ACTIONS_POLICY_SETTINGS,
+  parseActionsPolicy,
+  getActionsPolicyFromInputs,
+  mergeActionsPolicy,
+  parseActionsAllowListFile,
+  syncActionsPolicy,
   validateOrgConfig,
   resetKnownOrgConfigKeysCache,
   resolveFilePath,
@@ -266,6 +284,31 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
         'my-org'
       );
       expect(mockCore.warning).not.toHaveBeenCalled();
+    });
+
+    test('should warn for member privilege keys at the org top level', () => {
+      validateOrgConfig({ org: 'my-org', 'default-repository-permission': 'read' }, 'my-org');
+      expect(mockCore.warning).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'Configuration key "default-repository-permission" for organization "my-org" must be nested under "member-privileges"'
+        )
+      );
+    });
+
+    test('should warn for actions policy input keys at the org top level', () => {
+      validateOrgConfig({ org: 'my-org', 'actions-policy-allowed-actions': 'selected' }, 'my-org');
+      expect(mockCore.warning).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'Configuration key "actions-policy-allowed-actions" for organization "my-org" must be nested under "actions-policy" as "allowed-actions"'
+        )
+      );
+    });
+
+    test('should warn for base-only action inputs at the org top level', () => {
+      validateOrgConfig({ org: 'my-org', 'dry-run': true }, 'my-org');
+      expect(mockCore.warning).toHaveBeenCalledWith(
+        expect.stringContaining('Action input "dry-run" is not supported as a per-org configuration key')
+      );
     });
 
     test('should warn for unknown issue type key', () => {
@@ -1153,6 +1196,12 @@ orgs:
       const config = { org: 'my-org', 'issue-types-file': 'issue-types.yml' };
       const result = applyBasePathToOrgConfig(config, './base/');
       expect(result['issue-types-file']).toBe('base/issue-types.yml');
+    });
+
+    test('should resolve actions-allow-list-file', () => {
+      const config = { org: 'my-org', 'actions-allow-list-file': 'actions/allow-list.yml' };
+      const result = applyBasePathToOrgConfig(config, './base/');
+      expect(result['actions-allow-list-file']).toBe('base/actions/allow-list.yml');
     });
   });
 
@@ -3476,6 +3525,566 @@ orgs:
       // Second org gets base + inline merged
       expect(result[1].codeSecurityConfigurations).toHaveLength(2);
       expect(result[1].codeSecurityConfigurations.map(c => c.name)).toEqual(['Base config', 'Custom config']);
+    });
+  });
+
+  // ─── ACTIONS_POLICY_SETTINGS ──────────────────────────────────────────────
+
+  describe('ACTIONS_POLICY_SETTINGS', () => {
+    test('should have 5 settings defined', () => {
+      expect(ACTIONS_POLICY_SETTINGS.size).toBe(5);
+    });
+
+    test('should have unique API keys', () => {
+      const apiKeys = new Set();
+      for (const [, setting] of ACTIONS_POLICY_SETTINGS) {
+        expect(apiKeys.has(setting.apiKey)).toBe(false);
+        apiKeys.add(setting.apiKey);
+      }
+    });
+
+    test('should have valid endpoint values', () => {
+      const validEndpoints = new Set(['permissions', 'workflow', 'selected-actions']);
+      for (const [, setting] of ACTIONS_POLICY_SETTINGS) {
+        expect(validEndpoints.has(setting.endpoint)).toBe(true);
+      }
+    });
+  });
+
+  // ─── parseActionsPolicy ───────────────────────────────────────────────────
+
+  describe('parseActionsPolicy', () => {
+    test('should parse valid actions policy config', () => {
+      const config = {
+        'allowed-actions': 'selected',
+        'default-workflow-permissions': 'read',
+        'actions-can-approve-pull-request-reviews': false,
+        'github-owned-allowed': true,
+        'verified-allowed': true
+      };
+      const result = parseActionsPolicy(config);
+      expect(result).toEqual({
+        allowed_actions: 'selected',
+        default_workflow_permissions: 'read',
+        can_approve_pull_request_reviews: false,
+        github_owned_allowed: true,
+        verified_allowed: true
+      });
+    });
+
+    test('should throw for non-object config', () => {
+      expect(() => parseActionsPolicy('invalid')).toThrow('expected a key-value map');
+    });
+
+    test('should throw for array config', () => {
+      expect(() => parseActionsPolicy(['invalid'])).toThrow('expected a key-value map');
+    });
+
+    test('should throw for unknown key', () => {
+      expect(() => parseActionsPolicy({ 'unknown-key': 'value' })).toThrow('Unknown actions policy key');
+    });
+
+    test('should throw for invalid boolean value', () => {
+      expect(() => parseActionsPolicy({ 'github-owned-allowed': 'yes' })).toThrow('must be a boolean');
+    });
+
+    test('should throw for invalid enum value', () => {
+      expect(() => parseActionsPolicy({ 'allowed-actions': 'invalid' })).toThrow('invalid value');
+    });
+
+    test('should include context in error messages', () => {
+      expect(() => parseActionsPolicy({ 'unknown-key': 'value' }, 'my-org')).toThrow('for org "my-org"');
+    });
+  });
+
+  // ─── getActionsPolicyFromInputs ──────────────────────────────────────────
+
+  describe('getActionsPolicyFromInputs', () => {
+    test('should return null when no actions policy inputs are set', () => {
+      mockCore.getInput.mockReturnValue('');
+      const result = getActionsPolicyFromInputs();
+      expect(result).toBeNull();
+    });
+
+    test('should parse boolean inputs', () => {
+      mockCore.getInput.mockImplementation(name => {
+        if (name === 'actions-policy-github-owned-allowed') return 'true';
+        if (name === 'actions-policy-actions-can-approve-pull-request-reviews') return 'false';
+        return '';
+      });
+      const result = getActionsPolicyFromInputs();
+      expect(result).toEqual({
+        github_owned_allowed: true,
+        can_approve_pull_request_reviews: false
+      });
+    });
+
+    test('should parse string inputs', () => {
+      mockCore.getInput.mockImplementation(name => {
+        if (name === 'actions-policy-allowed-actions') return 'selected';
+        if (name === 'actions-policy-default-workflow-permissions') return 'read';
+        return '';
+      });
+      const result = getActionsPolicyFromInputs();
+      expect(result).toEqual({
+        allowed_actions: 'selected',
+        default_workflow_permissions: 'read'
+      });
+    });
+
+    test('should throw on invalid boolean value', () => {
+      mockCore.getInput.mockImplementation(name => {
+        if (name === 'actions-policy-github-owned-allowed') return 'yes';
+        return '';
+      });
+      expect(() => getActionsPolicyFromInputs()).toThrow(/must be a boolean/);
+    });
+
+    test('should throw on invalid enum value', () => {
+      mockCore.getInput.mockImplementation(name => {
+        if (name === 'actions-policy-allowed-actions') return 'everything';
+        return '';
+      });
+      expect(() => getActionsPolicyFromInputs()).toThrow(/invalid value/);
+    });
+  });
+
+  // ─── mergeActionsPolicy ──────────────────────────────────────────────────
+
+  describe('mergeActionsPolicy', () => {
+    test('should merge base and org policies', () => {
+      const base = { allowed_actions: 'selected', github_owned_allowed: true };
+      const org = { github_owned_allowed: false, verified_allowed: true };
+      const result = mergeActionsPolicy(base, org);
+      expect(result).toEqual({
+        allowed_actions: 'selected',
+        github_owned_allowed: false,
+        verified_allowed: true
+      });
+    });
+
+    test('should return org policy when base is empty', () => {
+      const result = mergeActionsPolicy({}, { allowed_actions: 'all' });
+      expect(result).toEqual({ allowed_actions: 'all' });
+    });
+  });
+
+  // ─── parseActionsAllowListFile ────────────────────────────────────────────
+
+  describe('parseActionsAllowListFile', () => {
+    test('should parse valid allow list file', () => {
+      const content = `actions:
+  - actions/cache@*
+  - actions/setup-node@*
+  - myorg/*
+`;
+      setMockFileContent(content, '/mock/allow-list.yml');
+      const result = parseActionsAllowListFile('/mock/allow-list.yml');
+      expect(result).toEqual(['actions/cache@*', 'actions/setup-node@*', 'myorg/*']);
+    });
+
+    test('should trim and de-duplicate allow list patterns', () => {
+      const content = `actions:
+  - ' actions/cache@* '
+  - actions/setup-node@*
+  - actions/cache@*
+`;
+      setMockFileContent(content, '/mock/dedupe-allow-list.yml');
+
+      const result = parseActionsAllowListFile('/mock/dedupe-allow-list.yml');
+
+      expect(result).toEqual(['actions/cache@*', 'actions/setup-node@*']);
+    });
+
+    test('should throw for missing file', () => {
+      expect(() => parseActionsAllowListFile('/mock/nonexistent.yml')).toThrow('not found');
+    });
+
+    test('should throw for file without actions key', () => {
+      setMockFileContent('other: value', '/mock/bad.yml');
+      expect(() => parseActionsAllowListFile('/mock/bad.yml')).toThrow('expected an "actions" array');
+    });
+
+    test('should throw for non-string entries', () => {
+      const content = `actions:
+  - 123
+`;
+      setMockFileContent(content, '/mock/bad-entries.yml');
+      expect(() => parseActionsAllowListFile('/mock/bad-entries.yml')).toThrow('expected a string');
+    });
+
+    test('should throw for empty patterns', () => {
+      const content = `actions:
+  - '  '
+  - ''
+`;
+      setMockFileContent(content, '/mock/empty.yml');
+      expect(() => parseActionsAllowListFile('/mock/empty.yml')).toThrow('no valid patterns');
+    });
+  });
+
+  // ─── parseOrganizationsFile with actions-policy ─────────────────────────
+
+  describe('parseOrganizationsFile with actions-policy', () => {
+    test('should parse actions-policy from orgs.yml', () => {
+      const orgsYaml = `orgs:
+  - org: my-org
+    actions-policy:
+      allowed-actions: selected
+      default-workflow-permissions: read
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+      const result = parseOrganizationsFile('/mock/orgs.yml');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].actionsPolicy).toEqual({
+        allowed_actions: 'selected',
+        default_workflow_permissions: 'read'
+      });
+    });
+
+    test('should parse actions-allow-list-file from orgs.yml', () => {
+      const allowListContent = `actions:
+  - actions/cache@*
+`;
+      setMockFileContent(allowListContent, '/mock/allow-list.yml');
+      const orgsYaml = `orgs:
+  - org: my-org
+    actions-allow-list-file: /mock/allow-list.yml
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+      const result = parseOrganizationsFile('/mock/orgs.yml');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].actionsAllowListFile).toBe('/mock/allow-list.yml');
+    });
+
+    test('should throw for invalid actions-policy type', () => {
+      const orgsYaml = `orgs:
+  - org: my-org
+    actions-policy:
+      - invalid
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+
+      expect(() => parseOrganizationsFile('/mock/orgs.yml')).toThrow(
+        'Invalid actions-policy for org "my-org": expected a key-value map'
+      );
+    });
+  });
+
+  // ─── parseOrganizations with actions policy inputs ──────────────────────
+
+  describe('parseOrganizations with actions policy inputs', () => {
+    test('should use actions policy from inputs', () => {
+      const inputPolicy = {
+        allowed_actions: 'selected',
+        default_workflow_permissions: 'read'
+      };
+
+      const result = parseOrganizations('org1', '', '', [], false, '', null, inputPolicy, '');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].actionsPolicy).toEqual({
+        allowed_actions: 'selected',
+        default_workflow_permissions: 'read'
+      });
+    });
+
+    test('should layer per-org overrides on top of inputs', () => {
+      const inputPolicy = {
+        allowed_actions: 'selected',
+        default_workflow_permissions: 'read'
+      };
+
+      const orgsYaml = `orgs:
+  - org: my-org
+  - org: my-other-org
+    actions-policy:
+      default-workflow-permissions: write
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+
+      const result = parseOrganizations('', '/mock/orgs.yml', '', [], false, '', null, inputPolicy, '');
+
+      expect(result).toHaveLength(2);
+      expect(result[0].actionsPolicy).toEqual({
+        allowed_actions: 'selected',
+        default_workflow_permissions: 'read'
+      });
+      expect(result[1].actionsPolicy).toEqual({
+        allowed_actions: 'selected',
+        default_workflow_permissions: 'write'
+      });
+    });
+
+    test('should use actions allow list from file input', () => {
+      const allowListContent = `actions:
+  - actions/cache@*
+  - myorg/*
+`;
+      setMockFileContent(allowListContent, '/mock/allow-list.yml');
+
+      const result = parseOrganizations('org1', '', '', [], false, '', null, null, '/mock/allow-list.yml');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].actionsAllowList).toEqual(['actions/cache@*', 'myorg/*']);
+    });
+
+    test('should use per-org allow list file over base', () => {
+      const baseContent = `actions:
+  - base-action@*
+`;
+      const orgContent = `actions:
+  - org-action@*
+`;
+      setMockFileContent(baseContent, '/mock/base-allow.yml');
+      setMockFileContent(orgContent, '/mock/org-allow.yml');
+
+      const orgsYaml = `orgs:
+  - org: my-org
+  - org: my-other-org
+    actions-allow-list-file: /mock/org-allow.yml
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+
+      const result = parseOrganizations('', '/mock/orgs.yml', '', [], false, '', null, null, '/mock/base-allow.yml');
+
+      expect(result).toHaveLength(2);
+      expect(result[0].actionsAllowList).toEqual(['base-action@*']);
+      expect(result[1].actionsAllowList).toEqual(['org-action@*']);
+    });
+  });
+
+  // ─── syncActionsPolicy ─────────────────────────────────────────────────────
+
+  describe('syncActionsPolicy', () => {
+    test('should detect no changes when settings match', async () => {
+      mockRequest.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/actions/permissions') {
+          return { data: { allowed_actions: 'selected', enabled_repositories: 'all' } };
+        }
+        if (route === 'GET /orgs/{org}/actions/permissions/workflow') {
+          return { data: { default_workflow_permissions: 'read', can_approve_pull_request_reviews: false } };
+        }
+        return { data: {} };
+      });
+
+      const desired = {
+        allowed_actions: 'selected',
+        default_workflow_permissions: 'read',
+        can_approve_pull_request_reviews: false
+      };
+
+      const result = await syncActionsPolicy(mockOctokit, 'my-org', desired, null, false);
+      expect(result.failed).toBe(false);
+      expect(result.subResults).toHaveLength(0);
+      expect(mockCore.info).toHaveBeenCalledWith(expect.stringContaining('Actions permissions unchanged'));
+      expect(mockCore.info).toHaveBeenCalledWith(expect.stringContaining('Workflow permissions unchanged'));
+    });
+
+    test('should detect and apply changes', async () => {
+      mockRequest.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/actions/permissions') {
+          return { data: { allowed_actions: 'all', enabled_repositories: 'all' } };
+        }
+        if (route === 'PUT /orgs/{org}/actions/permissions') {
+          return { status: 204 };
+        }
+        return { data: {} };
+      });
+
+      const desired = { allowed_actions: 'selected' };
+
+      const result = await syncActionsPolicy(mockOctokit, 'my-org', desired, null, false);
+      expect(result.failed).toBe(false);
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('actions-policy-permissions-update');
+      expect(result.subResults[0].status).toBe('changed');
+    });
+
+    test('should handle dry run mode', async () => {
+      mockRequest.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/actions/permissions/workflow') {
+          return { data: { default_workflow_permissions: 'write', can_approve_pull_request_reviews: true } };
+        }
+        return { data: {} };
+      });
+
+      const desired = { default_workflow_permissions: 'read' };
+
+      const result = await syncActionsPolicy(mockOctokit, 'my-org', desired, null, true);
+      expect(result.failed).toBe(false);
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].message).toContain('Would');
+      // Should not have called PUT
+      expect(mockRequest).not.toHaveBeenCalledWith('PUT /orgs/{org}/actions/permissions/workflow', expect.anything());
+    });
+
+    test('should handle API fetch error gracefully', async () => {
+      mockRequest.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/actions/permissions') {
+          throw new Error('Not Found');
+        }
+        return { data: {} };
+      });
+
+      const desired = { allowed_actions: 'selected' };
+
+      const result = await syncActionsPolicy(mockOctokit, 'my-org', desired, null, false);
+      expect(result.failed).toBe(true);
+      expect(result.subResults[0].status).toBe('warning');
+    });
+
+    test('should sync allow list patterns', async () => {
+      mockRequest.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/actions/permissions') {
+          return { data: { allowed_actions: 'selected', enabled_repositories: 'all' } };
+        }
+        if (route === 'GET /orgs/{org}/actions/permissions/selected-actions') {
+          return {
+            data: {
+              github_owned_allowed: true,
+              verified_allowed: false,
+              patterns_allowed: ['old-action@*']
+            }
+          };
+        }
+        if (route === 'PUT /orgs/{org}/actions/permissions/selected-actions') {
+          return { status: 200 };
+        }
+        return { data: {} };
+      });
+
+      const allowList = ['new-action@*', 'another-action@*'];
+      const result = await syncActionsPolicy(mockOctokit, 'my-org', {}, allowList, false);
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults.some(s => s.kind === 'actions-policy-allow-list-update')).toBe(true);
+    });
+
+    test('should detect no changes when allow list matches', async () => {
+      mockRequest.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/actions/permissions') {
+          return { data: { allowed_actions: 'selected', enabled_repositories: 'all' } };
+        }
+        if (route === 'GET /orgs/{org}/actions/permissions/selected-actions') {
+          return {
+            data: {
+              github_owned_allowed: true,
+              verified_allowed: false,
+              patterns_allowed: ['action-a@*', 'action-b@*']
+            }
+          };
+        }
+        return { data: {} };
+      });
+
+      const allowList = ['action-b@*', 'action-a@*']; // Same patterns, different order
+      const result = await syncActionsPolicy(mockOctokit, 'my-org', { allowed_actions: 'selected' }, allowList, false);
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults).toHaveLength(0);
+    });
+
+    test('should ignore duplicate allow list patterns when comparing', async () => {
+      mockRequest.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/actions/permissions') {
+          return { data: { allowed_actions: 'selected', enabled_repositories: 'all' } };
+        }
+        if (route === 'GET /orgs/{org}/actions/permissions/selected-actions') {
+          return {
+            data: {
+              github_owned_allowed: true,
+              verified_allowed: false,
+              patterns_allowed: ['action-a@*', 'action-b@*']
+            }
+          };
+        }
+        return { data: {} };
+      });
+
+      const allowList = ['action-b@*', 'action-a@*', 'action-a@*'];
+      const result = await syncActionsPolicy(mockOctokit, 'my-org', { allowed_actions: 'selected' }, allowList, false);
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults).toHaveLength(0);
+      expect(mockRequest).not.toHaveBeenCalledWith(
+        'PUT /orgs/{org}/actions/permissions/selected-actions',
+        expect.anything()
+      );
+    });
+
+    test('should skip selected actions settings unless allowed-actions is selected', async () => {
+      mockRequest.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/actions/permissions') {
+          return { data: { allowed_actions: 'all', enabled_repositories: 'all' } };
+        }
+        return { data: {} };
+      });
+
+      const desired = { github_owned_allowed: true };
+      const allowList = ['new-action@*'];
+      const result = await syncActionsPolicy(mockOctokit, 'my-org', desired, allowList, false);
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults).toEqual([
+        {
+          kind: 'actions-policy-selected-actions-update',
+          status: 'warning',
+          message:
+            'Skipping selected actions settings because allowed_actions must be "selected" before managing selected actions or the allow list (current: "all")'
+        },
+        {
+          kind: 'actions-policy-allow-list-update',
+          status: 'warning',
+          message:
+            'Skipping selected actions settings because allowed_actions must be "selected" before managing selected actions or the allow list (current: "all")'
+        }
+      ]);
+      expect(mockRequest).not.toHaveBeenCalledWith(
+        'GET /orgs/{org}/actions/permissions/selected-actions',
+        expect.anything()
+      );
+    });
+
+    test('should mark all selected actions sub-results as warnings when update fails', async () => {
+      mockRequest.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/actions/permissions') {
+          return { data: { allowed_actions: 'selected', enabled_repositories: 'all' } };
+        }
+        if (route === 'GET /orgs/{org}/actions/permissions/selected-actions') {
+          return {
+            data: {
+              github_owned_allowed: false,
+              verified_allowed: false,
+              patterns_allowed: ['old-action@*']
+            }
+          };
+        }
+        if (route === 'PUT /orgs/{org}/actions/permissions/selected-actions') {
+          throw new Error('Forbidden');
+        }
+        return { data: {} };
+      });
+
+      const desired = { allowed_actions: 'selected', github_owned_allowed: true };
+      const allowList = ['new-action@*'];
+      const result = await syncActionsPolicy(mockOctokit, 'my-org', desired, allowList, false);
+
+      expect(result.failed).toBe(true);
+      expect(result.subResults).toEqual([
+        {
+          kind: 'actions-policy-selected-actions-update',
+          status: 'warning',
+          message: 'Failed to update selected actions settings: Forbidden'
+        },
+        {
+          kind: 'actions-policy-allow-list-update',
+          status: 'warning',
+          message: 'Failed to update selected actions settings: Forbidden'
+        }
+      ]);
     });
   });
 });

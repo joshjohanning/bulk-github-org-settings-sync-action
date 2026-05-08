@@ -76,6 +76,15 @@ orgs:
         secret_scanning_push_protection: enabled
         enforcement: enforced
 
+    # actions-allow-list-file: './config/actions-allow-list.yml' # Override allow list for this org
+    # Per-org actions policy overrides (layers on top of base action inputs)
+    actions-policy:
+      allowed-actions: selected # Override the base actions policy for this org
+      github-owned-allowed: true
+      verified-allowed: true
+      default-workflow-permissions: read
+      actions-can-approve-pull-request-reviews: false
+
 # ---
 # Alternative: fully self-contained (no base custom-properties-file needed)
 # Each org defines all its properties inline:
