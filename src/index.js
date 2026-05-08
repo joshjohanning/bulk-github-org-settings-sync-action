@@ -1675,14 +1675,35 @@ export async function syncActionsPolicy(octokit, org, desiredSettings, allowList
 
   // 3. Sync /actions/permissions/selected-actions (github_owned_allowed, verified_allowed, patterns)
   if (Object.keys(selectedActionsSettings).length > 0 || allowList) {
-    if (permissionsSettings.allowed_actions !== 'selected') {
-      const configuredValue =
-        permissionsSettings.allowed_actions === undefined
-          ? 'not configured'
-          : `"${permissionsSettings.allowed_actions}"`;
+    let selectedActionsEnabled = permissionsSettings.allowed_actions === 'selected';
+    let selectedActionsBlockReason = '';
+
+    if (permissionsSettings.allowed_actions !== undefined && !selectedActionsEnabled) {
+      selectedActionsBlockReason = `configured: "${permissionsSettings.allowed_actions}"`;
+    } else if (!selectedActionsEnabled) {
+      try {
+        const { data: currentPermissions } = await octokit.request('GET /orgs/{org}/actions/permissions', { org });
+        selectedActionsEnabled = currentPermissions.allowed_actions === 'selected';
+        if (!selectedActionsEnabled) {
+          selectedActionsBlockReason = `current: "${currentPermissions.allowed_actions}"`;
+        }
+      } catch (error) {
+        const message = `Failed to verify actions permissions before syncing selected actions settings: ${error.message}`;
+        core.warning(`  ⚠️  ${message}`);
+        if (Object.keys(selectedActionsSettings).length > 0) {
+          subResults.push(createSubResult('actions-policy-selected-actions-update', SubResultStatus.WARNING, message));
+        }
+        if (allowList) {
+          subResults.push(createSubResult('actions-policy-allow-list-update', SubResultStatus.WARNING, message));
+        }
+        return { subResults, failed: true };
+      }
+    }
+
+    if (!selectedActionsEnabled) {
       const message =
-        `Skipping selected actions settings because actions-policy-allowed-actions must be "selected" ` +
-        `when managing selected actions or the allow list (got ${configuredValue})`;
+        `Skipping selected actions settings because allowed_actions must be "selected" ` +
+        `before managing selected actions or the allow list (${selectedActionsBlockReason})`;
 
       core.warning(`  ⚠️  ${message}`);
 

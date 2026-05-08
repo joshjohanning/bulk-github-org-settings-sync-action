@@ -3418,7 +3418,7 @@ orgs:
       });
 
       const allowList = ['new-action@*', 'another-action@*'];
-      const result = await syncActionsPolicy(mockOctokit, 'my-org', { allowed_actions: 'selected' }, allowList, false);
+      const result = await syncActionsPolicy(mockOctokit, 'my-org', {}, allowList, false);
 
       expect(result.failed).toBe(false);
       expect(result.subResults.some(s => s.kind === 'actions-policy-allow-list-update')).toBe(true);
@@ -3477,6 +3477,13 @@ orgs:
     });
 
     test('should skip selected actions settings unless allowed-actions is selected', async () => {
+      mockRequest.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/actions/permissions') {
+          return { data: { allowed_actions: 'all', enabled_repositories: 'all' } };
+        }
+        return { data: {} };
+      });
+
       const desired = { github_owned_allowed: true };
       const allowList = ['new-action@*'];
       const result = await syncActionsPolicy(mockOctokit, 'my-org', desired, allowList, false);
@@ -3487,13 +3494,13 @@ orgs:
           kind: 'actions-policy-selected-actions-update',
           status: 'warning',
           message:
-            'Skipping selected actions settings because actions-policy-allowed-actions must be "selected" when managing selected actions or the allow list (got not configured)'
+            'Skipping selected actions settings because allowed_actions must be "selected" before managing selected actions or the allow list (current: "all")'
         },
         {
           kind: 'actions-policy-allow-list-update',
           status: 'warning',
           message:
-            'Skipping selected actions settings because actions-policy-allowed-actions must be "selected" when managing selected actions or the allow list (got not configured)'
+            'Skipping selected actions settings because allowed_actions must be "selected" before managing selected actions or the allow list (current: "all")'
         }
       ]);
       expect(mockRequest).not.toHaveBeenCalledWith(
