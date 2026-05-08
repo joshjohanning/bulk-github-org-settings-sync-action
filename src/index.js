@@ -46,7 +46,17 @@ function getKnownOrgConfigKeys() {
   // 'issue-types' is inline issue type definitions (YAML-only, not an action input)
   // 'member-privileges' is inline member privilege overrides (YAML-only, not an action input)
   // 'org-profile' is inline organization profile overrides (YAML-only, not an action input)
-  const keys = new Set(['org', 'custom-properties', 'issue-types', 'member-privileges', 'org-profile']);
+  // 'code-security-configurations' is inline code security configuration overrides (YAML-only, not an action input)
+  // 'actions-policy' is inline actions policy overrides (YAML-only; individual settings are also available as action inputs)
+  const keys = new Set([
+    'org',
+    'custom-properties',
+    'issue-types',
+    'member-privileges',
+    'org-profile',
+    'code-security-configurations',
+    'actions-policy'
+  ]);
 
   try {
     const __filename = url.fileURLToPath(import.meta.url);
@@ -158,6 +168,62 @@ export const ORG_PROFILE_SETTINGS = new Map([
   ['org-blog', { apiKey: 'blog' }]
 ]);
 
+ * Supported Actions policy settings.
+ * Maps YAML key (hyphenated) to API key (snake_case), expected type, and endpoint group.
+ * @type {Map<string, { apiKey: string, type: string, validValues?: string[], endpoint: string }>}
+ */
+export const ACTIONS_POLICY_SETTINGS = new Map([
+  [
+    'allowed-actions',
+    {
+      apiKey: 'allowed_actions',
+      type: 'string',
+      validValues: ['all', 'local_only', 'selected'],
+      endpoint: 'permissions'
+    }
+  ],
+  [
+    'default-workflow-permissions',
+    {
+      apiKey: 'default_workflow_permissions',
+      type: 'string',
+      validValues: ['read', 'write'],
+      endpoint: 'workflow'
+    }
+  ],
+  [
+    'actions-can-approve-pull-request-reviews',
+    { apiKey: 'can_approve_pull_request_reviews', type: 'boolean', endpoint: 'workflow' }
+  ],
+  ['github-owned-allowed', { apiKey: 'github_owned_allowed', type: 'boolean', endpoint: 'selected-actions' }],
+  ['verified-allowed', { apiKey: 'verified_allowed', type: 'boolean', endpoint: 'selected-actions' }]
+]);
+
+/**
+ * Org-level keys parsed from organizations-file entries.
+ * Some action inputs are base-only and must not be accepted silently as
+ * per-org keys because parseOrganizationsFile() will otherwise ignore them.
+ * @type {Set<string>}
+ */
+const ORG_CONFIG_TOP_LEVEL_KEYS = new Set([
+  'org',
+  'custom-properties',
+  'custom-properties-file',
+  'delete-unmanaged-properties',
+  'issue-types',
+  'issue-types-file',
+  'delete-unmanaged-issue-types',
+  'rulesets-file',
+  'delete-unmanaged-rulesets',
+  'member-privileges',
+  'org-profile',
+  'code-security-configurations-file',
+  'code-security-configurations',
+  'delete-unmanaged-code-security-configurations',
+  'actions-policy',
+  'actions-allow-list-file'
+]);
+
 /**
  * Validate organization configuration and warn about unknown keys.
  * @param {Object} orgConfig - Organization configuration object from YAML
@@ -171,6 +237,33 @@ export function validateOrgConfig(orgConfig, orgName) {
   const knownKeys = getCachedKnownOrgConfigKeys();
 
   for (const key of Object.keys(orgConfig)) {
+    if (MEMBER_PRIVILEGE_SETTINGS.has(key)) {
+      core.warning(
+        `⚠️  Configuration key "${key}" for organization "${orgName}" must be nested under "member-privileges". ` +
+          `This top-level value will be ignored.`
+      );
+      continue;
+    }
+
+    if (key.startsWith('actions-policy-')) {
+      const nestedKey = key.slice('actions-policy-'.length);
+      if (ACTIONS_POLICY_SETTINGS.has(nestedKey)) {
+        core.warning(
+          `⚠️  Configuration key "${key}" for organization "${orgName}" must be nested under "actions-policy" ` +
+            `as "${nestedKey}". This top-level value will be ignored.`
+        );
+        continue;
+      }
+    }
+
+    if (knownKeys.has(key) && !ORG_CONFIG_TOP_LEVEL_KEYS.has(key)) {
+      core.warning(
+        `⚠️  Action input "${key}" is not supported as a per-org configuration key for organization "${orgName}". ` +
+          `This top-level value will be ignored.`
+      );
+      continue;
+    }
+
     if (!knownKeys.has(key)) {
       core.warning(
         `⚠️  Unknown configuration key "${key}" found for organization "${orgName}". ` +
@@ -244,7 +337,20 @@ export function validateOrgConfig(orgConfig, orgName) {
     }
   }
 
+  // Validate delete-unmanaged-code-security-configurations value if present
+  if (Object.prototype.hasOwnProperty.call(orgConfig, 'delete-unmanaged-code-security-configurations')) {
+    const val = orgConfig['delete-unmanaged-code-security-configurations'];
+    if (typeof val !== 'boolean') {
+      core.warning(
+        `⚠️  Invalid "delete-unmanaged-code-security-configurations" value for organization "${orgName}": ` +
+          `expected true or false, got "${val}". This setting will be ignored.`
+      );
+    }
+  }
+
   // member-privileges is fully validated by parseMemberPrivileges(), which throws contextual errors.
+
+  // actions-policy is fully validated by parseActionsPolicy(), which throws contextual errors.
 }
 
 // ─── Base-path resolution ────────────────────────────────────────────────────
@@ -253,7 +359,13 @@ export function validateOrgConfig(orgConfig, orgName) {
  * File-path config keys that should be resolved against base-path.
  * @type {string[]}
  */
-const FILE_PATH_CONFIG_KEYS = ['custom-properties-file', 'issue-types-file', 'rulesets-file'];
+const FILE_PATH_CONFIG_KEYS = [
+  'custom-properties-file',
+  'issue-types-file',
+  'rulesets-file',
+  'code-security-configurations-file',
+  'actions-allow-list-file'
+];
 
 /**
  * Resolve a single file path against a base path.
@@ -337,7 +449,16 @@ const SYNC_KIND_LABELS = Object.freeze({
   'org-profile-update': 'organization profile (updated)',
   'ruleset-create': 'ruleset (created)',
   'ruleset-update': 'ruleset (updated)',
-  'ruleset-delete': 'ruleset (deleted)'
+  'ruleset-delete': 'ruleset (deleted)',
+  'code-security-config-create': 'code security configuration (created)',
+  'code-security-config-update': 'code security configuration (updated)',
+  'code-security-config-delete': 'code security configuration (deleted)',
+  'code-security-config-attach': 'code security configuration (attached)',
+  'code-security-config-default': 'code security configuration (default updated)',
+  'actions-policy-permissions-update': 'actions policy (permissions updated)',
+  'actions-policy-workflow-update': 'actions policy (workflow permissions updated)',
+  'actions-policy-selected-actions-update': 'actions policy (selected actions updated)',
+  'actions-policy-allow-list-update': 'actions policy (allow list updated)'
 });
 
 /**
@@ -391,17 +512,18 @@ function formatSubResultSummary(subResult) {
  * Parse the list of organizations and their settings from inputs.
  * Supports two modes:
  *   1. organizations-file: YAML file with full org + settings config
- * Supports layering: base settings from action inputs (custom-properties-file, rulesets-file, and direct
- * member privilege inputs) are merged with per-org overrides from organizations-file.
+ * Supports layering: base settings from action inputs (custom-properties-file, rulesets-file, direct
+ * member privilege inputs, direct actions policy inputs, and actions-allow-list-file) are merged with
+ * per-org overrides from organizations-file.
  * Per-org properties override base properties with the same name; base properties
  * not overridden are preserved.
  *
- * Per-org custom-properties-file or rulesets-file in the organizations file
- * overrides the corresponding base file from the action input for that org.
+ * Per-org custom-properties-file, issue-types-file, rulesets-file, or actions-allow-list-file in the
+ * organizations file overrides the corresponding base file from the action input for that org.
  *
  * Modes:
- *   1. organizations-file (optionally combined with custom-properties-file / rulesets-file / direct member privilege inputs for base settings)
- *   2. organizations input + custom-properties-file / rulesets-file / direct member privilege inputs (same properties for all orgs)
+ *   1. organizations-file (optionally combined with custom-properties-file / rulesets-file / direct member privilege inputs / direct actions policy inputs for base settings)
+ *   2. organizations input + custom-properties-file / rulesets-file / direct member privilege inputs / direct actions policy inputs (same properties for all orgs)
  * @param {string} organizationsInput - Comma-separated org names
  * @param {string} organizationsFile - Path to YAML config file
  * @param {string} customPropertiesFile - Path to custom properties YAML file
@@ -410,7 +532,10 @@ function formatSubResultSummary(subResult) {
  * @param {string} [issueTypesFile] - Path to issue types YAML file (base for all orgs)
  * @param {Object|null} [memberPrivilegesFromInputs] - Member privileges parsed from action inputs (base for all orgs)
  * @param {Object|null} [orgProfileFromInputs] - Org profile parsed from action inputs (base for all orgs)
- * @returns {Array<{ org: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, issueTypes?: Array, memberPrivileges?: Object, orgProfile?: Object }>} Parsed org configs
+ * @param {string} [codeSecurityConfigurationsFile] - Path to code security configurations YAML file (base for all orgs)
+ * @param {Object|null} [actionsPolicyFromInputs] - Actions policy parsed from action inputs (base for all orgs)
+ * @param {string} [actionsAllowListFile] - Path to actions allow list YAML file (base for all orgs)
+ * @returns {Array<{ org: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, issueTypes?: Array, memberPrivileges?: Object, orgProfile?: Object, codeSecurityConfigurations?: Array, deleteUnmanagedCodeSecurityConfigurations?: boolean, actionsPolicy?: Object, actionsAllowList?: string[] }>} Parsed org configs
  */
 export function parseOrganizations(
   organizationsInput,
@@ -420,8 +545,28 @@ export function parseOrganizations(
   deleteUnmanagedRulesets,
   issueTypesFile,
   memberPrivilegesFromInputs,
-  orgProfileFromInputs
+  orgProfileFromInputs,
+  codeSecurityConfigurationsFile,
+  actionsPolicyFromInputs,
+  actionsAllowListFile
 ) {
+  let resolvedCodeSecurityConfigurationsFile = codeSecurityConfigurationsFile;
+  let resolvedActionsPolicyFromInputs = actionsPolicyFromInputs;
+  let resolvedActionsAllowListFile = actionsAllowListFile;
+
+  // Backward compatibility for older positional call sites before
+  // codeSecurityConfigurationsFile was introduced.
+  if (
+    resolvedActionsAllowListFile === undefined &&
+    (typeof resolvedCodeSecurityConfigurationsFile === 'object' || resolvedCodeSecurityConfigurationsFile === null)
+  ) {
+    const legacyActionsPolicyFromInputs = resolvedCodeSecurityConfigurationsFile;
+    const legacyActionsAllowListFile = resolvedActionsPolicyFromInputs;
+    resolvedActionsPolicyFromInputs = legacyActionsPolicyFromInputs;
+    resolvedActionsAllowListFile = legacyActionsAllowListFile;
+    resolvedCodeSecurityConfigurationsFile = undefined;
+  }
+
   // Load base custom properties from separate file (applies to all orgs)
   let baseCustomProperties = null;
   if (customPropertiesFile) {
@@ -444,6 +589,24 @@ export function parseOrganizations(
   let baseOrgProfile = null;
   if (orgProfileFromInputs) {
     baseOrgProfile = { ...orgProfileFromInputs };
+  }
+
+  // Load base code security configurations from separate file (applies to all orgs)
+  let baseCodeSecurityConfigurations = null;
+  if (resolvedCodeSecurityConfigurationsFile) {
+    baseCodeSecurityConfigurations = parseCodeSecurityConfigurationsFile(resolvedCodeSecurityConfigurationsFile);
+  }
+
+  // Load base actions policy from direct action inputs.
+  let baseActionsPolicy = null;
+  if (resolvedActionsPolicyFromInputs) {
+    baseActionsPolicy = { ...resolvedActionsPolicyFromInputs };
+  }
+
+  // Load base actions allow list from separate file (applies to all orgs)
+  let baseActionsAllowList = null;
+  if (resolvedActionsAllowListFile) {
+    baseActionsAllowList = parseActionsAllowListFile(resolvedActionsAllowListFile);
   }
 
   if (organizationsFile) {
@@ -514,6 +677,50 @@ export function parseOrganizations(
       if (baseOrgProfile || orgConfig.orgProfile) {
         orgConfig.orgProfile = mergeOrgProfile(baseOrgProfile || {}, orgConfig.orgProfile || {});
       }
+
+      // Per-org code-security-configurations-file overrides the base for this org
+      let orgCodeSecConfBase = baseCodeSecurityConfigurations;
+      if (orgConfig.codeSecurityConfigurationsFile) {
+        try {
+          orgCodeSecConfBase = parseCodeSecurityConfigurationsFile(orgConfig.codeSecurityConfigurationsFile);
+        } catch (error) {
+          throw new Error(
+            `Failed to parse code security configurations file "${orgConfig.codeSecurityConfigurationsFile}" for organization "${orgConfig.org}": ${error.message}`,
+            { cause: error }
+          );
+        }
+      }
+
+      if (orgCodeSecConfBase) {
+        orgConfig.codeSecurityConfigurations = mergeCodeSecurityConfigurations(
+          orgCodeSecConfBase,
+          orgConfig.codeSecurityConfigurations || []
+        );
+      }
+
+      delete orgConfig.codeSecurityConfigurationsFile;
+
+      // Per-org actions-policy layer on top of base actions policy
+      if (baseActionsPolicy || orgConfig.actionsPolicy) {
+        orgConfig.actionsPolicy = mergeActionsPolicy(baseActionsPolicy || {}, orgConfig.actionsPolicy || {});
+      }
+
+      // Per-org actions-allow-list-file overrides the base for this org
+      if (orgConfig.actionsAllowListFile) {
+        try {
+          orgConfig.actionsAllowList = parseActionsAllowListFile(orgConfig.actionsAllowListFile);
+        } catch (error) {
+          throw new Error(
+            `Failed to parse actions allow list file "${orgConfig.actionsAllowListFile}" for organization "${orgConfig.org}": ${error.message}`,
+            { cause: error }
+          );
+        }
+      } else if (baseActionsAllowList) {
+        orgConfig.actionsAllowList = [...baseActionsAllowList];
+      }
+
+      // Clean up the intermediate field
+      delete orgConfig.actionsAllowListFile;
     }
 
     return orgConfigs;
@@ -539,7 +746,10 @@ export function parseOrganizations(
     ...(rulesetsFiles && rulesetsFiles.length > 0 ? { rulesetsFiles } : {}),
     ...(deleteUnmanagedRulesets !== undefined ? { deleteUnmanagedRulesets } : {}),
     ...(baseMemberPrivileges ? { memberPrivileges: baseMemberPrivileges } : {}),
-    ...(baseOrgProfile ? { orgProfile: baseOrgProfile } : {})
+    ...(baseOrgProfile ? { orgProfile: baseOrgProfile } : {}),
+    ...(baseCodeSecurityConfigurations ? { codeSecurityConfigurations: baseCodeSecurityConfigurations } : {}),
+    ...(baseActionsPolicy ? { actionsPolicy: baseActionsPolicy } : {}),
+    ...(baseActionsAllowList ? { actionsAllowList: baseActionsAllowList } : {})
   }));
 }
 
@@ -593,6 +803,143 @@ export function mergeMemberPrivileges(basePrivileges, orgPrivileges) {
   return { ...basePrivileges, ...orgPrivileges };
 }
 
+// ─── Actions Policy Parsing ─────────────────────────────────────────────────────
+
+/**
+ * Parse and validate an actions policy YAML config object (inline or from file).
+ * Converts YAML keys (hyphenated) to API keys (snake_case) and validates types.
+ * @param {Object} config - Raw key-value map from YAML
+ * @param {string} [context] - Context for error messages (e.g., org name)
+ * @returns {Object} Normalized policy with API keys
+ */
+export function parseActionsPolicy(config, context) {
+  if (typeof config !== 'object' || config === null || Array.isArray(config)) {
+    const label = context ? ` for org "${context}"` : '';
+    throw new Error(`Invalid actions-policy${label}: expected a key-value map`);
+  }
+
+  const normalized = {};
+  const label = context ? ` for org "${context}"` : '';
+
+  for (const [yamlKey, value] of Object.entries(config)) {
+    const setting = ACTIONS_POLICY_SETTINGS.get(yamlKey);
+    if (!setting) {
+      throw new Error(
+        `Unknown actions policy key "${yamlKey}"${label}. ` +
+          `Valid keys: ${[...ACTIONS_POLICY_SETTINGS.keys()].join(', ')}`
+      );
+    }
+
+    if (setting.type === 'boolean') {
+      if (typeof value !== 'boolean') {
+        throw new Error(`Actions policy key "${yamlKey}"${label} must be a boolean, got "${value}"`);
+      }
+      normalized[setting.apiKey] = value;
+    } else if (setting.type === 'string') {
+      const strValue = String(value).trim();
+      if (setting.validValues && !setting.validValues.includes(strValue)) {
+        throw new Error(
+          `Actions policy key "${yamlKey}"${label} has invalid value "${strValue}". ` +
+            `Valid values: ${setting.validValues.join(', ')}`
+        );
+      }
+      normalized[setting.apiKey] = strValue;
+    }
+  }
+
+  return normalized;
+}
+
+/**
+ * Build actions policy from action inputs.
+ * Reads each actions policy setting from core.getInput() and returns
+ * a normalized object with API keys for any non-empty inputs.
+ * @returns {Object|null} Normalized policy with API keys, or null if no inputs set
+ */
+export function getActionsPolicyFromInputs() {
+  const result = {};
+
+  for (const [yamlKey, setting] of ACTIONS_POLICY_SETTINGS) {
+    const inputName = `actions-policy-${yamlKey}`;
+    const raw = core.getInput(inputName);
+    if (raw === '') continue;
+
+    if (setting.type === 'boolean') {
+      const lower = raw.toLowerCase();
+      if (lower === 'true') {
+        result[setting.apiKey] = true;
+      } else if (lower === 'false') {
+        result[setting.apiKey] = false;
+      } else {
+        throw new Error(`Input "${inputName}" must be a boolean (true/false), got "${raw}"`);
+      }
+    } else if (setting.type === 'string') {
+      const trimmedRaw = raw.trim();
+      if (trimmedRaw === '') continue;
+      if (setting.validValues && !setting.validValues.includes(trimmedRaw)) {
+        throw new Error(
+          `Input "${inputName}" has invalid value "${trimmedRaw}". Valid values: ${setting.validValues.join(', ')}`
+        );
+      }
+      result[setting.apiKey] = trimmedRaw;
+    }
+  }
+
+  return Object.keys(result).length > 0 ? result : null;
+}
+
+/**
+ * Merge base actions policy with per-org overrides.
+ * Per-org settings override base settings with the same key.
+ * Base settings not overridden are preserved.
+ * @param {Object} basePolicy - Base actions policy settings (API-keyed)
+ * @param {Object} orgPolicy - Per-org actions policy overrides (API-keyed)
+ * @returns {Object} Merged policy
+ */
+export function mergeActionsPolicy(basePolicy, orgPolicy) {
+  return { ...basePolicy, ...orgPolicy };
+}
+
+/**
+ * Parse an actions allow list YAML file.
+ * The file should contain an 'actions' key with an array of pattern strings.
+ * @param {string} filePath - Path to the YAML file
+ * @returns {string[]} Array of allow list patterns
+ */
+export function parseActionsAllowListFile(filePath) {
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`Actions allow list file not found: ${filePath}`);
+  }
+
+  const content = fs.readFileSync(filePath, 'utf8');
+  const config = yaml.load(content);
+
+  if (!config || !config.actions || !Array.isArray(config.actions)) {
+    throw new Error(`Invalid actions allow list file format: expected an "actions" array in ${filePath}`);
+  }
+
+  const patterns = [];
+  const seenPatterns = new Set();
+
+  for (const entry of config.actions) {
+    if (typeof entry !== 'string') {
+      throw new Error(`Invalid entry in actions allow list: expected a string, got ${typeof entry}`);
+    }
+
+    const pattern = entry.trim();
+    if (pattern.length > 0 && !seenPatterns.has(pattern)) {
+      patterns.push(pattern);
+      seenPatterns.add(pattern);
+    }
+  }
+
+  if (patterns.length === 0) {
+    throw new Error(`Actions allow list file contains no valid patterns: ${filePath}`);
+  }
+
+  return patterns;
+}
+
 /**
  * Merge base org profile with per-org overrides.
  * Per-org settings override base settings with the same key.
@@ -608,7 +955,7 @@ export function mergeOrgProfile(baseProfile, orgProfile) {
 /**
  * Parse the organizations YAML config file.
  * @param {string} filePath - Path to the YAML file
- * @returns {Array<{ org: string, customPropertiesFile?: string, customProperties?: Array, issueTypesFile?: string, issueTypes?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, deleteUnmanagedProperties?: boolean, deleteUnmanagedIssueTypes?: boolean, memberPrivileges?: Object, orgProfile?: Object }>}
+ * @returns {Array<{ org: string, customPropertiesFile?: string, customProperties?: Array, issueTypesFile?: string, issueTypes?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, deleteUnmanagedProperties?: boolean, deleteUnmanagedIssueTypes?: boolean, memberPrivileges?: Object, orgProfile?: Object, codeSecurityConfigurationsFile?: string, codeSecurityConfigurations?: Array, deleteUnmanagedCodeSecurityConfigurations?: boolean, actionsPolicy?: Object, actionsAllowListFile?: string }>}
  */
 export function parseOrganizationsFile(filePath) {
   if (!fs.existsSync(filePath)) {
@@ -716,6 +1063,45 @@ export function parseOrganizationsFile(filePath) {
         result.orgProfile || {},
         parseOrgProfile(orgConfig['org-profile'], orgConfig.org)
       );
+    }
+
+
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'code-security-configurations-file')) {
+      const cscFile = orgConfig['code-security-configurations-file'];
+      if (typeof cscFile !== 'string' || cscFile.trim() === '') {
+        throw new Error(
+          `Invalid "code-security-configurations-file" for org "${orgConfig.org}": expected a non-empty string`
+        );
+      }
+      result.codeSecurityConfigurationsFile = cscFile.trim();
+    }
+
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'code-security-configurations')) {
+      if (!Array.isArray(orgConfig['code-security-configurations'])) {
+        throw new Error(`Invalid "code-security-configurations" for org "${orgConfig.org}": expected an array`);
+      }
+      result.codeSecurityConfigurations = normalizeCodeSecurityConfigurations(
+        orgConfig['code-security-configurations']
+      );
+    }
+
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'delete-unmanaged-code-security-configurations')) {
+      const val = orgConfig['delete-unmanaged-code-security-configurations'];
+      if (typeof val === 'boolean') {
+        result.deleteUnmanagedCodeSecurityConfigurations = val;
+      }
+    }
+
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'actions-policy')) {
+      result.actionsPolicy = parseActionsPolicy(orgConfig['actions-policy'], orgConfig.org);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'actions-allow-list-file')) {
+      const alFile = orgConfig['actions-allow-list-file'];
+      if (typeof alFile !== 'string' || alFile.trim() === '') {
+        throw new Error(`Invalid "actions-allow-list-file" for org "${orgConfig.org}": expected a non-empty string`);
+      }
+      result.actionsAllowListFile = alFile.trim();
     }
 
     return result;
@@ -1604,6 +1990,427 @@ export async function syncOrgProfile(octokit, org, desiredSettings, dryRun, orgS
   return { subResults, failed: false };
 }
 
+// ─── Actions Policy Sync ────────────────────────────────────────────────────────
+
+/**
+ * Build a reverse lookup from API key to YAML key for actions policy settings.
+ * @returns {Map<string, string>}
+ */
+function buildActionsPolicyApiToYamlKeyMap() {
+  const map = new Map();
+  for (const [yamlKey, setting] of ACTIONS_POLICY_SETTINGS) {
+    map.set(setting.apiKey, yamlKey);
+  }
+  return map;
+}
+
+const ACTIONS_POLICY_API_TO_YAML_KEY = buildActionsPolicyApiToYamlKeyMap();
+
+/**
+ * Return de-duplicated allow-list patterns while preserving original order.
+ * @param {string[]} patterns
+ * @returns {string[]}
+ */
+function uniqueActionsAllowListPatterns(patterns) {
+  return [...new Set(patterns)];
+}
+
+/**
+ * Sync Actions policy settings for an organization.
+ * Manages three API endpoints:
+ *   1. GET/PUT /orgs/{org}/actions/permissions — allowed_actions
+ *   2. GET/PUT /orgs/{org}/actions/permissions/workflow — default_workflow_permissions, can_approve_pull_request_reviews
+ *   3. GET/PUT /orgs/{org}/actions/permissions/selected-actions — github_owned_allowed, verified_allowed, patterns_allowed
+ *
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} org - Organization name
+ * @param {Object} desiredSettings - Desired actions policy settings (API-keyed)
+ * @param {string[]|null} allowList - Desired allow list patterns, or null if not managed
+ * @param {boolean} dryRun - Preview mode
+ * @returns {Promise<Object>} Result object with subResults
+ */
+export async function syncActionsPolicy(octokit, org, desiredSettings, allowList, dryRun) {
+  const subResults = [];
+  const wouldPrefix = dryRun ? 'Would ' : '';
+
+  // Group desired settings by endpoint
+  const permissionsSettings = {};
+  const workflowSettings = {};
+  const selectedActionsSettings = {};
+
+  for (const [apiKey, value] of Object.entries(desiredSettings)) {
+    const yamlKey = ACTIONS_POLICY_API_TO_YAML_KEY.get(apiKey);
+    if (!yamlKey) continue;
+    const setting = ACTIONS_POLICY_SETTINGS.get(yamlKey);
+    if (!setting) continue;
+
+    if (setting.endpoint === 'permissions') {
+      permissionsSettings[apiKey] = value;
+    } else if (setting.endpoint === 'workflow') {
+      workflowSettings[apiKey] = value;
+    } else if (setting.endpoint === 'selected-actions') {
+      selectedActionsSettings[apiKey] = value;
+    }
+  }
+
+  // 1. Sync /actions/permissions (allowed_actions)
+  if (Object.keys(permissionsSettings).length > 0) {
+    const result = await syncActionsPermissions(octokit, org, permissionsSettings, dryRun, wouldPrefix);
+    subResults.push(...result.subResults);
+    if (result.failed) return { subResults, failed: true };
+  }
+
+  // 2. Sync /actions/permissions/workflow (default_workflow_permissions, can_approve_pull_request_reviews)
+  if (Object.keys(workflowSettings).length > 0) {
+    const result = await syncActionsWorkflowPermissions(octokit, org, workflowSettings, dryRun, wouldPrefix);
+    subResults.push(...result.subResults);
+    if (result.failed) return { subResults, failed: true };
+  }
+
+  // 3. Sync /actions/permissions/selected-actions (github_owned_allowed, verified_allowed, patterns_allowed)
+  if (Object.keys(selectedActionsSettings).length > 0 || allowList) {
+    let selectedActionsEnabled = permissionsSettings.allowed_actions === 'selected';
+    let selectedActionsBlockReason = '';
+
+    if (permissionsSettings.allowed_actions !== undefined && !selectedActionsEnabled) {
+      selectedActionsBlockReason = `configured: "${permissionsSettings.allowed_actions}"`;
+    } else if (!selectedActionsEnabled) {
+      try {
+        const { data: currentPermissions } = await octokit.request('GET /orgs/{org}/actions/permissions', { org });
+        selectedActionsEnabled = currentPermissions.allowed_actions === 'selected';
+        if (!selectedActionsEnabled) {
+          selectedActionsBlockReason = `current: "${currentPermissions.allowed_actions}"`;
+        }
+      } catch (error) {
+        const message = `Failed to verify actions permissions before syncing selected actions settings: ${error.message}`;
+        core.warning(`  ⚠️  ${message}`);
+        if (Object.keys(selectedActionsSettings).length > 0) {
+          subResults.push(createSubResult('actions-policy-selected-actions-update', SubResultStatus.WARNING, message));
+        }
+        if (allowList) {
+          subResults.push(createSubResult('actions-policy-allow-list-update', SubResultStatus.WARNING, message));
+        }
+        return { subResults, failed: true };
+      }
+    }
+
+    if (!selectedActionsEnabled) {
+      const message =
+        `Skipping selected actions settings because allowed_actions must be "selected" ` +
+        `before managing selected actions or the allow list (${selectedActionsBlockReason})`;
+
+      core.warning(`  ⚠️  ${message}`);
+
+      if (Object.keys(selectedActionsSettings).length > 0) {
+        subResults.push(createSubResult('actions-policy-selected-actions-update', SubResultStatus.WARNING, message));
+      }
+      if (allowList) {
+        subResults.push(createSubResult('actions-policy-allow-list-update', SubResultStatus.WARNING, message));
+      }
+
+      return { subResults, failed: false };
+    }
+
+    const result = await syncActionsSelectedActions(
+      octokit,
+      org,
+      selectedActionsSettings,
+      allowList,
+      dryRun,
+      wouldPrefix
+    );
+    subResults.push(...result.subResults);
+    if (result.failed) return { subResults, failed: true };
+  }
+
+  return { subResults, failed: false };
+}
+
+/**
+ * Sync the /actions/permissions endpoint for allowed_actions.
+ * @param {Octokit} octokit
+ * @param {string} org
+ * @param {Object} desiredSettings
+ * @param {boolean} dryRun
+ * @param {string} wouldPrefix
+ * @returns {Promise<Object>}
+ */
+async function syncActionsPermissions(octokit, org, desiredSettings, dryRun, wouldPrefix) {
+  const subResults = [];
+
+  let current;
+  try {
+    const { data } = await octokit.request('GET /orgs/{org}/actions/permissions', { org });
+    current = data;
+  } catch (error) {
+    core.warning(`  ⚠️  Failed to fetch actions permissions: ${error.message}`);
+    subResults.push(
+      createSubResult(
+        'actions-policy-permissions-update',
+        SubResultStatus.WARNING,
+        `Failed to fetch actions permissions: ${error.message}`
+      )
+    );
+    return { subResults, failed: true };
+  }
+
+  const patch = {};
+  const changes = [];
+
+  for (const [apiKey, desiredValue] of Object.entries(desiredSettings)) {
+    const currentValue = current[apiKey];
+    const yamlKey = ACTIONS_POLICY_API_TO_YAML_KEY.get(apiKey) || apiKey;
+    if (currentValue !== desiredValue) {
+      patch[apiKey] = desiredValue;
+      changes.push(`${yamlKey}: ${currentValue} → ${desiredValue}`);
+    }
+  }
+
+  if (changes.length === 0) {
+    core.info(`  ✅ Actions permissions unchanged`);
+    return { subResults, failed: false };
+  }
+
+  for (const change of changes) {
+    core.info(`  🔧 ${wouldPrefix}Update ${change}`);
+  }
+
+  subResults.push(
+    createSubResult(
+      'actions-policy-permissions-update',
+      SubResultStatus.CHANGED,
+      `${wouldPrefix}update ${changes.length} setting(s): ${changes.join(', ')}`
+    )
+  );
+
+  if (!dryRun) {
+    try {
+      await octokit.request('PUT /orgs/{org}/actions/permissions', {
+        org,
+        enabled_repositories: current.enabled_repositories,
+        ...patch
+      });
+    } catch (error) {
+      core.warning(`  ⚠️  Failed to update actions permissions: ${error.message}`);
+      subResults[subResults.length - 1] = createSubResult(
+        'actions-policy-permissions-update',
+        SubResultStatus.WARNING,
+        `Failed to update actions permissions: ${error.message}`
+      );
+      return { subResults, failed: true };
+    }
+  }
+
+  return { subResults, failed: false };
+}
+
+/**
+ * Sync the /actions/permissions/workflow endpoint.
+ * @param {Octokit} octokit
+ * @param {string} org
+ * @param {Object} desiredSettings
+ * @param {boolean} dryRun
+ * @param {string} wouldPrefix
+ * @returns {Promise<Object>}
+ */
+async function syncActionsWorkflowPermissions(octokit, org, desiredSettings, dryRun, wouldPrefix) {
+  const subResults = [];
+
+  let current;
+  try {
+    const { data } = await octokit.request('GET /orgs/{org}/actions/permissions/workflow', { org });
+    current = data;
+  } catch (error) {
+    core.warning(`  ⚠️  Failed to fetch workflow permissions: ${error.message}`);
+    subResults.push(
+      createSubResult(
+        'actions-policy-workflow-update',
+        SubResultStatus.WARNING,
+        `Failed to fetch workflow permissions: ${error.message}`
+      )
+    );
+    return { subResults, failed: true };
+  }
+
+  const patch = {};
+  const changes = [];
+
+  for (const [apiKey, desiredValue] of Object.entries(desiredSettings)) {
+    const currentValue = current[apiKey];
+    const yamlKey = ACTIONS_POLICY_API_TO_YAML_KEY.get(apiKey) || apiKey;
+    if (currentValue !== desiredValue) {
+      patch[apiKey] = desiredValue;
+      changes.push(`${yamlKey}: ${currentValue} → ${desiredValue}`);
+    }
+  }
+
+  if (changes.length === 0) {
+    core.info(`  ✅ Workflow permissions unchanged`);
+    return { subResults, failed: false };
+  }
+
+  for (const change of changes) {
+    core.info(`  🔧 ${wouldPrefix}Update ${change}`);
+  }
+
+  subResults.push(
+    createSubResult(
+      'actions-policy-workflow-update',
+      SubResultStatus.CHANGED,
+      `${wouldPrefix}update ${changes.length} setting(s): ${changes.join(', ')}`
+    )
+  );
+
+  if (!dryRun) {
+    try {
+      await octokit.request('PUT /orgs/{org}/actions/permissions/workflow', {
+        org,
+        ...patch
+      });
+    } catch (error) {
+      core.warning(`  ⚠️  Failed to update workflow permissions: ${error.message}`);
+      subResults[subResults.length - 1] = createSubResult(
+        'actions-policy-workflow-update',
+        SubResultStatus.WARNING,
+        `Failed to update workflow permissions: ${error.message}`
+      );
+      return { subResults, failed: true };
+    }
+  }
+
+  return { subResults, failed: false };
+}
+
+/**
+ * Sync the /actions/permissions/selected-actions endpoint.
+ * @param {Octokit} octokit
+ * @param {string} org
+ * @param {Object} desiredSettings
+ * @param {string[]|null} allowList
+ * @param {boolean} dryRun
+ * @param {string} wouldPrefix
+ * @returns {Promise<Object>}
+ */
+async function syncActionsSelectedActions(octokit, org, desiredSettings, allowList, dryRun, wouldPrefix) {
+  const subResults = [];
+
+  let current;
+  try {
+    const { data } = await octokit.request('GET /orgs/{org}/actions/permissions/selected-actions', { org });
+    current = data;
+  } catch (error) {
+    core.warning(`  ⚠️  Failed to fetch selected actions settings: ${error.message}`);
+    subResults.push(
+      createSubResult(
+        'actions-policy-selected-actions-update',
+        SubResultStatus.WARNING,
+        `Failed to fetch selected actions settings: ${error.message}`
+      )
+    );
+    return { subResults, failed: true };
+  }
+
+  const patch = {};
+  const changes = [];
+
+  // Compare boolean settings
+  for (const [apiKey, desiredValue] of Object.entries(desiredSettings)) {
+    const currentValue = current[apiKey];
+    const yamlKey = ACTIONS_POLICY_API_TO_YAML_KEY.get(apiKey) || apiKey;
+    if (currentValue !== desiredValue) {
+      patch[apiKey] = desiredValue;
+      changes.push(`${yamlKey}: ${currentValue} → ${desiredValue}`);
+    }
+  }
+
+  // Compare allow list patterns
+  if (allowList) {
+    const currentPatterns = uniqueActionsAllowListPatterns(current.patterns_allowed || []);
+    const desiredPatterns = uniqueActionsAllowListPatterns(allowList);
+    const sortedCurrent = [...currentPatterns].sort();
+    const sortedDesired = [...desiredPatterns].sort();
+    const patternsChanged =
+      sortedCurrent.length !== sortedDesired.length || sortedCurrent.some((v, i) => v !== sortedDesired[i]);
+
+    if (patternsChanged) {
+      patch.patterns_allowed = desiredPatterns;
+      const currentPatternSet = new Set(currentPatterns);
+      const desiredPatternSet = new Set(desiredPatterns);
+      const added = desiredPatterns.filter(p => !currentPatternSet.has(p));
+      const removed = currentPatterns.filter(p => !desiredPatternSet.has(p));
+      const details = [];
+      if (added.length > 0) details.push(`+${added.length} added`);
+      if (removed.length > 0) details.push(`-${removed.length} removed`);
+      changes.push(`allow-list: ${details.join(', ')} (${desiredPatterns.length} total)`);
+    }
+  }
+
+  if (changes.length === 0) {
+    core.info(`  ✅ Selected actions settings unchanged`);
+    return { subResults, failed: false };
+  }
+
+  for (const change of changes) {
+    core.info(`  🔧 ${wouldPrefix}Update ${change}`);
+  }
+
+  // Determine the sync kind for sub-results
+  const hasSettingChanges = Object.keys(desiredSettings).some(k => patch[k] !== undefined);
+  const hasAllowListChanges = patch.patterns_allowed !== undefined;
+
+  if (hasSettingChanges) {
+    const settingChanges = changes.filter(c => !c.startsWith('allow-list:'));
+    subResults.push(
+      createSubResult(
+        'actions-policy-selected-actions-update',
+        SubResultStatus.CHANGED,
+        `${wouldPrefix}update ${settingChanges.length} setting(s): ${settingChanges.join(', ')}`
+      )
+    );
+  }
+
+  if (hasAllowListChanges) {
+    const allowListChange = changes.find(c => c.startsWith('allow-list:'));
+    subResults.push(
+      createSubResult(
+        'actions-policy-allow-list-update',
+        SubResultStatus.CHANGED,
+        `${wouldPrefix}update ${allowListChange}`
+      )
+    );
+  }
+
+  if (!dryRun) {
+    try {
+      // Build the full PUT body: preserve current values for unmanaged keys
+      const putBody = {
+        github_owned_allowed: current.github_owned_allowed,
+        verified_allowed: current.verified_allowed,
+        patterns_allowed: current.patterns_allowed || [],
+        ...patch
+      };
+
+      await octokit.request('PUT /orgs/{org}/actions/permissions/selected-actions', {
+        org,
+        ...putBody
+      });
+    } catch (error) {
+      core.warning(`  ⚠️  Failed to update selected actions settings: ${error.message}`);
+      for (let i = 0; i < subResults.length; i++) {
+        subResults[i] = createSubResult(
+          subResults[i].kind,
+          SubResultStatus.WARNING,
+          `Failed to update selected actions settings: ${error.message}`
+        );
+      }
+      return { subResults, failed: true };
+    }
+  }
+
+  return { subResults, failed: false };
+}
+
+
 // ─── Organization Rulesets Sync ─────────────────────────────────────────────────
 
 /**
@@ -1849,6 +2656,924 @@ export async function syncOrgRulesets(octokit, org, rulesetFilePaths, deleteUnma
   return { subResults, failed: hasFailed };
 }
 
+// ─── Code Security Configurations Parsing & Sync ────────────────────────────────
+
+/**
+ * Read-only fields returned by GET that should be stripped before comparison/create/update.
+ */
+const CODE_SECURITY_CONFIG_READONLY_FIELDS = new Set([
+  'id',
+  'target_type',
+  'url',
+  'html_url',
+  'created_at',
+  'updated_at'
+]);
+
+const CODE_SECURITY_ENABLEMENT_VALUES = new Set(['enabled', 'disabled', 'not_set']);
+const CODE_SECURITY_ENFORCEMENT_VALUES = new Set(['enforced', 'unenforced']);
+const CODE_SECURITY_ATTACH_SCOPE_VALUES = new Set([
+  'all',
+  'all_without_configurations',
+  'public',
+  'private_or_internal',
+  'selected'
+]);
+const CODE_SECURITY_DEFAULT_FOR_NEW_REPOS_VALUES = new Set(['all', 'none', 'private_and_internal', 'public']);
+const CODE_SECURITY_ATTACH_SCOPE_PRIORITY = new Map([
+  ['all', 1],
+  ['all_without_configurations', 2],
+  ['public', 3],
+  ['private_or_internal', 3],
+  ['selected', 4]
+]);
+const CODE_SECURITY_OPTION_FIELDS = [
+  'dependency_graph_autosubmit_action_options',
+  'code_scanning_default_setup_options',
+  'secret_scanning_delegated_bypass_options',
+  'code_scanning_options'
+];
+
+function getCodeSecurityConfigValue(config, field) {
+  const hyphenated = field.replace(/_/g, '-');
+  return config[field] ?? config[hyphenated];
+}
+
+function normalizeCodeSecurityEnumValue(value, field, configName, validValues) {
+  const normalizedValue = String(value).trim();
+  if (!validValues.has(normalizedValue)) {
+    throw new Error(
+      `Code security configuration "${configName}" field "${field}" has invalid value "${normalizedValue}". ` +
+        `Valid values: ${[...validValues].join(', ')}`
+    );
+  }
+  return normalizedValue;
+}
+
+function normalizeCodeSecurityOptionsValue(value, field, configName) {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error(`Code security configuration "${configName}" field "${field}" must be a key-value map`);
+  }
+  return value;
+}
+
+function normalizeRepositoryIdsValue(value, configName) {
+  const rawIds = Array.isArray(value) ? value : String(value).split(',');
+  const ids = [];
+
+  for (const rawId of rawIds) {
+    const normalized = Number.parseInt(String(rawId).trim(), 10);
+    if (!Number.isInteger(normalized) || normalized <= 0) {
+      throw new Error(
+        `Code security configuration "${configName}" field "selected_repository_ids" must contain positive integer IDs`
+      );
+    }
+    if (!ids.includes(normalized)) {
+      ids.push(normalized);
+    }
+  }
+
+  if (ids.length === 0) {
+    throw new Error(
+      `Code security configuration "${configName}" field "selected_repository_ids" must contain at least one repository ID`
+    );
+  }
+
+  return ids;
+}
+
+function normalizeRepositoryPropertyFiltersValue(value, configName) {
+  const rawFilters = Array.isArray(value) ? value : [value];
+  const filters = [];
+
+  for (const rawFilter of rawFilters) {
+    if (!rawFilter || typeof rawFilter !== 'object') {
+      throw new Error(
+        `Code security configuration "${configName}" field "selected_repositories_by_property" entries must be objects with "property" and "value" keys`
+      );
+    }
+    const property = String(rawFilter.property ?? '').trim();
+    const filterValue = rawFilter.value !== undefined ? String(rawFilter.value).trim() : '';
+
+    if (!property) {
+      throw new Error(
+        `Code security configuration "${configName}" field "selected_repositories_by_property" entry is missing "property"`
+      );
+    }
+
+    filters.push({ property, value: filterValue });
+  }
+
+  if (filters.length === 0) {
+    throw new Error(
+      `Code security configuration "${configName}" field "selected_repositories_by_property" must contain at least one filter`
+    );
+  }
+
+  return filters;
+}
+
+function normalizeRepositoryNamesValue(value, configName) {
+  const rawNames = Array.isArray(value) ? value : String(value).split(',');
+  const names = [];
+
+  for (const rawName of rawNames) {
+    const normalized = String(rawName).trim();
+    if (!normalized) {
+      continue;
+    }
+    if (!names.includes(normalized)) {
+      names.push(normalized);
+    }
+  }
+
+  if (names.length === 0) {
+    throw new Error(
+      `Code security configuration "${configName}" field "selected_repositories" must contain at least one repository name`
+    );
+  }
+
+  return names;
+}
+
+function validateUniqueCodeSecurityConfigurationNames(configs) {
+  const seenNames = new Map();
+
+  for (const [index, config] of configs.entries()) {
+    const name = config.name;
+    if (seenNames.has(name)) {
+      throw new Error(
+        `Duplicate code security configuration name "${name}" at indexes ${seenNames.get(name)} and ${index}`
+      );
+    }
+    seenNames.set(name, index);
+  }
+}
+
+/**
+ * Parse a standalone code security configurations YAML file.
+ * @param {string} filePath - Path to the YAML file
+ * @returns {Array<Object>} Normalized code security configuration definitions
+ */
+export function parseCodeSecurityConfigurationsFile(filePath) {
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`Code security configurations file not found: ${filePath}`);
+  }
+
+  const content = fs.readFileSync(filePath, 'utf8');
+  const configs = yaml.load(content);
+
+  if (!Array.isArray(configs)) {
+    throw new Error(`Invalid code security configurations file format: expected an array in ${filePath}`);
+  }
+
+  return normalizeCodeSecurityConfigurations(configs);
+}
+
+/**
+ * Normalize code security configuration definitions from YAML format to API format.
+ * YAML uses hyphenated keys; API uses snake_case — we convert during normalization.
+ * @param {Array<Object>} configs - Code security configuration definitions from YAML
+ * @returns {Array<Object>} Normalized configurations ready for API calls
+ */
+export function normalizeCodeSecurityConfigurations(configs) {
+  const normalizedConfigs = configs.map((config, index) => {
+    if (typeof config !== 'object' || config === null || Array.isArray(config)) {
+      throw new Error(`Code security configuration entry at index ${index} must be a key-value map`);
+    }
+    if (!config.name) {
+      throw new Error(`Code security configuration at index ${index} must have a "name" field`);
+    }
+    if (config.description === undefined || config.description === null) {
+      throw new Error(`Code security configuration "${config.name}" must have a "description" field`);
+    }
+
+    const normalized = {
+      name: config.name,
+      description: String(config.description)
+    };
+
+    // Simple enablement status fields (enabled/disabled/not_set)
+    const enablementFields = [
+      'advanced_security',
+      'dependency_graph',
+      'dependency_graph_autosubmit_action',
+      'dependabot_alerts',
+      'dependabot_security_updates',
+      'code_scanning_default_setup',
+      'secret_scanning',
+      'secret_scanning_push_protection',
+      'secret_scanning_validity_checks',
+      'secret_scanning_non_provider_patterns',
+      'secret_scanning_generic_secrets',
+      'secret_scanning_delegated_bypass',
+      'private_vulnerability_reporting',
+      'code_scanning_delegated_alert_dismissal',
+      'secret_scanning_delegated_alert_dismissal',
+      'secret_scanning_extended_metadata',
+      'code_security',
+      'secret_protection',
+      'dependabot_delegated_alert_dismissal'
+    ];
+
+    for (const field of enablementFields) {
+      const value = getCodeSecurityConfigValue(config, field);
+      if (value !== undefined && value !== null) {
+        normalized[field] = normalizeCodeSecurityEnumValue(
+          value,
+          field,
+          normalized.name,
+          CODE_SECURITY_ENABLEMENT_VALUES
+        );
+      }
+    }
+
+    // enforcement field (enforced/unenforced)
+    const enforcement = config.enforcement;
+    if (enforcement !== undefined && enforcement !== null) {
+      normalized.enforcement = normalizeCodeSecurityEnumValue(
+        enforcement,
+        'enforcement',
+        normalized.name,
+        CODE_SECURITY_ENFORCEMENT_VALUES
+      );
+    }
+
+    // Object fields
+    for (const field of CODE_SECURITY_OPTION_FIELDS) {
+      const value = getCodeSecurityConfigValue(config, field);
+      if (value !== undefined && value !== null) {
+        normalized[field] = normalizeCodeSecurityOptionsValue(value, field, normalized.name);
+      }
+    }
+
+    const attachScope = getCodeSecurityConfigValue(config, 'attach_scope');
+    if (attachScope !== undefined && attachScope !== null) {
+      normalized.attach_scope = normalizeCodeSecurityEnumValue(
+        attachScope,
+        'attach_scope',
+        normalized.name,
+        CODE_SECURITY_ATTACH_SCOPE_VALUES
+      );
+    }
+
+    const selectedRepositoryIds = getCodeSecurityConfigValue(config, 'selected_repository_ids');
+    if (selectedRepositoryIds !== undefined && selectedRepositoryIds !== null) {
+      normalized.selected_repository_ids = normalizeRepositoryIdsValue(selectedRepositoryIds, normalized.name);
+    }
+
+    const selectedRepositories = getCodeSecurityConfigValue(config, 'selected_repositories');
+    if (selectedRepositories !== undefined && selectedRepositories !== null) {
+      normalized.selected_repositories = normalizeRepositoryNamesValue(selectedRepositories, normalized.name);
+    }
+
+    const selectedRepositoriesByProperty = getCodeSecurityConfigValue(config, 'selected_repositories_by_property');
+    if (selectedRepositoriesByProperty !== undefined && selectedRepositoriesByProperty !== null) {
+      normalized.selected_repositories_by_property = normalizeRepositoryPropertyFiltersValue(
+        selectedRepositoriesByProperty,
+        normalized.name
+      );
+    }
+
+    const defaultForNewRepos = getCodeSecurityConfigValue(config, 'default_for_new_repos');
+    if (defaultForNewRepos !== undefined && defaultForNewRepos !== null) {
+      normalized.default_for_new_repos = normalizeCodeSecurityEnumValue(
+        defaultForNewRepos,
+        'default_for_new_repos',
+        normalized.name,
+        CODE_SECURITY_DEFAULT_FOR_NEW_REPOS_VALUES
+      );
+    }
+
+    const hasSelectedTargets =
+      (normalized.selected_repository_ids && normalized.selected_repository_ids.length > 0) ||
+      (normalized.selected_repositories && normalized.selected_repositories.length > 0) ||
+      (normalized.selected_repositories_by_property && normalized.selected_repositories_by_property.length > 0);
+    if (normalized.attach_scope === 'selected' && !hasSelectedTargets) {
+      throw new Error(
+        `Code security configuration "${normalized.name}" must include "selected_repository_ids", "selected_repositories", or "selected_repositories_by_property" when attach_scope is "selected"`
+      );
+    }
+    if (normalized.attach_scope !== 'selected' && hasSelectedTargets) {
+      throw new Error(
+        `Code security configuration "${normalized.name}" can only include selected repository targets when attach_scope is "selected"`
+      );
+    }
+
+    return normalized;
+  });
+
+  validateUniqueCodeSecurityConfigurationNames(normalizedConfigs);
+
+  return normalizedConfigs;
+}
+
+/**
+ * Merge base code security configurations with per-org overrides.
+ * Per-org configurations override base configurations with the same name.
+ * Base configurations not overridden are preserved.
+ * @param {Array<Object>} baseConfigs - Base code security configuration definitions
+ * @param {Array<Object>} orgConfigs - Per-org code security configuration overrides
+ * @returns {Array<Object>} Merged configurations
+ */
+export function mergeCodeSecurityConfigurations(baseConfigs, orgConfigs) {
+  const merged = new Map(baseConfigs.map(c => [c.name, { ...c }]));
+
+  for (const orgConfig of orgConfigs) {
+    merged.set(orgConfig.name, { ...(merged.get(orgConfig.name) || {}), ...orgConfig });
+  }
+
+  return Array.from(merged.values());
+}
+
+/**
+ * Strip read-only fields from a code security configuration for comparison.
+ * @param {Object} config - Full configuration (possibly from API response)
+ * @returns {Object} Config with read-only fields removed
+ */
+function stripCodeSecurityConfigReadonlyFields(config) {
+  const stripped = {};
+  for (const [key, value] of Object.entries(config)) {
+    if (!CODE_SECURITY_CONFIG_READONLY_FIELDS.has(key)) {
+      stripped[key] = value;
+    }
+  }
+  return stripped;
+}
+
+function stripCodeSecurityConfigManagementFields(config) {
+  const stripped = { ...config };
+  delete stripped.attach_scope;
+  delete stripped.selected_repository_ids;
+  delete stripped.selected_repositories;
+  delete stripped.selected_repositories_by_property;
+  delete stripped.default_for_new_repos;
+  return stripped;
+}
+
+/**
+ * Compare two code security configurations to check if they differ.
+ * Only compares fields present in the desired config.
+ * @param {Object} existing - Current configuration from API
+ * @param {Object} desired - Desired configuration from config
+ * @returns {{ changed: boolean, changes: Array<string> }}
+ */
+export function compareCodeSecurityConfiguration(existing, desired) {
+  const changes = [];
+  const strippedExisting = stripCodeSecurityConfigReadonlyFields(existing);
+  const desiredDefinition = stripCodeSecurityConfigManagementFields(desired);
+
+  for (const [key, desiredValue] of Object.entries(desiredDefinition)) {
+    const existingValue = strippedExisting[key];
+
+    if (typeof desiredValue === 'object' && desiredValue !== null) {
+      if (!deepEqual(existingValue, desiredValue)) {
+        changes.push(`${key} updated`);
+      }
+    } else if (String(existingValue ?? '') !== String(desiredValue ?? '')) {
+      changes.push(`${key}: ${existingValue ?? 'unset'} → ${desiredValue}`);
+    }
+  }
+
+  return { changed: changes.length > 0, changes };
+}
+
+function validateCodeSecurityAttachScopeAssignments(configs) {
+  const broadScopes = configs.filter(c => c.attach_scope && c.attach_scope !== 'selected');
+
+  if (broadScopes.length <= 1) {
+    return;
+  }
+
+  const scopeToConfig = new Map();
+  for (const config of broadScopes) {
+    const scope = config.attach_scope;
+    if (scopeToConfig.has(scope)) {
+      throw new Error(
+        `Multiple code security configurations use attach_scope "${scope}": ` +
+          `"${scopeToConfig.get(scope)}" and "${config.name}".`
+      );
+    }
+    scopeToConfig.set(scope, config.name);
+  }
+
+  if (scopeToConfig.has('all')) {
+    for (const conflicting of ['all_without_configurations', 'public', 'private_or_internal']) {
+      if (scopeToConfig.has(conflicting)) {
+        throw new Error(
+          `Code security configurations "${scopeToConfig.get('all')}" and "${scopeToConfig.get(conflicting)}" ` +
+            `have conflicting attach scopes: "all" cannot be combined with "${conflicting}".`
+        );
+      }
+    }
+  }
+
+  if (scopeToConfig.has('all_without_configurations')) {
+    for (const conflicting of ['public', 'private_or_internal']) {
+      if (scopeToConfig.has(conflicting)) {
+        throw new Error(
+          `Code security configurations "${scopeToConfig.get('all_without_configurations')}" and "${scopeToConfig.get(conflicting)}" ` +
+            `have conflicting attach scopes: "all_without_configurations" cannot be combined with "${conflicting}".`
+        );
+      }
+    }
+  }
+}
+
+function validateCodeSecurityDefaultAssignments(desiredConfigs) {
+  const byTarget = new Map();
+  const defaults = desiredConfigs.filter(c => c.default_for_new_repos !== undefined);
+
+  if (defaults.length <= 1) {
+    return;
+  }
+
+  for (const config of defaults) {
+    const target = config.default_for_new_repos;
+    if (target === 'none' && defaults.length > 1) {
+      throw new Error(
+        `Code security configuration "${config.name}" sets default_for_new_repos to "none", ` +
+          'which cannot be combined with other default_for_new_repos assignments.'
+      );
+    }
+    if (target === 'all' && defaults.length > 1) {
+      throw new Error(
+        `Code security configuration "${config.name}" sets default_for_new_repos to "all", ` +
+          'which conflicts with other default_for_new_repos assignments.'
+      );
+    }
+    if (byTarget.has(target)) {
+      throw new Error(
+        `Multiple code security configurations set default_for_new_repos to "${target}": ` +
+          `"${byTarget.get(target)}" and "${config.name}".`
+      );
+    }
+    byTarget.set(target, config.name);
+  }
+
+  if (byTarget.has('all') && (byTarget.has('public') || byTarget.has('private_and_internal'))) {
+    throw new Error('default_for_new_repos value "all" cannot be combined with "public" or "private_and_internal".');
+  }
+}
+
+async function resolveSelectedRepositoryIds(
+  octokit,
+  org,
+  selectedRepositoryIds,
+  selectedRepositories,
+  selectedRepositoriesByProperty,
+  repoCache
+) {
+  const ids = [...(selectedRepositoryIds || [])];
+  const names = selectedRepositories || [];
+
+  if (names.length > 0) {
+    if (!repoCache.byName || !repoCache.byFullName) {
+      const repos = await octokit.paginate('GET /orgs/{org}/repos', {
+        org,
+        type: 'all',
+        per_page: 100
+      });
+      repoCache.byName = new Map(repos.map(repo => [repo.name.toLowerCase(), repo.id]));
+      repoCache.byFullName = new Map(repos.map(repo => [repo.full_name.toLowerCase(), repo.id]));
+    }
+
+    for (const repoName of names) {
+      const normalized = repoName.toLowerCase();
+      const fullName = normalized.includes('/') ? normalized : `${org.toLowerCase()}/${normalized}`;
+      const id = repoCache.byFullName.get(fullName) ?? repoCache.byName.get(normalized);
+
+      if (!id) {
+        throw new Error(`Repository "${repoName}" was not found in organization "${org}"`);
+      }
+
+      if (!ids.includes(id)) {
+        ids.push(id);
+      }
+    }
+  }
+
+  const propertyIds = await resolveRepositoryIdsByProperty(octokit, org, selectedRepositoriesByProperty, repoCache);
+  for (const id of propertyIds) {
+    if (!ids.includes(id)) {
+      ids.push(id);
+    }
+  }
+
+  return ids.sort((a, b) => a - b);
+}
+
+async function resolveRepositoryIdsByProperty(octokit, org, propertyFilters, repoCache) {
+  if (!propertyFilters || propertyFilters.length === 0) {
+    return [];
+  }
+
+  if (!repoCache.propertyValues) {
+    try {
+      repoCache.propertyValues = await octokit.paginate('GET /orgs/{org}/properties/values', {
+        org,
+        per_page: 100
+      });
+    } catch (error) {
+      core.warning(`Could not fetch custom property values for org "${org}": ${error.message}`);
+      repoCache.propertyValues = [];
+    }
+  }
+
+  const matchingIds = [];
+
+  for (const { property, value } of propertyFilters) {
+    const matchingRepos = repoCache.propertyValues.filter(repoEntry =>
+      repoEntry.properties?.some(p => p.property_name === property && String(p.value ?? '').trim() === value)
+    );
+
+    if (matchingRepos.length === 0) {
+      core.warning(`No repositories in org "${org}" matched custom property filter "${property}=${value}"`);
+    }
+
+    for (const repoEntry of matchingRepos) {
+      if (!matchingIds.includes(repoEntry.repository_id)) {
+        matchingIds.push(repoEntry.repository_id);
+      }
+    }
+  }
+
+  return matchingIds;
+}
+
+/**
+ * Sync code security configurations for an organization.
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} org - Organization name
+ * @param {Array<Object>} desiredConfigs - Desired code security configuration definitions
+ * @param {boolean} deleteUnmanaged - Whether to delete configurations not in config
+ * @param {boolean} dryRun - Preview mode
+ * @returns {Promise<Object>} Result object with subResults
+ */
+export async function syncCodeSecurityConfigurations(octokit, org, desiredConfigs, deleteUnmanaged, dryRun) {
+  const subResults = [];
+  const wouldPrefix = dryRun ? 'Would ' : '';
+  let hasFailed = false;
+  const repoCache = {};
+
+  validateUniqueCodeSecurityConfigurationNames(desiredConfigs);
+  validateCodeSecurityAttachScopeAssignments(desiredConfigs);
+  validateCodeSecurityDefaultAssignments(desiredConfigs);
+
+  // Validate that selected-scope configs target disjoint repo sets before any mutations.
+  // Must happen at runtime (not in normalizeCodeSecurityConfigurations) because name/property
+  // resolution requires API calls. Runs before mutations to prevent partial state on conflict.
+  const selectedDesiredConfigs = desiredConfigs.filter(c => c.attach_scope === 'selected');
+  if (selectedDesiredConfigs.length > 1) {
+    const claimedByConfig = new Map(); // repoId → configName
+    for (const desired of selectedDesiredConfigs) {
+      const ids = await resolveSelectedRepositoryIds(
+        octokit,
+        org,
+        desired.selected_repository_ids,
+        desired.selected_repositories,
+        desired.selected_repositories_by_property,
+        repoCache
+      );
+      for (const id of ids) {
+        if (claimedByConfig.has(id)) {
+          throw new Error(
+            `Repository ID ${id} is claimed by multiple code security configurations ` +
+              `with attach_scope "selected": "${claimedByConfig.get(id)}" and "${desired.name}".`
+          );
+        }
+        claimedByConfig.set(id, desired.name);
+      }
+    }
+  }
+
+  // Fetch current code security configurations
+  let existingConfigs;
+  try {
+    existingConfigs = await octokit.paginate('GET /orgs/{org}/code-security/configurations', { org, per_page: 100 });
+  } catch (error) {
+    if (error.status === 404) {
+      existingConfigs = [];
+    } else {
+      throw error;
+    }
+  }
+
+  // Filter to only organization-owned configurations (skip global GitHub-managed ones)
+  const managedExisting = existingConfigs.filter(c => c.target_type !== 'global');
+
+  const existingMap = new Map(managedExisting.map(c => [c.name, c]));
+  const desiredMap = new Map(desiredConfigs.map(c => [c.name, c]));
+  const syncedConfigIds = new Map();
+
+  // Determine creates and updates
+  for (const desired of desiredConfigs) {
+    const existing = existingMap.get(desired.name);
+    const desiredDefinition = stripCodeSecurityConfigManagementFields(desired);
+
+    if (!existing) {
+      // New configuration
+      core.info(`  🆕 ${wouldPrefix}Create code security configuration: ${desired.name}`);
+      subResults.push(
+        createSubResult(
+          'code-security-config-create',
+          SubResultStatus.CHANGED,
+          `${wouldPrefix}create "${desired.name}"`
+        )
+      );
+
+      if (!dryRun) {
+        try {
+          const { data: created } = await octokit.request('POST /orgs/{org}/code-security/configurations', {
+            org,
+            ...desiredDefinition
+          });
+          syncedConfigIds.set(desired.name, created.id);
+        } catch (error) {
+          hasFailed = true;
+          core.warning(`  ⚠️  Failed to create code security configuration "${desired.name}": ${error.message}`);
+          subResults[subResults.length - 1] = createSubResult(
+            'code-security-config-create',
+            SubResultStatus.WARNING,
+            `Failed to create "${desired.name}": ${error.message}`
+          );
+        }
+      } else {
+        syncedConfigIds.set(desired.name, existing?.id ?? -1);
+      }
+    } else {
+      syncedConfigIds.set(desired.name, existing.id);
+
+      // Check for updates
+      const { changed, changes } = compareCodeSecurityConfiguration(existing, desiredDefinition);
+      if (changed) {
+        core.info(`  📝 ${wouldPrefix}Update code security configuration: ${desired.name} (${changes.join(', ')})`);
+        subResults.push(
+          createSubResult(
+            'code-security-config-update',
+            SubResultStatus.CHANGED,
+            `${wouldPrefix}update "${desired.name}" (${changes.join(', ')})`
+          )
+        );
+
+        if (!dryRun) {
+          try {
+            await octokit.request('PATCH /orgs/{org}/code-security/configurations/{configuration_id}', {
+              org,
+              configuration_id: existing.id,
+              ...desiredDefinition
+            });
+          } catch (error) {
+            hasFailed = true;
+            core.warning(`  ⚠️  Failed to update code security configuration "${desired.name}": ${error.message}`);
+            subResults[subResults.length - 1] = createSubResult(
+              'code-security-config-update',
+              SubResultStatus.WARNING,
+              `Failed to update "${desired.name}": ${error.message}`
+            );
+          }
+        }
+      } else {
+        core.info(`  ✅ Code security configuration "${desired.name}" is already up to date`);
+      }
+    }
+  }
+
+  // Determine deletions
+  if (deleteUnmanaged) {
+    for (const existing of managedExisting) {
+      if (!desiredMap.has(existing.name)) {
+        core.info(`  🗑️  ${wouldPrefix}Delete code security configuration: ${existing.name}`);
+        subResults.push(
+          createSubResult(
+            'code-security-config-delete',
+            SubResultStatus.CHANGED,
+            `${wouldPrefix}delete "${existing.name}"`
+          )
+        );
+
+        if (!dryRun) {
+          try {
+            await octokit.request('DELETE /orgs/{org}/code-security/configurations/{configuration_id}', {
+              org,
+              configuration_id: existing.id
+            });
+          } catch (error) {
+            hasFailed = true;
+            core.warning(`  ⚠️  Failed to delete code security configuration "${existing.name}": ${error.message}`);
+            subResults[subResults.length - 1] = createSubResult(
+              'code-security-config-delete',
+              SubResultStatus.WARNING,
+              `Failed to delete "${existing.name}": ${error.message}`
+            );
+          }
+        }
+      }
+    }
+  }
+
+  // Apply attachment behavior (selected scope last so it can override broader scopes like "all").
+  const attachConfigs = desiredConfigs
+    .filter(config => config.attach_scope)
+    .slice()
+    .sort(
+      (a, b) =>
+        (CODE_SECURITY_ATTACH_SCOPE_PRIORITY.get(a.attach_scope) || 99) -
+        (CODE_SECURITY_ATTACH_SCOPE_PRIORITY.get(b.attach_scope) || 99)
+    );
+
+  for (const desired of attachConfigs) {
+    const configId = syncedConfigIds.get(desired.name) || existingMap.get(desired.name)?.id;
+    if (!configId) {
+      continue;
+    }
+
+    const selectedIds = await resolveSelectedRepositoryIds(
+      octokit,
+      org,
+      desired.selected_repository_ids,
+      desired.selected_repositories,
+      desired.selected_repositories_by_property,
+      repoCache
+    );
+
+    const attachResult = await syncCodeSecurityConfigurationAttachment(
+      octokit,
+      org,
+      configId,
+      desired.name,
+      desired.attach_scope,
+      selectedIds,
+      dryRun
+    );
+    subResults.push(...attachResult.subResults);
+    if (attachResult.failed) {
+      hasFailed = true;
+    }
+  }
+
+  // Apply default-for-new-repos behavior.
+  for (const desired of desiredConfigs) {
+    if (desired.default_for_new_repos === undefined) {
+      continue;
+    }
+    const configId = syncedConfigIds.get(desired.name) || existingMap.get(desired.name)?.id;
+    if (!configId) {
+      continue;
+    }
+
+    const defaultResult = await syncCodeSecurityConfigurationDefault(
+      octokit,
+      org,
+      configId,
+      desired.name,
+      desired.default_for_new_repos,
+      dryRun
+    );
+    subResults.push(...defaultResult.subResults);
+    if (defaultResult.failed) {
+      hasFailed = true;
+    }
+  }
+
+  return { subResults, failed: hasFailed };
+}
+
+async function syncCodeSecurityConfigurationAttachment(
+  octokit,
+  org,
+  configurationId,
+  configurationName,
+  scope,
+  selectedRepositoryIds,
+  dryRun
+) {
+  const subResults = [];
+  const wouldPrefix = dryRun ? 'Would ' : '';
+  const canQueryCurrentState = Number.isInteger(configurationId) && configurationId > 0;
+
+  let needsUpdate = true;
+  const normalizedSelectedIds = (selectedRepositoryIds || []).slice().sort((a, b) => a - b);
+
+  if (scope === 'selected' && canQueryCurrentState) {
+    try {
+      const associatedRepos = await octokit.paginate(
+        'GET /orgs/{org}/code-security/configurations/{configuration_id}/repositories',
+        {
+          org,
+          configuration_id: configurationId,
+          per_page: 100
+        }
+      );
+
+      const currentAttachedIds = associatedRepos
+        .filter(entry => ['attached', 'attaching', 'enforced', 'updating'].includes(entry.status))
+        .map(entry => entry.repository?.id)
+        .filter(id => Number.isInteger(id))
+        .sort((a, b) => a - b);
+
+      needsUpdate = JSON.stringify(currentAttachedIds) !== JSON.stringify(normalizedSelectedIds);
+      if (!needsUpdate) {
+        core.info(`  ✅ Code security attachment unchanged for "${configurationName}"`);
+      }
+    } catch (error) {
+      core.warning(
+        `  ⚠️  Failed to verify current repository attachments for "${configurationName}": ${error.message}`
+      );
+    }
+  }
+
+  if (!needsUpdate) {
+    return { subResults, failed: false };
+  }
+
+  const detail =
+    scope === 'selected'
+      ? `${wouldPrefix}attach "${configurationName}" to selected repositories (${normalizedSelectedIds.length} repo IDs)`
+      : `${wouldPrefix}attach "${configurationName}" to ${scope} repositories`;
+
+  core.info(`  🔒 ${detail}`);
+  subResults.push(createSubResult('code-security-config-attach', SubResultStatus.CHANGED, detail));
+
+  if (!dryRun) {
+    try {
+      const payload = {
+        org,
+        configuration_id: configurationId,
+        scope
+      };
+      if (scope === 'selected') {
+        payload.selected_repository_ids = normalizedSelectedIds;
+      }
+      await octokit.request('POST /orgs/{org}/code-security/configurations/{configuration_id}/attach', payload);
+    } catch (error) {
+      subResults[subResults.length - 1] = createSubResult(
+        'code-security-config-attach',
+        SubResultStatus.WARNING,
+        `Failed to attach "${configurationName}": ${error.message}`
+      );
+      return { subResults, failed: true };
+    }
+  }
+
+  return { subResults, failed: false };
+}
+
+async function syncCodeSecurityConfigurationDefault(
+  octokit,
+  org,
+  configurationId,
+  configurationName,
+  defaultForNewRepos,
+  dryRun
+) {
+  const subResults = [];
+  const wouldPrefix = dryRun ? 'Would ' : '';
+  const canQueryCurrentState = Number.isInteger(configurationId) && configurationId > 0;
+
+  let currentDefault = null;
+  if (canQueryCurrentState) {
+    try {
+      const { data } = await octokit.request('GET /orgs/{org}/code-security/configurations/defaults', { org });
+      const currentEntry = (data || []).find(entry => {
+        const entryId = entry?.configuration?.id ?? entry?.configuration?.value?.id;
+        return entryId === configurationId;
+      });
+      currentDefault = currentEntry?.default_for_new_repos ?? null;
+    } catch (error) {
+      core.warning(`  ⚠️  Failed to fetch current code security defaults for "${configurationName}": ${error.message}`);
+    }
+  }
+
+  if (currentDefault === defaultForNewRepos) {
+    core.info(`  ✅ Code security default unchanged for "${configurationName}"`);
+    return { subResults, failed: false };
+  }
+
+  const detail = `${wouldPrefix}set "${configurationName}" as default for new repos: ${defaultForNewRepos}`;
+  core.info(`  🔒 ${detail}`);
+  subResults.push(createSubResult('code-security-config-default', SubResultStatus.CHANGED, detail));
+
+  if (!dryRun) {
+    try {
+      await octokit.request('PUT /orgs/{org}/code-security/configurations/{configuration_id}/defaults', {
+        org,
+        configuration_id: configurationId,
+        default_for_new_repos: defaultForNewRepos
+      });
+    } catch (error) {
+      subResults[subResults.length - 1] = createSubResult(
+        'code-security-config-default',
+        SubResultStatus.WARNING,
+        `Failed to update default for "${configurationName}": ${error.message}`
+      );
+      return { subResults, failed: true };
+    }
+  }
+
+  return { subResults, failed: false };
+}
+
 // ─── Result helpers ─────────────────────────────────────────────────────────────
 
 /**
@@ -1881,6 +3606,11 @@ export async function run() {
     const deleteUnmanagedIssueTypes = getBooleanInput('delete-unmanaged-issue-types') ?? false;
     const memberPrivilegesFromInputs = getMemberPrivilegesFromInputs();
     const orgProfileFromInputs = getOrgProfileFromInputs();
+    const codeSecurityConfigurationsFile = core.getInput('code-security-configurations-file');
+    const deleteUnmanagedCodeSecurityConfigurations =
+      getBooleanInput('delete-unmanaged-code-security-configurations') ?? false;
+    const actionsPolicyFromInputs = getActionsPolicyFromInputs();
+    const actionsAllowListFile = core.getInput('actions-allow-list-file');
     const dryRun = getBooleanInput('dry-run') ?? false;
 
     core.info('Starting Bulk GitHub Organization Settings Sync Action...');
@@ -1902,7 +3632,10 @@ export async function run() {
       deleteUnmanagedRulesets,
       issueTypesFile,
       memberPrivilegesFromInputs,
-      orgProfileFromInputs
+      orgProfileFromInputs,
+      codeSecurityConfigurationsFile,
+      actionsPolicyFromInputs,
+      actionsAllowListFile
     );
 
     // Check that at least one setting type is specified
@@ -1911,13 +3644,31 @@ export async function run() {
     const hasIssueTypes = orgList.some(o => o.issueTypes && o.issueTypes.length > 0);
     const hasMemberPrivileges = orgList.some(o => o.memberPrivileges && Object.keys(o.memberPrivileges).length > 0);
     const hasOrgProfileSettings = orgList.some(o => o.orgProfile && Object.keys(o.orgProfile).length > 0);
-    if (!hasCustomProperties && !hasRulesets && !hasIssueTypes && !hasMemberPrivileges && !hasOrgProfileSettings) {
+    const hasCodeSecurityConfigurations = orgList.some(
+      o => o.codeSecurityConfigurations && o.codeSecurityConfigurations.length > 0
+    );
+    const hasActionsPolicy = orgList.some(
+      o =>
+        (o.actionsPolicy && Object.keys(o.actionsPolicy).length > 0) ||
+        (o.actionsAllowList && o.actionsAllowList.length > 0)
+    );
+    if (
+      !hasCustomProperties &&
+      !hasRulesets &&
+      !hasIssueTypes &&
+      !hasMemberPrivileges &&
+      !hasOrgProfileSettings &&
+      !hasCodeSecurityConfigurations &&
+      !hasActionsPolicy
+    ) {
       throw new Error(
         'At least one setting must be specified. Provide custom properties via ' +
           '"organizations-file" or via "organizations" + "custom-properties-file" inputs, ' +
           'provide issue types via "issue-types-file", rulesets via "rulesets-file", member privileges via ' +
-          'individual inputs (e.g., "default-repository-permission"), or org profile via ' +
-          'individual inputs (e.g., "org-name", "org-description").'
+          'individual inputs (e.g., "default-repository-permission"), org profile via ' +
+          'individual inputs (e.g., "org-name", "org-description"), ' +
+          'code security configurations via "code-security-configurations-file", or actions policy via ' +
+          'individual inputs (e.g., "actions-policy-allowed-actions").'
       );
     }
 
@@ -1939,6 +3690,12 @@ export async function run() {
 
     if (deleteUnmanagedIssueTypes) {
       core.info('⚠️  delete-unmanaged-issue-types is enabled: issue types not in config will be deleted');
+    }
+
+    if (deleteUnmanagedCodeSecurityConfigurations) {
+      core.info(
+        '⚠️  delete-unmanaged-code-security-configurations is enabled: code security configurations not in config will be deleted'
+      );
     }
 
     // Process organizations
@@ -2049,6 +3806,46 @@ export async function run() {
             result.error = result.error
               ? `${result.error}; Organization profile sync failed`
               : 'Organization profile sync failed';
+          }
+        }
+
+        // Sync code security configurations
+        if (orgConfig.codeSecurityConfigurations && orgConfig.codeSecurityConfigurations.length > 0) {
+          core.info(
+            `  🔒 Syncing code security configurations (${orgConfig.codeSecurityConfigurations.length} defined)...`
+          );
+          const cscResult = await syncCodeSecurityConfigurations(
+            octokit,
+            org,
+            orgConfig.codeSecurityConfigurations,
+            orgConfig.deleteUnmanagedCodeSecurityConfigurations ?? deleteUnmanagedCodeSecurityConfigurations,
+            dryRun
+          );
+          result.subResults.push(...cscResult.subResults);
+
+          if (cscResult.failed) {
+            result.success = false;
+            result.error = result.error
+              ? `${result.error}; Code security configurations sync failed`
+              : 'Code security configurations sync failed';
+          }
+        }
+
+        // Sync actions policy
+        const hasActionsPolicyCfg =
+          (orgConfig.actionsPolicy && Object.keys(orgConfig.actionsPolicy).length > 0) ||
+          (orgConfig.actionsAllowList && orgConfig.actionsAllowList.length > 0);
+        if (hasActionsPolicyCfg) {
+          const policySettings = orgConfig.actionsPolicy || {};
+          const allowList = orgConfig.actionsAllowList || null;
+          const settingCount = Object.keys(policySettings).length + (allowList ? 1 : 0);
+          core.info(`  🔒 Syncing actions policy (${settingCount} setting(s))...`);
+          const apResult = await syncActionsPolicy(octokit, org, policySettings, allowList, dryRun);
+          result.subResults.push(...apResult.subResults);
+
+          if (apResult.failed) {
+            result.success = false;
+            result.error = result.error ? `${result.error}; Actions policy sync failed` : 'Actions policy sync failed';
           }
         }
 

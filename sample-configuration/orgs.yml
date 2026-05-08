@@ -24,6 +24,11 @@
 # Organization profile fields can be defined as direct action inputs. Per-org
 # org-profile overrides layer on top — fields with the same key override the
 # base value.
+#
+# Code security configurations can be defined in a separate
+# code-security-configurations.yml file and provided via the
+# code-security-configurations-file input. Per-org overrides below
+# layer on top — configurations with the same name override the base definition.
 
 orgs:
   # Org that inherits all base properties from custom-properties-file as-is
@@ -68,6 +73,28 @@ orgs:
     org-profile:
       org-name: 'My Other Org'
       org-description: 'Custom description for this org'
+    # Per-org code security configuration overrides (layers on top of base code-security-configurations-file)
+    # code-security-configurations-file: './config/code-security/other-org.yml' # Use a different base file for this org
+    # delete-unmanaged-code-security-configurations: true # Override the action input for this org
+    code-security-configurations:
+      - name: High risk settings
+        description: Security configuration for high risk repositories (stricter for this org)
+        advanced_security: enabled
+        secret_scanning: enabled
+        secret_scanning_push_protection: enabled
+        enforcement: enforced
+        attach-scope: selected
+        selected-repositories: [high-risk-service, app-api]
+        default-for-new-repos: private_and_internal
+
+    # actions-allow-list-file: './config/actions-allow-list.yml' # Override allow list for this org
+    # Per-org actions policy overrides (layers on top of base action inputs)
+    actions-policy:
+      allowed-actions: selected # Override the base actions policy for this org
+      github-owned-allowed: true
+      verified-allowed: true
+      default-workflow-permissions: read
+      actions-can-approve-pull-request-reviews: false
 
 # ---
 # Alternative: fully self-contained (no base custom-properties-file needed)

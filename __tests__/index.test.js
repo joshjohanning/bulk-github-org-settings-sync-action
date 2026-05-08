@@ -77,22 +77,24 @@ inputs:
     description: 'Rulesets file'
   delete-unmanaged-rulesets:
     description: 'Delete unmanaged rulesets'
+  code-security-configurations-file:
+    description: 'Code security configurations file'
+  delete-unmanaged-code-security-configurations:
+    description: 'Delete unmanaged code security configurations'
+  actions-policy-allowed-actions:
+    description: 'Allowed actions policy'
+  actions-policy-default-workflow-permissions:
+    description: 'Default workflow permissions'
+  actions-policy-actions-can-approve-pull-request-reviews:
+    description: 'Actions can approve PRs'
+  actions-policy-github-owned-allowed:
+    description: 'GitHub-owned actions allowed'
+  actions-policy-verified-allowed:
+    description: 'Verified actions allowed'
+  actions-allow-list-file:
+    description: 'Actions allow list file'
   dry-run:
     description: 'Dry run mode'
-  org-name:
-    description: 'Organization display name'
-  org-description:
-    description: 'Organization description'
-  org-company:
-    description: 'Company name'
-  org-location:
-    description: 'Location'
-  org-email:
-    description: 'Publicly visible email'
-  org-twitter-username:
-    description: 'Twitter/X username'
-  org-blog:
-    description: 'Blog/website URL'
 `;
 
 // Per-test mock file content and YAML results
@@ -191,10 +193,21 @@ const {
   getOrgProfileFromInputs,
   mergeOrgProfile,
   syncOrgProfile,
+  ACTIONS_POLICY_SETTINGS,
+  parseActionsPolicy,
+  getActionsPolicyFromInputs,
+  mergeActionsPolicy,
+  parseActionsAllowListFile,
+  syncActionsPolicy,
   validateOrgConfig,
   resetKnownOrgConfigKeysCache,
   resolveFilePath,
-  applyBasePathToOrgConfig
+  applyBasePathToOrgConfig,
+  parseCodeSecurityConfigurationsFile,
+  normalizeCodeSecurityConfigurations,
+  compareCodeSecurityConfiguration,
+  mergeCodeSecurityConfigurations,
+  syncCodeSecurityConfigurations
 } = await import('../src/index.js');
 
 describe('Bulk GitHub Organization Settings Sync Action', () => {
@@ -276,6 +289,31 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
         'my-org'
       );
       expect(mockCore.warning).not.toHaveBeenCalled();
+    });
+
+    test('should warn for member privilege keys at the org top level', () => {
+      validateOrgConfig({ org: 'my-org', 'default-repository-permission': 'read' }, 'my-org');
+      expect(mockCore.warning).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'Configuration key "default-repository-permission" for organization "my-org" must be nested under "member-privileges"'
+        )
+      );
+    });
+
+    test('should warn for actions policy input keys at the org top level', () => {
+      validateOrgConfig({ org: 'my-org', 'actions-policy-allowed-actions': 'selected' }, 'my-org');
+      expect(mockCore.warning).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'Configuration key "actions-policy-allowed-actions" for organization "my-org" must be nested under "actions-policy" as "allowed-actions"'
+        )
+      );
+    });
+
+    test('should warn for base-only action inputs at the org top level', () => {
+      validateOrgConfig({ org: 'my-org', 'dry-run': true }, 'my-org');
+      expect(mockCore.warning).toHaveBeenCalledWith(
+        expect.stringContaining('Action input "dry-run" is not supported as a per-org configuration key')
+      );
     });
 
     test('should warn for unknown issue type key', () => {
@@ -1163,6 +1201,12 @@ orgs:
       const config = { org: 'my-org', 'issue-types-file': 'issue-types.yml' };
       const result = applyBasePathToOrgConfig(config, './base/');
       expect(result['issue-types-file']).toBe('base/issue-types.yml');
+    });
+
+    test('should resolve actions-allow-list-file', () => {
+      const config = { org: 'my-org', 'actions-allow-list-file': 'actions/allow-list.yml' };
+      const result = applyBasePathToOrgConfig(config, './base/');
+      expect(result['actions-allow-list-file']).toBe('base/actions/allow-list.yml');
     });
   });
 
@@ -3251,6 +3295,1951 @@ orgs:
     test('should not warn for valid org-profile key', () => {
       validateOrgConfig({ org: 'my-org', 'org-profile': { 'org-name': 'Test' } }, 'my-org');
       expect(mockCore.warning).not.toHaveBeenCalled();
+    });
+  });
+});
+
+  // ─── parseCodeSecurityConfigurationsFile ──────────────────────────────
+
+  describe('parseCodeSecurityConfigurationsFile', () => {
+    test('should parse a valid file', () => {
+      const yamlContent = `- name: High risk
+  description: High risk config
+  advanced_security: enabled
+  secret_scanning: enabled
+- name: Standard
+  description: Standard config
+  dependency_graph: enabled
+`;
+      setMockFileContent(yamlContent, '/mock/code-security-configs.yml');
+
+      const result = parseCodeSecurityConfigurationsFile('/mock/code-security-configs.yml');
+
+      expect(result).toHaveLength(2);
+      expect(result[0].name).toBe('High risk');
+      expect(result[0].advanced_security).toBe('enabled');
+      expect(result[1].name).toBe('Standard');
+      expect(result[1].dependency_graph).toBe('enabled');
+    });
+
+    test('should throw for non-existent file', () => {
+      expect(() => parseCodeSecurityConfigurationsFile('/mock/nonexistent.yml')).toThrow(
+        'Code security configurations file not found'
+      );
+    });
+
+    test('should throw for non-array format', () => {
+      setMockFileContent('name: not-an-array', '/mock/bad-format.yml');
+
+      expect(() => parseCodeSecurityConfigurationsFile('/mock/bad-format.yml')).toThrow('expected an array');
+    });
+  });
+
+  // ─── normalizeCodeSecurityConfigurations ──────────────────────────────
+
+  describe('normalizeCodeSecurityConfigurations', () => {
+    test('should normalize a valid config', () => {
+      const configs = [
+        {
+          name: 'Test config',
+          description: 'A test configuration',
+          advanced_security: 'enabled',
+          secret_scanning: 'disabled',
+          enforcement: 'enforced'
+        }
+      ];
+
+      const result = normalizeCodeSecurityConfigurations(configs);
+
+      expect(result).toHaveLength(1);
+      expect(result[0]).toEqual({
+        name: 'Test config',
+        description: 'A test configuration',
+        advanced_security: 'enabled',
+        secret_scanning: 'disabled',
+        enforcement: 'enforced'
+      });
+    });
+
+    test('should throw for missing name', () => {
+      expect(() => normalizeCodeSecurityConfigurations([{ description: 'No name' }])).toThrow(
+        'must have a "name" field'
+      );
+    });
+
+    test('should throw for missing description', () => {
+      expect(() => normalizeCodeSecurityConfigurations([{ name: 'Test' }])).toThrow('must have a "description" field');
+    });
+
+    test('should handle hyphenated YAML keys', () => {
+      const configs = [
+        {
+          name: 'Hyphenated test',
+          description: 'Test with hyphenated keys',
+          'advanced-security': 'enabled',
+          'secret-scanning': 'disabled',
+          'secret-scanning-push-protection': 'enabled',
+          'code-scanning-default-setup-options': { runner_type: 'default', runner_label: '' }
+        }
+      ];
+
+      const result = normalizeCodeSecurityConfigurations(configs);
+
+      expect(result[0].advanced_security).toBe('enabled');
+      expect(result[0].secret_scanning).toBe('disabled');
+      expect(result[0].secret_scanning_push_protection).toBe('enabled');
+      expect(result[0].code_scanning_default_setup_options).toEqual({
+        runner_type: 'default',
+        runner_label: ''
+      });
+    });
+
+    test('should throw for invalid enablement value', () => {
+      expect(() =>
+        normalizeCodeSecurityConfigurations([
+          {
+            name: 'Invalid config',
+            description: 'Invalid enablement',
+            advanced_security: 'enabeld'
+          }
+        ])
+      ).toThrow('Valid values: enabled, disabled, not_set');
+    });
+
+    test('should throw for invalid enforcement value', () => {
+      expect(() =>
+        normalizeCodeSecurityConfigurations([
+          {
+            name: 'Invalid config',
+            description: 'Invalid enforcement',
+            enforcement: 'enabled'
+          }
+        ])
+      ).toThrow('Valid values: enforced, unenforced');
+    });
+
+    test('should throw for non-object option fields', () => {
+      expect(() =>
+        normalizeCodeSecurityConfigurations([
+          {
+            name: 'Invalid config',
+            description: 'Invalid options',
+            'code-scanning-default-setup-options': ['runner']
+          }
+        ])
+      ).toThrow('must be a key-value map');
+    });
+
+    test('should throw for duplicate names', () => {
+      expect(() =>
+        normalizeCodeSecurityConfigurations([
+          { name: 'Duplicate', description: 'First' },
+          { name: 'Duplicate', description: 'Second' }
+        ])
+      ).toThrow('Duplicate code security configuration name "Duplicate"');
+    });
+
+    test('should normalize attachment and default fields', () => {
+      const result = normalizeCodeSecurityConfigurations([
+        {
+          name: 'Attachment test',
+          description: 'Config with assignment',
+          'attach-scope': 'selected',
+          'selected-repository-ids': ['123', 456],
+          'selected-repositories': ['my-org/repo-a', 'repo-b'],
+          'selected-repositories-by-property': [{ property: 'team', value: 'platform' }],
+          'default-for-new-repos': 'private_and_internal'
+        }
+      ]);
+
+      expect(result[0]).toEqual({
+        name: 'Attachment test',
+        description: 'Config with assignment',
+        attach_scope: 'selected',
+        selected_repository_ids: [123, 456],
+        selected_repositories: ['my-org/repo-a', 'repo-b'],
+        selected_repositories_by_property: [{ property: 'team', value: 'platform' }],
+        default_for_new_repos: 'private_and_internal'
+      });
+    });
+
+    test('should normalize selected-repositories-by-property alone', () => {
+      const result = normalizeCodeSecurityConfigurations([
+        {
+          name: 'Property filter test',
+          description: 'Config with property filter',
+          'attach-scope': 'selected',
+          'selected-repositories-by-property': [
+            { property: 'team', value: 'platform' },
+            { property: 'criticality', value: 'high' }
+          ]
+        }
+      ]);
+
+      expect(result[0].selected_repositories_by_property).toEqual([
+        { property: 'team', value: 'platform' },
+        { property: 'criticality', value: 'high' }
+      ]);
+    });
+
+    test('should throw for invalid selected-repositories-by-property entry', () => {
+      expect(() =>
+        normalizeCodeSecurityConfigurations([
+          {
+            name: 'Invalid filter',
+            description: 'Bad property filter',
+            'attach-scope': 'selected',
+            'selected-repositories-by-property': ['not-an-object']
+          }
+        ])
+      ).toThrow('entries must be objects with "property" and "value" keys');
+    });
+
+    test('should throw for property filter missing property key', () => {
+      expect(() =>
+        normalizeCodeSecurityConfigurations([
+          {
+            name: 'Invalid filter',
+            description: 'Missing property key',
+            'attach-scope': 'selected',
+            'selected-repositories-by-property': [{ value: 'platform' }]
+          }
+        ])
+      ).toThrow('entry is missing "property"');
+    });
+
+    test('should allow selected-repositories-by-property to satisfy selected scope requirement', () => {
+      expect(() =>
+        normalizeCodeSecurityConfigurations([
+          {
+            name: 'Property only',
+            description: 'No explicit IDs',
+            'attach-scope': 'selected',
+            'selected-repositories-by-property': [{ property: 'team', value: 'platform' }]
+          }
+        ])
+      ).not.toThrow();
+    });
+
+    test('should throw when selected attach scope is missing repository ids', () => {
+      expect(() =>
+        normalizeCodeSecurityConfigurations([
+          {
+            name: 'Invalid attach',
+            description: 'Missing repo ids',
+            'attach-scope': 'selected'
+          }
+        ])
+      ).toThrow(
+        'must include "selected_repository_ids", "selected_repositories", or "selected_repositories_by_property" when attach_scope is "selected"'
+      );
+    });
+
+    test('should throw when repository ids are provided for non-selected scope', () => {
+      expect(() =>
+        normalizeCodeSecurityConfigurations([
+          {
+            name: 'Invalid attach',
+            description: 'Unexpected repo ids',
+            'attach-scope': 'all',
+            'selected-repository-ids': [123]
+          }
+        ])
+      ).toThrow('can only include selected repository targets when attach_scope is "selected"');
+    });
+  });
+
+  // ─── compareCodeSecurityConfiguration ─────────────────────────────────
+
+  describe('compareCodeSecurityConfiguration', () => {
+    test('should detect no changes', () => {
+      const existing = {
+        id: 1,
+        name: 'Test',
+        description: 'Test config',
+        advanced_security: 'enabled',
+        target_type: 'organization'
+      };
+      const desired = {
+        name: 'Test',
+        description: 'Test config',
+        advanced_security: 'enabled'
+      };
+
+      const result = compareCodeSecurityConfiguration(existing, desired);
+
+      expect(result.changed).toBe(false);
+      expect(result.changes).toHaveLength(0);
+    });
+
+    test('should detect string field changes', () => {
+      const existing = {
+        id: 1,
+        name: 'Test',
+        description: 'Old description',
+        advanced_security: 'disabled'
+      };
+      const desired = {
+        name: 'Test',
+        description: 'New description',
+        advanced_security: 'enabled'
+      };
+
+      const result = compareCodeSecurityConfiguration(existing, desired);
+
+      expect(result.changed).toBe(true);
+      expect(result.changes).toContain('description: Old description → New description');
+      expect(result.changes).toContain('advanced_security: disabled → enabled');
+    });
+
+    test('should detect object field changes', () => {
+      const existing = {
+        id: 1,
+        name: 'Test',
+        description: 'Test',
+        code_scanning_default_setup_options: { runner_type: 'default', runner_label: '' }
+      };
+      const desired = {
+        name: 'Test',
+        description: 'Test',
+        code_scanning_default_setup_options: { runner_type: 'labeled', runner_label: 'my-runner' }
+      };
+
+      const result = compareCodeSecurityConfiguration(existing, desired);
+
+      expect(result.changed).toBe(true);
+      expect(result.changes).toContain('code_scanning_default_setup_options updated');
+    });
+
+    test('should ignore assignment-only fields when comparing', () => {
+      const existing = {
+        id: 1,
+        name: 'Test',
+        description: 'Test',
+        secret_scanning: 'enabled'
+      };
+      const desired = {
+        name: 'Test',
+        description: 'Test',
+        secret_scanning: 'enabled',
+        attach_scope: 'all',
+        default_for_new_repos: 'private_and_internal'
+      };
+
+      const result = compareCodeSecurityConfiguration(existing, desired);
+
+      expect(result.changed).toBe(false);
+      expect(result.changes).toHaveLength(0);
+    });
+  });
+
+  // ─── mergeCodeSecurityConfigurations ──────────────────────────────────
+
+  describe('mergeCodeSecurityConfigurations', () => {
+    test('should merge base and org configs', () => {
+      const base = [
+        { name: 'Config A', description: 'Base A', advanced_security: 'enabled' },
+        { name: 'Config B', description: 'Base B', secret_scanning: 'enabled' }
+      ];
+      const org = [{ name: 'Config C', description: 'Org C', dependabot_alerts: 'enabled' }];
+
+      const result = mergeCodeSecurityConfigurations(base, org);
+
+      expect(result).toHaveLength(3);
+      expect(result.map(c => c.name)).toEqual(['Config A', 'Config B', 'Config C']);
+    });
+
+    test('should override by name', () => {
+      const base = [
+        {
+          name: 'Config A',
+          description: 'Base A',
+          advanced_security: 'enabled',
+          secret_scanning: 'enabled'
+        }
+      ];
+      const org = [{ name: 'Config A', description: 'Override A', advanced_security: 'disabled' }];
+
+      const result = mergeCodeSecurityConfigurations(base, org);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].description).toBe('Override A');
+      expect(result[0].advanced_security).toBe('disabled');
+      expect(result[0].secret_scanning).toBe('enabled');
+    });
+  });
+
+  // ─── syncCodeSecurityConfigurations ───────────────────────────────────
+
+  describe('syncCodeSecurityConfigurations', () => {
+    const desiredConfigs = [
+      {
+        name: 'High risk',
+        description: 'High risk config',
+        advanced_security: 'enabled',
+        secret_scanning: 'enabled'
+      }
+    ];
+
+    test('should create new configuration', async () => {
+      mockPaginate.mockResolvedValueOnce([]);
+      mockRequest.mockResolvedValueOnce({ data: { id: 1, name: 'High risk' } });
+
+      const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', desiredConfigs, false, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('code-security-config-create');
+      expect(result.subResults[0].status).toBe('changed');
+      expect(mockRequest).toHaveBeenCalledWith(
+        'POST /orgs/{org}/code-security/configurations',
+        expect.objectContaining({
+          org: 'my-org',
+          name: 'High risk'
+        })
+      );
+      expect(mockPaginate).toHaveBeenCalledWith('GET /orgs/{org}/code-security/configurations', {
+        org: 'my-org',
+        per_page: 100
+      });
+    });
+
+    test('should update changed configuration', async () => {
+      mockPaginate.mockResolvedValueOnce([
+        {
+          id: 1,
+          name: 'High risk',
+          description: 'Old description',
+          advanced_security: 'disabled',
+          secret_scanning: 'enabled',
+          target_type: 'organization'
+        }
+      ]);
+      mockRequest.mockResolvedValueOnce({ data: {} });
+
+      const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', desiredConfigs, false, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('code-security-config-update');
+      expect(result.subResults[0].status).toBe('changed');
+      expect(mockRequest).toHaveBeenCalledWith(
+        'PATCH /orgs/{org}/code-security/configurations/{configuration_id}',
+        expect.objectContaining({
+          org: 'my-org',
+          configuration_id: 1
+        })
+      );
+    });
+
+    test('should skip unchanged configuration', async () => {
+      mockPaginate.mockResolvedValueOnce([
+        {
+          id: 1,
+          name: 'High risk',
+          description: 'High risk config',
+          advanced_security: 'enabled',
+          secret_scanning: 'enabled',
+          target_type: 'organization'
+        }
+      ]);
+
+      const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', desiredConfigs, false, false);
+
+      expect(result.subResults).toHaveLength(0);
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    test('should delete unmanaged configuration when enabled', async () => {
+      mockPaginate.mockResolvedValueOnce([
+        {
+          id: 1,
+          name: 'High risk',
+          description: 'High risk config',
+          advanced_security: 'enabled',
+          secret_scanning: 'enabled',
+          target_type: 'organization'
+        },
+        {
+          id: 2,
+          name: 'Old config',
+          description: 'Should be deleted',
+          target_type: 'organization'
+        }
+      ]);
+      mockRequest.mockResolvedValueOnce({ data: {} });
+
+      const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', desiredConfigs, true, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('code-security-config-delete');
+      expect(result.subResults[0].status).toBe('changed');
+      expect(mockRequest).toHaveBeenCalledWith('DELETE /orgs/{org}/code-security/configurations/{configuration_id}', {
+        org: 'my-org',
+        configuration_id: 2
+      });
+    });
+
+    test('should not delete unmanaged when disabled', async () => {
+      mockPaginate.mockResolvedValueOnce([
+        {
+          id: 1,
+          name: 'High risk',
+          description: 'High risk config',
+          advanced_security: 'enabled',
+          secret_scanning: 'enabled',
+          target_type: 'organization'
+        },
+        {
+          id: 2,
+          name: 'Old config',
+          description: 'Should not be deleted',
+          target_type: 'organization'
+        }
+      ]);
+
+      const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', desiredConfigs, false, false);
+
+      expect(result.subResults).toHaveLength(0);
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    test('should handle API errors gracefully', async () => {
+      mockPaginate.mockResolvedValueOnce([]);
+      mockRequest.mockRejectedValueOnce(new Error('Forbidden'));
+
+      const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', desiredConfigs, false, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].status).toBe('warning');
+      expect(result.subResults[0].message).toContain('Failed');
+      expect(result.failed).toBe(true);
+    });
+
+    test('should handle 404 on list gracefully', async () => {
+      const error404 = new Error('Not Found');
+      error404.status = 404;
+      mockPaginate.mockRejectedValueOnce(error404);
+      mockRequest.mockResolvedValueOnce({ data: { id: 1, name: 'High risk' } });
+
+      const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', desiredConfigs, false, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('code-security-config-create');
+    });
+
+    test('should skip global configurations when deleting unmanaged', async () => {
+      mockPaginate.mockResolvedValueOnce([
+        {
+          id: 1,
+          name: 'High risk',
+          description: 'High risk config',
+          advanced_security: 'enabled',
+          secret_scanning: 'enabled',
+          target_type: 'organization'
+        },
+        {
+          id: 99,
+          name: 'GitHub recommended',
+          description: 'GitHub managed config',
+          target_type: 'global'
+        }
+      ]);
+
+      const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', desiredConfigs, true, false);
+
+      // Should not delete the global config
+      expect(result.subResults).toHaveLength(0);
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    test('should attach selected repositories when configured', async () => {
+      const attachConfig = [
+        {
+          name: 'High risk',
+          description: 'High risk config',
+          advanced_security: 'enabled',
+          attach_scope: 'selected',
+          selected_repository_ids: [123, 456]
+        }
+      ];
+
+      mockPaginate.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/code-security/configurations') {
+          return Promise.resolve([
+            {
+              id: 1,
+              name: 'High risk',
+              description: 'High risk config',
+              advanced_security: 'enabled',
+              target_type: 'organization'
+            }
+          ]);
+        }
+        if (route === 'GET /orgs/{org}/code-security/configurations/{configuration_id}/repositories') {
+          return Promise.resolve([{ status: 'attached', repository: { id: 123 } }]);
+        }
+        return Promise.resolve([]);
+      });
+      mockRequest.mockResolvedValue({ data: [] });
+
+      const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', attachConfig, false, false);
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults.some(r => r.kind === 'code-security-config-attach')).toBe(true);
+      expect(mockRequest).toHaveBeenCalledWith(
+        'POST /orgs/{org}/code-security/configurations/{configuration_id}/attach',
+        expect.objectContaining({
+          org: 'my-org',
+          configuration_id: 1,
+          scope: 'selected',
+          selected_repository_ids: [123, 456]
+        })
+      );
+    });
+
+    test('should skip selected attachment when repository list already matches', async () => {
+      const attachConfig = [
+        {
+          name: 'High risk',
+          description: 'High risk config',
+          attach_scope: 'selected',
+          selected_repository_ids: [456, 123]
+        }
+      ];
+
+      mockPaginate.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/code-security/configurations') {
+          return Promise.resolve([
+            { id: 1, name: 'High risk', description: 'High risk config', target_type: 'organization' }
+          ]);
+        }
+        if (route === 'GET /orgs/{org}/code-security/configurations/{configuration_id}/repositories') {
+          return Promise.resolve([
+            { status: 'attached', repository: { id: 123 } },
+            { status: 'enforced', repository: { id: 456 } }
+          ]);
+        }
+        return Promise.resolve([]);
+      });
+
+      const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', attachConfig, false, false);
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults.some(r => r.kind === 'code-security-config-attach')).toBe(false);
+      expect(mockRequest).not.toHaveBeenCalledWith(
+        'POST /orgs/{org}/code-security/configurations/{configuration_id}/attach',
+        expect.anything()
+      );
+    });
+
+    test('should resolve selected repositories by name and attach using ids', async () => {
+      const attachConfig = [
+        {
+          name: 'High risk',
+          description: 'High risk config',
+          attach_scope: 'selected',
+          selected_repositories: ['my-org/repo-a', 'repo-b']
+        }
+      ];
+
+      mockPaginate.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/code-security/configurations') {
+          return Promise.resolve([
+            { id: 1, name: 'High risk', description: 'High risk config', target_type: 'organization' }
+          ]);
+        }
+        if (route === 'GET /orgs/{org}/repos') {
+          return Promise.resolve([
+            { id: 123, name: 'repo-a', full_name: 'my-org/repo-a' },
+            { id: 456, name: 'repo-b', full_name: 'my-org/repo-b' }
+          ]);
+        }
+        if (route === 'GET /orgs/{org}/code-security/configurations/{configuration_id}/repositories') {
+          return Promise.resolve([]);
+        }
+        return Promise.resolve([]);
+      });
+      mockRequest.mockResolvedValue({ data: [] });
+
+      const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', attachConfig, false, false);
+
+      expect(result.failed).toBe(false);
+      expect(mockRequest).toHaveBeenCalledWith(
+        'POST /orgs/{org}/code-security/configurations/{configuration_id}/attach',
+        expect.objectContaining({
+          org: 'my-org',
+          configuration_id: 1,
+          scope: 'selected',
+          selected_repository_ids: [123, 456]
+        })
+      );
+    });
+
+    test('should apply selected scope after all scope', async () => {
+      const attachConfig = [
+        {
+          name: 'All scope',
+          description: 'All repos',
+          attach_scope: 'all'
+        },
+        {
+          name: 'Selected scope',
+          description: 'Selected repos',
+          attach_scope: 'selected',
+          selected_repository_ids: [123]
+        }
+      ];
+
+      mockPaginate.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/code-security/configurations') {
+          return Promise.resolve([
+            { id: 1, name: 'All scope', description: 'All repos', target_type: 'organization' },
+            { id: 2, name: 'Selected scope', description: 'Selected repos', target_type: 'organization' }
+          ]);
+        }
+        if (route === 'GET /orgs/{org}/code-security/configurations/{configuration_id}/repositories') {
+          return Promise.resolve([]);
+        }
+        return Promise.resolve([]);
+      });
+      mockRequest.mockResolvedValue({ data: [] });
+
+      await syncCodeSecurityConfigurations(mockOctokit, 'my-org', attachConfig, false, false);
+
+      const attachCalls = mockRequest.mock.calls.filter(
+        call => call[0] === 'POST /orgs/{org}/code-security/configurations/{configuration_id}/attach'
+      );
+      expect(attachCalls).toHaveLength(2);
+      expect(attachCalls[0][1]).toEqual(expect.objectContaining({ configuration_id: 1, scope: 'all' }));
+      expect(attachCalls[1][1]).toEqual(
+        expect.objectContaining({ configuration_id: 2, scope: 'selected', selected_repository_ids: [123] })
+      );
+    });
+
+    test('should resolve selected repositories by custom property and attach using ids', async () => {
+      const attachConfig = [
+        {
+          name: 'High risk',
+          description: 'High risk config',
+          attach_scope: 'selected',
+          selected_repositories_by_property: [{ property: 'team', value: 'platform' }]
+        }
+      ];
+
+      mockPaginate.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/code-security/configurations') {
+          return Promise.resolve([
+            { id: 1, name: 'High risk', description: 'High risk config', target_type: 'organization' }
+          ]);
+        }
+        if (route === 'GET /orgs/{org}/properties/values') {
+          return Promise.resolve([
+            {
+              repository_id: 123,
+              repository_name: 'platform-api',
+              repository_full_name: 'my-org/platform-api',
+              properties: [{ property_name: 'team', value: 'platform' }]
+            },
+            {
+              repository_id: 456,
+              repository_name: 'data-service',
+              repository_full_name: 'my-org/data-service',
+              properties: [{ property_name: 'team', value: 'data' }]
+            }
+          ]);
+        }
+        if (route === 'GET /orgs/{org}/code-security/configurations/{configuration_id}/repositories') {
+          return Promise.resolve([]);
+        }
+        return Promise.resolve([]);
+      });
+      mockRequest.mockResolvedValue({ data: [] });
+
+      const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', attachConfig, false, false);
+
+      expect(result.failed).toBe(false);
+      expect(mockRequest).toHaveBeenCalledWith(
+        'POST /orgs/{org}/code-security/configurations/{configuration_id}/attach',
+        expect.objectContaining({
+          org: 'my-org',
+          configuration_id: 1,
+          scope: 'selected',
+          selected_repository_ids: [123]
+        })
+      );
+    });
+
+    test('should merge property-based and explicit repo selections', async () => {
+      const attachConfig = [
+        {
+          name: 'High risk',
+          description: 'High risk config',
+          attach_scope: 'selected',
+          selected_repository_ids: [789],
+          selected_repositories_by_property: [{ property: 'criticality', value: 'high' }]
+        }
+      ];
+
+      mockPaginate.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/code-security/configurations') {
+          return Promise.resolve([
+            { id: 1, name: 'High risk', description: 'High risk config', target_type: 'organization' }
+          ]);
+        }
+        if (route === 'GET /orgs/{org}/properties/values') {
+          return Promise.resolve([
+            {
+              repository_id: 123,
+              repository_name: 'critical-app',
+              repository_full_name: 'my-org/critical-app',
+              properties: [{ property_name: 'criticality', value: 'high' }]
+            }
+          ]);
+        }
+        if (route === 'GET /orgs/{org}/code-security/configurations/{configuration_id}/repositories') {
+          return Promise.resolve([]);
+        }
+        return Promise.resolve([]);
+      });
+      mockRequest.mockResolvedValue({ data: [] });
+
+      await syncCodeSecurityConfigurations(mockOctokit, 'my-org', attachConfig, false, false);
+
+      expect(mockRequest).toHaveBeenCalledWith(
+        'POST /orgs/{org}/code-security/configurations/{configuration_id}/attach',
+        expect.objectContaining({
+          scope: 'selected',
+          selected_repository_ids: [123, 789]
+        })
+      );
+    });
+
+    test('should warn but not fail when no repos match property filter', async () => {
+      const attachConfig = [
+        {
+          name: 'High risk',
+          description: 'High risk config',
+          attach_scope: 'selected',
+          selected_repositories_by_property: [{ property: 'team', value: 'nonexistent' }]
+        }
+      ];
+
+      mockPaginate.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/code-security/configurations') {
+          return Promise.resolve([
+            { id: 1, name: 'High risk', description: 'High risk config', target_type: 'organization' }
+          ]);
+        }
+        if (route === 'GET /orgs/{org}/properties/values') {
+          return Promise.resolve([
+            {
+              repository_id: 123,
+              repository_name: 'some-repo',
+              repository_full_name: 'my-org/some-repo',
+              properties: [{ property_name: 'team', value: 'platform' }]
+            }
+          ]);
+        }
+        if (route === 'GET /orgs/{org}/code-security/configurations/{configuration_id}/repositories') {
+          return Promise.resolve([]);
+        }
+        return Promise.resolve([]);
+      });
+      mockRequest.mockResolvedValue({ data: [] });
+
+      const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', attachConfig, false, false);
+
+      expect(result.failed).toBe(false);
+      expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('No repositories'));
+    });
+
+    test('should set default for new repositories when configured', async () => {
+      const defaultConfig = [
+        {
+          name: 'High risk',
+          description: 'High risk config',
+          default_for_new_repos: 'private_and_internal'
+        }
+      ];
+
+      mockPaginate.mockResolvedValueOnce([
+        { id: 1, name: 'High risk', description: 'High risk config', target_type: 'organization' }
+      ]);
+      mockRequest.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/code-security/configurations/defaults') {
+          return Promise.resolve({
+            data: [{ default_for_new_repos: 'public', configuration: { id: 1 } }]
+          });
+        }
+        if (route === 'PUT /orgs/{org}/code-security/configurations/{configuration_id}/defaults') {
+          return Promise.resolve({ data: {} });
+        }
+        return Promise.resolve({ data: {} });
+      });
+
+      const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', defaultConfig, false, false);
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults.some(r => r.kind === 'code-security-config-default')).toBe(true);
+      expect(mockRequest).toHaveBeenCalledWith(
+        'PUT /orgs/{org}/code-security/configurations/{configuration_id}/defaults',
+        expect.objectContaining({
+          org: 'my-org',
+          configuration_id: 1,
+          default_for_new_repos: 'private_and_internal'
+        })
+      );
+    });
+
+    test('should skip default update when already matching', async () => {
+      const defaultConfig = [
+        {
+          name: 'High risk',
+          description: 'High risk config',
+          default_for_new_repos: 'private_and_internal'
+        }
+      ];
+
+      mockPaginate.mockResolvedValueOnce([
+        { id: 1, name: 'High risk', description: 'High risk config', target_type: 'organization' }
+      ]);
+      mockRequest.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/code-security/configurations/defaults') {
+          return Promise.resolve({
+            data: [{ default_for_new_repos: 'private_and_internal', configuration: { id: 1 } }]
+          });
+        }
+        return Promise.resolve({ data: {} });
+      });
+
+      const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', defaultConfig, false, false);
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults.some(r => r.kind === 'code-security-config-default')).toBe(false);
+      expect(mockRequest).not.toHaveBeenCalledWith(
+        'PUT /orgs/{org}/code-security/configurations/{configuration_id}/defaults',
+        expect.anything()
+      );
+    });
+
+    test('should throw before API calls when desired configurations contain duplicate names', async () => {
+      await expect(
+        syncCodeSecurityConfigurations(
+          mockOctokit,
+          'my-org',
+          [
+            { name: 'Duplicate', description: 'First' },
+            { name: 'Duplicate', description: 'Second' }
+          ],
+          false,
+          false
+        )
+      ).rejects.toThrow('Duplicate code security configuration name "Duplicate"');
+
+      expect(mockPaginate).not.toHaveBeenCalled();
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    test('should throw when multiple configurations define conflicting defaults', async () => {
+      await expect(
+        syncCodeSecurityConfigurations(
+          mockOctokit,
+          'my-org',
+          [
+            { name: 'Config A', description: 'A', default_for_new_repos: 'all' },
+            { name: 'Config B', description: 'B', default_for_new_repos: 'public' }
+          ],
+          false,
+          false
+        )
+      ).rejects.toThrow('conflicts with other');
+
+      expect(mockPaginate).not.toHaveBeenCalled();
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    test('should throw when two configs use the same broad attach_scope', async () => {
+      await expect(
+        syncCodeSecurityConfigurations(
+          mockOctokit,
+          'my-org',
+          [
+            { name: 'Config A', description: 'A', attach_scope: 'all' },
+            { name: 'Config B', description: 'B', attach_scope: 'all' }
+          ],
+          false,
+          false
+        )
+      ).rejects.toThrow('Multiple code security configurations use attach_scope "all": "Config A" and "Config B"');
+
+      expect(mockPaginate).not.toHaveBeenCalled();
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    test('should throw when two configs use the same public attach_scope', async () => {
+      await expect(
+        syncCodeSecurityConfigurations(
+          mockOctokit,
+          'my-org',
+          [
+            { name: 'Config A', description: 'A', attach_scope: 'public' },
+            { name: 'Config B', description: 'B', attach_scope: 'public' }
+          ],
+          false,
+          false
+        )
+      ).rejects.toThrow('Multiple code security configurations use attach_scope "public"');
+
+      expect(mockPaginate).not.toHaveBeenCalled();
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    test('should throw when all is combined with public attach_scope', async () => {
+      await expect(
+        syncCodeSecurityConfigurations(
+          mockOctokit,
+          'my-org',
+          [
+            { name: 'Config A', description: 'A', attach_scope: 'all' },
+            { name: 'Config B', description: 'B', attach_scope: 'public' }
+          ],
+          false,
+          false
+        )
+      ).rejects.toThrow(
+        '"Config A" and "Config B" have conflicting attach scopes: "all" cannot be combined with "public"'
+      );
+
+      expect(mockPaginate).not.toHaveBeenCalled();
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    test('should throw when all is combined with private_or_internal attach_scope', async () => {
+      await expect(
+        syncCodeSecurityConfigurations(
+          mockOctokit,
+          'my-org',
+          [
+            { name: 'Config A', description: 'A', attach_scope: 'all' },
+            { name: 'Config B', description: 'B', attach_scope: 'private_or_internal' }
+          ],
+          false,
+          false
+        )
+      ).rejects.toThrow(
+        '"Config A" and "Config B" have conflicting attach scopes: "all" cannot be combined with "private_or_internal"'
+      );
+
+      expect(mockPaginate).not.toHaveBeenCalled();
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    test('should throw when all is combined with all_without_configurations attach_scope', async () => {
+      await expect(
+        syncCodeSecurityConfigurations(
+          mockOctokit,
+          'my-org',
+          [
+            { name: 'Config A', description: 'A', attach_scope: 'all' },
+            { name: 'Config B', description: 'B', attach_scope: 'all_without_configurations' }
+          ],
+          false,
+          false
+        )
+      ).rejects.toThrow(
+        '"Config A" and "Config B" have conflicting attach scopes: "all" cannot be combined with "all_without_configurations"'
+      );
+
+      expect(mockPaginate).not.toHaveBeenCalled();
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    test('should throw when all_without_configurations is combined with public attach_scope', async () => {
+      await expect(
+        syncCodeSecurityConfigurations(
+          mockOctokit,
+          'my-org',
+          [
+            { name: 'Config A', description: 'A', attach_scope: 'all_without_configurations' },
+            { name: 'Config B', description: 'B', attach_scope: 'public' }
+          ],
+          false,
+          false
+        )
+      ).rejects.toThrow(
+        '"Config A" and "Config B" have conflicting attach scopes: "all_without_configurations" cannot be combined with "public"'
+      );
+
+      expect(mockPaginate).not.toHaveBeenCalled();
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    test('should throw when all_without_configurations is combined with private_or_internal attach_scope', async () => {
+      await expect(
+        syncCodeSecurityConfigurations(
+          mockOctokit,
+          'my-org',
+          [
+            { name: 'Config A', description: 'A', attach_scope: 'all_without_configurations' },
+            { name: 'Config B', description: 'B', attach_scope: 'private_or_internal' }
+          ],
+          false,
+          false
+        )
+      ).rejects.toThrow(
+        '"Config A" and "Config B" have conflicting attach scopes: "all_without_configurations" cannot be combined with "private_or_internal"'
+      );
+
+      expect(mockPaginate).not.toHaveBeenCalled();
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    test('should allow public and private_or_internal scopes together (disjoint repo sets)', async () => {
+      const configs = [
+        { name: 'Public config', description: 'Public repos', attach_scope: 'public' },
+        { name: 'Private config', description: 'Private repos', attach_scope: 'private_or_internal' }
+      ];
+
+      mockPaginate.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/code-security/configurations') {
+          return Promise.resolve([
+            { id: 1, name: 'Public config', description: 'Public repos', target_type: 'organization' },
+            { id: 2, name: 'Private config', description: 'Private repos', target_type: 'organization' }
+          ]);
+        }
+        return Promise.resolve([]);
+      });
+      mockRequest.mockResolvedValue({ data: [] });
+
+      await expect(syncCodeSecurityConfigurations(mockOctokit, 'my-org', configs, false, false)).resolves.not.toThrow();
+    });
+
+    test('should allow all and selected attach scopes together (override pattern)', async () => {
+      const configs = [
+        { name: 'Baseline', description: 'All repos', attach_scope: 'all' },
+        { name: 'High risk', description: 'Selected repos', attach_scope: 'selected', selected_repository_ids: [123] }
+      ];
+
+      mockPaginate.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/code-security/configurations') {
+          return Promise.resolve([
+            { id: 1, name: 'Baseline', description: 'All repos', target_type: 'organization' },
+            { id: 2, name: 'High risk', description: 'Selected repos', target_type: 'organization' }
+          ]);
+        }
+        if (route === 'GET /orgs/{org}/code-security/configurations/{configuration_id}/repositories') {
+          return Promise.resolve([]);
+        }
+        return Promise.resolve([]);
+      });
+      mockRequest.mockResolvedValue({ data: [] });
+
+      await expect(syncCodeSecurityConfigurations(mockOctokit, 'my-org', configs, false, false)).resolves.not.toThrow();
+    });
+
+    test('should allow multiple selected-scope configs with disjoint repo IDs', async () => {
+      const configs = [
+        {
+          name: 'High risk',
+          description: 'High risk repos',
+          attach_scope: 'selected',
+          selected_repository_ids: [123, 456]
+        },
+        {
+          name: 'Critical',
+          description: 'Critical repos',
+          attach_scope: 'selected',
+          selected_repository_ids: [789]
+        }
+      ];
+
+      mockPaginate.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/code-security/configurations') {
+          return Promise.resolve([
+            { id: 1, name: 'High risk', description: 'High risk repos', target_type: 'organization' },
+            { id: 2, name: 'Critical', description: 'Critical repos', target_type: 'organization' }
+          ]);
+        }
+        if (route === 'GET /orgs/{org}/code-security/configurations/{configuration_id}/repositories') {
+          return Promise.resolve([]);
+        }
+        return Promise.resolve([]);
+      });
+      mockRequest.mockResolvedValue({ data: [] });
+
+      await expect(syncCodeSecurityConfigurations(mockOctokit, 'my-org', configs, false, false)).resolves.not.toThrow();
+    });
+
+    test('should throw when multiple selected-scope configs claim the same repo ID', async () => {
+      const configs = [
+        {
+          name: 'High risk',
+          description: 'High risk repos',
+          attach_scope: 'selected',
+          selected_repository_ids: [123, 456]
+        },
+        {
+          name: 'Critical',
+          description: 'Critical repos',
+          attach_scope: 'selected',
+          selected_repository_ids: [456, 789]
+        }
+      ];
+
+      mockPaginate.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/code-security/configurations') {
+          return Promise.resolve([
+            { id: 1, name: 'High risk', description: 'High risk repos', target_type: 'organization' },
+            { id: 2, name: 'Critical', description: 'Critical repos', target_type: 'organization' }
+          ]);
+        }
+        return Promise.resolve([]);
+      });
+
+      await expect(syncCodeSecurityConfigurations(mockOctokit, 'my-org', configs, false, false)).rejects.toThrow(
+        'Repository ID 456 is claimed by multiple code security configurations with attach_scope "selected": "High risk" and "Critical"'
+      );
+
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    test('should throw when selected-scope configs overlap via name and property resolution', async () => {
+      const configs = [
+        {
+          name: 'By name',
+          description: 'Targets by repo name',
+          attach_scope: 'selected',
+          selected_repositories: ['critical-app']
+        },
+        {
+          name: 'By property',
+          description: 'Targets by property filter',
+          attach_scope: 'selected',
+          selected_repositories_by_property: [{ property: 'criticality', value: 'high' }]
+        }
+      ];
+
+      mockPaginate.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/code-security/configurations') {
+          return Promise.resolve([
+            { id: 1, name: 'By name', description: 'Targets by repo name', target_type: 'organization' },
+            { id: 2, name: 'By property', description: 'Targets by property filter', target_type: 'organization' }
+          ]);
+        }
+        if (route === 'GET /orgs/{org}/repos') {
+          return Promise.resolve([{ id: 123, name: 'critical-app', full_name: 'my-org/critical-app' }]);
+        }
+        if (route === 'GET /orgs/{org}/properties/values') {
+          return Promise.resolve([
+            {
+              repository_id: 123,
+              repository_name: 'critical-app',
+              repository_full_name: 'my-org/critical-app',
+              properties: [{ property_name: 'criticality', value: 'high' }]
+            }
+          ]);
+        }
+        return Promise.resolve([]);
+      });
+
+      await expect(syncCodeSecurityConfigurations(mockOctokit, 'my-org', configs, false, false)).rejects.toThrow(
+        'Repository ID 123 is claimed by multiple code security configurations with attach_scope "selected": "By name" and "By property"'
+      );
+
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    test('should throw on overlapping selected IDs for brand-new configs before any create mutations', async () => {
+      const configs = [
+        {
+          name: 'New Config A',
+          description: 'New config A',
+          attach_scope: 'selected',
+          selected_repository_ids: [123, 456]
+        },
+        {
+          name: 'New Config B',
+          description: 'New config B',
+          attach_scope: 'selected',
+          selected_repository_ids: [456, 789]
+        }
+      ];
+
+      // Neither config exists yet
+      mockPaginate.mockResolvedValue([]);
+
+      await expect(syncCodeSecurityConfigurations(mockOctokit, 'my-org', configs, false, false)).rejects.toThrow(
+        'Repository ID 456 is claimed by multiple code security configurations with attach_scope "selected": "New Config A" and "New Config B"'
+      );
+
+      // No create/update/delete API calls should have been made
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+  });
+
+  // ─── parseOrganizations with code security configurations ─────────────
+
+  describe('parseOrganizations with code security configurations', () => {
+    test('should parse orgs with code-security-configurations-file', () => {
+      const cscYaml = `- name: High risk
+  description: High risk config
+  advanced_security: enabled
+`;
+      setMockFileContent(cscYaml, '/mock/code-security-configs.yml');
+
+      const result = parseOrganizations(
+        'my-org,my-other-org',
+        '',
+        '',
+        [],
+        false,
+        '',
+        null,
+        '/mock/code-security-configs.yml'
+      );
+
+      expect(result).toHaveLength(2);
+      expect(result[0].codeSecurityConfigurations).toHaveLength(1);
+      expect(result[0].codeSecurityConfigurations[0].name).toBe('High risk');
+      expect(result[1].codeSecurityConfigurations).toHaveLength(1);
+    });
+
+    test('should handle inline code-security-configurations in orgs.yml', () => {
+      const orgsYaml = `orgs:
+  - org: my-org
+  - org: my-other-org
+    code-security-configurations:
+      - name: Custom config
+        description: Inline config
+        secret_scanning: enabled
+`;
+      const cscYaml = `- name: Base config
+  description: Base security config
+  advanced_security: enabled
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+      setMockFileContent(cscYaml, '/mock/code-security-configs.yml');
+
+      const result = parseOrganizations(
+        '',
+        '/mock/orgs.yml',
+        '',
+        [],
+        false,
+        '',
+        null,
+        '/mock/code-security-configs.yml'
+      );
+
+      expect(result).toHaveLength(2);
+      // First org gets only base configs
+      expect(result[0].codeSecurityConfigurations).toHaveLength(1);
+      expect(result[0].codeSecurityConfigurations[0].name).toBe('Base config');
+      // Second org gets base + inline merged
+      expect(result[1].codeSecurityConfigurations).toHaveLength(2);
+      expect(result[1].codeSecurityConfigurations.map(c => c.name)).toEqual(['Base config', 'Custom config']);
+    });
+
+    test('should layer attachment and default fields in per-org overrides', () => {
+      const orgsYaml = `orgs:
+  - org: my-org
+    code-security-configurations:
+      - name: Base config
+        description: Org override
+        attach-scope: selected
+        selected-repository-ids: [123]
+        selected-repositories: [repo-a]
+        default-for-new-repos: private_and_internal
+`;
+      const cscYaml = `- name: Base config
+  description: Base security config
+  advanced_security: enabled
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+      setMockFileContent(cscYaml, '/mock/code-security-configs.yml');
+
+      const result = parseOrganizations(
+        '',
+        '/mock/orgs.yml',
+        '',
+        [],
+        false,
+        '',
+        null,
+        '/mock/code-security-configs.yml'
+      );
+
+      expect(result).toHaveLength(1);
+      expect(result[0].codeSecurityConfigurations).toEqual([
+        {
+          name: 'Base config',
+          description: 'Org override',
+          advanced_security: 'enabled',
+          attach_scope: 'selected',
+          selected_repository_ids: [123],
+          selected_repositories: ['repo-a'],
+          default_for_new_repos: 'private_and_internal'
+        }
+      ]);
+    });
+  });
+
+  // ─── ACTIONS_POLICY_SETTINGS ──────────────────────────────────────────────
+
+  describe('ACTIONS_POLICY_SETTINGS', () => {
+    test('should have 5 settings defined', () => {
+      expect(ACTIONS_POLICY_SETTINGS.size).toBe(5);
+    });
+
+    test('should have unique API keys', () => {
+      const apiKeys = new Set();
+      for (const [, setting] of ACTIONS_POLICY_SETTINGS) {
+        expect(apiKeys.has(setting.apiKey)).toBe(false);
+        apiKeys.add(setting.apiKey);
+      }
+    });
+
+    test('should have valid endpoint values', () => {
+      const validEndpoints = new Set(['permissions', 'workflow', 'selected-actions']);
+      for (const [, setting] of ACTIONS_POLICY_SETTINGS) {
+        expect(validEndpoints.has(setting.endpoint)).toBe(true);
+      }
+    });
+  });
+
+  // ─── parseActionsPolicy ───────────────────────────────────────────────────
+
+  describe('parseActionsPolicy', () => {
+    test('should parse valid actions policy config', () => {
+      const config = {
+        'allowed-actions': 'selected',
+        'default-workflow-permissions': 'read',
+        'actions-can-approve-pull-request-reviews': false,
+        'github-owned-allowed': true,
+        'verified-allowed': true
+      };
+      const result = parseActionsPolicy(config);
+      expect(result).toEqual({
+        allowed_actions: 'selected',
+        default_workflow_permissions: 'read',
+        can_approve_pull_request_reviews: false,
+        github_owned_allowed: true,
+        verified_allowed: true
+      });
+    });
+
+    test('should throw for non-object config', () => {
+      expect(() => parseActionsPolicy('invalid')).toThrow('expected a key-value map');
+    });
+
+    test('should throw for array config', () => {
+      expect(() => parseActionsPolicy(['invalid'])).toThrow('expected a key-value map');
+    });
+
+    test('should throw for unknown key', () => {
+      expect(() => parseActionsPolicy({ 'unknown-key': 'value' })).toThrow('Unknown actions policy key');
+    });
+
+    test('should throw for invalid boolean value', () => {
+      expect(() => parseActionsPolicy({ 'github-owned-allowed': 'yes' })).toThrow('must be a boolean');
+    });
+
+    test('should throw for invalid enum value', () => {
+      expect(() => parseActionsPolicy({ 'allowed-actions': 'invalid' })).toThrow('invalid value');
+    });
+
+    test('should include context in error messages', () => {
+      expect(() => parseActionsPolicy({ 'unknown-key': 'value' }, 'my-org')).toThrow('for org "my-org"');
+    });
+  });
+
+  // ─── getActionsPolicyFromInputs ──────────────────────────────────────────
+
+  describe('getActionsPolicyFromInputs', () => {
+    test('should return null when no actions policy inputs are set', () => {
+      mockCore.getInput.mockReturnValue('');
+      const result = getActionsPolicyFromInputs();
+      expect(result).toBeNull();
+    });
+
+    test('should parse boolean inputs', () => {
+      mockCore.getInput.mockImplementation(name => {
+        if (name === 'actions-policy-github-owned-allowed') return 'true';
+        if (name === 'actions-policy-actions-can-approve-pull-request-reviews') return 'false';
+        return '';
+      });
+      const result = getActionsPolicyFromInputs();
+      expect(result).toEqual({
+        github_owned_allowed: true,
+        can_approve_pull_request_reviews: false
+      });
+    });
+
+    test('should parse string inputs', () => {
+      mockCore.getInput.mockImplementation(name => {
+        if (name === 'actions-policy-allowed-actions') return 'selected';
+        if (name === 'actions-policy-default-workflow-permissions') return 'read';
+        return '';
+      });
+      const result = getActionsPolicyFromInputs();
+      expect(result).toEqual({
+        allowed_actions: 'selected',
+        default_workflow_permissions: 'read'
+      });
+    });
+
+    test('should throw on invalid boolean value', () => {
+      mockCore.getInput.mockImplementation(name => {
+        if (name === 'actions-policy-github-owned-allowed') return 'yes';
+        return '';
+      });
+      expect(() => getActionsPolicyFromInputs()).toThrow(/must be a boolean/);
+    });
+
+    test('should throw on invalid enum value', () => {
+      mockCore.getInput.mockImplementation(name => {
+        if (name === 'actions-policy-allowed-actions') return 'everything';
+        return '';
+      });
+      expect(() => getActionsPolicyFromInputs()).toThrow(/invalid value/);
+    });
+  });
+
+  // ─── mergeActionsPolicy ──────────────────────────────────────────────────
+
+  describe('mergeActionsPolicy', () => {
+    test('should merge base and org policies', () => {
+      const base = { allowed_actions: 'selected', github_owned_allowed: true };
+      const org = { github_owned_allowed: false, verified_allowed: true };
+      const result = mergeActionsPolicy(base, org);
+      expect(result).toEqual({
+        allowed_actions: 'selected',
+        github_owned_allowed: false,
+        verified_allowed: true
+      });
+    });
+
+    test('should return org policy when base is empty', () => {
+      const result = mergeActionsPolicy({}, { allowed_actions: 'all' });
+      expect(result).toEqual({ allowed_actions: 'all' });
+    });
+  });
+
+  // ─── parseActionsAllowListFile ────────────────────────────────────────────
+
+  describe('parseActionsAllowListFile', () => {
+    test('should parse valid allow list file', () => {
+      const content = `actions:
+  - actions/cache@*
+  - actions/setup-node@*
+  - myorg/*
+`;
+      setMockFileContent(content, '/mock/allow-list.yml');
+      const result = parseActionsAllowListFile('/mock/allow-list.yml');
+      expect(result).toEqual(['actions/cache@*', 'actions/setup-node@*', 'myorg/*']);
+    });
+
+    test('should trim and de-duplicate allow list patterns', () => {
+      const content = `actions:
+  - ' actions/cache@* '
+  - actions/setup-node@*
+  - actions/cache@*
+`;
+      setMockFileContent(content, '/mock/dedupe-allow-list.yml');
+
+      const result = parseActionsAllowListFile('/mock/dedupe-allow-list.yml');
+
+      expect(result).toEqual(['actions/cache@*', 'actions/setup-node@*']);
+    });
+
+    test('should throw for missing file', () => {
+      expect(() => parseActionsAllowListFile('/mock/nonexistent.yml')).toThrow('not found');
+    });
+
+    test('should throw for file without actions key', () => {
+      setMockFileContent('other: value', '/mock/bad.yml');
+      expect(() => parseActionsAllowListFile('/mock/bad.yml')).toThrow('expected an "actions" array');
+    });
+
+    test('should throw for non-string entries', () => {
+      const content = `actions:
+  - 123
+`;
+      setMockFileContent(content, '/mock/bad-entries.yml');
+      expect(() => parseActionsAllowListFile('/mock/bad-entries.yml')).toThrow('expected a string');
+    });
+
+    test('should throw for empty patterns', () => {
+      const content = `actions:
+  - '  '
+  - ''
+`;
+      setMockFileContent(content, '/mock/empty.yml');
+      expect(() => parseActionsAllowListFile('/mock/empty.yml')).toThrow('no valid patterns');
+    });
+  });
+
+  // ─── parseOrganizationsFile with actions-policy ─────────────────────────
+
+  describe('parseOrganizationsFile with actions-policy', () => {
+    test('should parse actions-policy from orgs.yml', () => {
+      const orgsYaml = `orgs:
+  - org: my-org
+    actions-policy:
+      allowed-actions: selected
+      default-workflow-permissions: read
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+      const result = parseOrganizationsFile('/mock/orgs.yml');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].actionsPolicy).toEqual({
+        allowed_actions: 'selected',
+        default_workflow_permissions: 'read'
+      });
+    });
+
+    test('should parse actions-allow-list-file from orgs.yml', () => {
+      const allowListContent = `actions:
+  - actions/cache@*
+`;
+      setMockFileContent(allowListContent, '/mock/allow-list.yml');
+      const orgsYaml = `orgs:
+  - org: my-org
+    actions-allow-list-file: /mock/allow-list.yml
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+      const result = parseOrganizationsFile('/mock/orgs.yml');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].actionsAllowListFile).toBe('/mock/allow-list.yml');
+    });
+
+    test('should throw for invalid actions-policy type', () => {
+      const orgsYaml = `orgs:
+  - org: my-org
+    actions-policy:
+      - invalid
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+
+      expect(() => parseOrganizationsFile('/mock/orgs.yml')).toThrow(
+        'Invalid actions-policy for org "my-org": expected a key-value map'
+      );
+    });
+  });
+
+  // ─── parseOrganizations with actions policy inputs ──────────────────────
+
+  describe('parseOrganizations with actions policy inputs', () => {
+    test('should use actions policy from inputs', () => {
+      const inputPolicy = {
+        allowed_actions: 'selected',
+        default_workflow_permissions: 'read'
+      };
+
+      const result = parseOrganizations('org1', '', '', [], false, '', null, inputPolicy, '');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].actionsPolicy).toEqual({
+        allowed_actions: 'selected',
+        default_workflow_permissions: 'read'
+      });
+    });
+
+    test('should layer per-org overrides on top of inputs', () => {
+      const inputPolicy = {
+        allowed_actions: 'selected',
+        default_workflow_permissions: 'read'
+      };
+
+      const orgsYaml = `orgs:
+  - org: my-org
+  - org: my-other-org
+    actions-policy:
+      default-workflow-permissions: write
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+
+      const result = parseOrganizations('', '/mock/orgs.yml', '', [], false, '', null, inputPolicy, '');
+
+      expect(result).toHaveLength(2);
+      expect(result[0].actionsPolicy).toEqual({
+        allowed_actions: 'selected',
+        default_workflow_permissions: 'read'
+      });
+      expect(result[1].actionsPolicy).toEqual({
+        allowed_actions: 'selected',
+        default_workflow_permissions: 'write'
+      });
+    });
+
+    test('should use actions allow list from file input', () => {
+      const allowListContent = `actions:
+  - actions/cache@*
+  - myorg/*
+`;
+      setMockFileContent(allowListContent, '/mock/allow-list.yml');
+
+      const result = parseOrganizations('org1', '', '', [], false, '', null, null, '/mock/allow-list.yml');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].actionsAllowList).toEqual(['actions/cache@*', 'myorg/*']);
+    });
+
+    test('should use per-org allow list file over base', () => {
+      const baseContent = `actions:
+  - base-action@*
+`;
+      const orgContent = `actions:
+  - org-action@*
+`;
+      setMockFileContent(baseContent, '/mock/base-allow.yml');
+      setMockFileContent(orgContent, '/mock/org-allow.yml');
+
+      const orgsYaml = `orgs:
+  - org: my-org
+  - org: my-other-org
+    actions-allow-list-file: /mock/org-allow.yml
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+
+      const result = parseOrganizations('', '/mock/orgs.yml', '', [], false, '', null, null, '/mock/base-allow.yml');
+
+      expect(result).toHaveLength(2);
+      expect(result[0].actionsAllowList).toEqual(['base-action@*']);
+      expect(result[1].actionsAllowList).toEqual(['org-action@*']);
+    });
+  });
+
+  // ─── syncActionsPolicy ─────────────────────────────────────────────────────
+
+  describe('syncActionsPolicy', () => {
+    test('should detect no changes when settings match', async () => {
+      mockRequest.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/actions/permissions') {
+          return { data: { allowed_actions: 'selected', enabled_repositories: 'all' } };
+        }
+        if (route === 'GET /orgs/{org}/actions/permissions/workflow') {
+          return { data: { default_workflow_permissions: 'read', can_approve_pull_request_reviews: false } };
+        }
+        return { data: {} };
+      });
+
+      const desired = {
+        allowed_actions: 'selected',
+        default_workflow_permissions: 'read',
+        can_approve_pull_request_reviews: false
+      };
+
+      const result = await syncActionsPolicy(mockOctokit, 'my-org', desired, null, false);
+      expect(result.failed).toBe(false);
+      expect(result.subResults).toHaveLength(0);
+      expect(mockCore.info).toHaveBeenCalledWith(expect.stringContaining('Actions permissions unchanged'));
+      expect(mockCore.info).toHaveBeenCalledWith(expect.stringContaining('Workflow permissions unchanged'));
+    });
+
+    test('should detect and apply changes', async () => {
+      mockRequest.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/actions/permissions') {
+          return { data: { allowed_actions: 'all', enabled_repositories: 'all' } };
+        }
+        if (route === 'PUT /orgs/{org}/actions/permissions') {
+          return { status: 204 };
+        }
+        return { data: {} };
+      });
+
+      const desired = { allowed_actions: 'selected' };
+
+      const result = await syncActionsPolicy(mockOctokit, 'my-org', desired, null, false);
+      expect(result.failed).toBe(false);
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('actions-policy-permissions-update');
+      expect(result.subResults[0].status).toBe('changed');
+    });
+
+    test('should handle dry run mode', async () => {
+      mockRequest.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/actions/permissions/workflow') {
+          return { data: { default_workflow_permissions: 'write', can_approve_pull_request_reviews: true } };
+        }
+        return { data: {} };
+      });
+
+      const desired = { default_workflow_permissions: 'read' };
+
+      const result = await syncActionsPolicy(mockOctokit, 'my-org', desired, null, true);
+      expect(result.failed).toBe(false);
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].message).toContain('Would');
+      // Should not have called PUT
+      expect(mockRequest).not.toHaveBeenCalledWith('PUT /orgs/{org}/actions/permissions/workflow', expect.anything());
+    });
+
+    test('should handle API fetch error gracefully', async () => {
+      mockRequest.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/actions/permissions') {
+          throw new Error('Not Found');
+        }
+        return { data: {} };
+      });
+
+      const desired = { allowed_actions: 'selected' };
+
+      const result = await syncActionsPolicy(mockOctokit, 'my-org', desired, null, false);
+      expect(result.failed).toBe(true);
+      expect(result.subResults[0].status).toBe('warning');
+    });
+
+    test('should sync allow list patterns', async () => {
+      mockRequest.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/actions/permissions') {
+          return { data: { allowed_actions: 'selected', enabled_repositories: 'all' } };
+        }
+        if (route === 'GET /orgs/{org}/actions/permissions/selected-actions') {
+          return {
+            data: {
+              github_owned_allowed: true,
+              verified_allowed: false,
+              patterns_allowed: ['old-action@*']
+            }
+          };
+        }
+        if (route === 'PUT /orgs/{org}/actions/permissions/selected-actions') {
+          return { status: 200 };
+        }
+        return { data: {} };
+      });
+
+      const allowList = ['new-action@*', 'another-action@*'];
+      const result = await syncActionsPolicy(mockOctokit, 'my-org', {}, allowList, false);
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults.some(s => s.kind === 'actions-policy-allow-list-update')).toBe(true);
+    });
+
+    test('should detect no changes when allow list matches', async () => {
+      mockRequest.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/actions/permissions') {
+          return { data: { allowed_actions: 'selected', enabled_repositories: 'all' } };
+        }
+        if (route === 'GET /orgs/{org}/actions/permissions/selected-actions') {
+          return {
+            data: {
+              github_owned_allowed: true,
+              verified_allowed: false,
+              patterns_allowed: ['action-a@*', 'action-b@*']
+            }
+          };
+        }
+        return { data: {} };
+      });
+
+      const allowList = ['action-b@*', 'action-a@*']; // Same patterns, different order
+      const result = await syncActionsPolicy(mockOctokit, 'my-org', { allowed_actions: 'selected' }, allowList, false);
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults).toHaveLength(0);
+    });
+
+    test('should ignore duplicate allow list patterns when comparing', async () => {
+      mockRequest.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/actions/permissions') {
+          return { data: { allowed_actions: 'selected', enabled_repositories: 'all' } };
+        }
+        if (route === 'GET /orgs/{org}/actions/permissions/selected-actions') {
+          return {
+            data: {
+              github_owned_allowed: true,
+              verified_allowed: false,
+              patterns_allowed: ['action-a@*', 'action-b@*']
+            }
+          };
+        }
+        return { data: {} };
+      });
+
+      const allowList = ['action-b@*', 'action-a@*', 'action-a@*'];
+      const result = await syncActionsPolicy(mockOctokit, 'my-org', { allowed_actions: 'selected' }, allowList, false);
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults).toHaveLength(0);
+      expect(mockRequest).not.toHaveBeenCalledWith(
+        'PUT /orgs/{org}/actions/permissions/selected-actions',
+        expect.anything()
+      );
+    });
+
+    test('should skip selected actions settings unless allowed-actions is selected', async () => {
+      mockRequest.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/actions/permissions') {
+          return { data: { allowed_actions: 'all', enabled_repositories: 'all' } };
+        }
+        return { data: {} };
+      });
+
+      const desired = { github_owned_allowed: true };
+      const allowList = ['new-action@*'];
+      const result = await syncActionsPolicy(mockOctokit, 'my-org', desired, allowList, false);
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults).toEqual([
+        {
+          kind: 'actions-policy-selected-actions-update',
+          status: 'warning',
+          message:
+            'Skipping selected actions settings because allowed_actions must be "selected" before managing selected actions or the allow list (current: "all")'
+        },
+        {
+          kind: 'actions-policy-allow-list-update',
+          status: 'warning',
+          message:
+            'Skipping selected actions settings because allowed_actions must be "selected" before managing selected actions or the allow list (current: "all")'
+        }
+      ]);
+      expect(mockRequest).not.toHaveBeenCalledWith(
+        'GET /orgs/{org}/actions/permissions/selected-actions',
+        expect.anything()
+      );
+    });
+
+    test('should mark all selected actions sub-results as warnings when update fails', async () => {
+      mockRequest.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/actions/permissions') {
+          return { data: { allowed_actions: 'selected', enabled_repositories: 'all' } };
+        }
+        if (route === 'GET /orgs/{org}/actions/permissions/selected-actions') {
+          return {
+            data: {
+              github_owned_allowed: false,
+              verified_allowed: false,
+              patterns_allowed: ['old-action@*']
+            }
+          };
+        }
+        if (route === 'PUT /orgs/{org}/actions/permissions/selected-actions') {
+          throw new Error('Forbidden');
+        }
+        return { data: {} };
+      });
+
+      const desired = { allowed_actions: 'selected', github_owned_allowed: true };
+      const allowList = ['new-action@*'];
+      const result = await syncActionsPolicy(mockOctokit, 'my-org', desired, allowList, false);
+
+      expect(result.failed).toBe(true);
+      expect(result.subResults).toEqual([
+        {
+          kind: 'actions-policy-selected-actions-update',
+          status: 'warning',
+          message: 'Failed to update selected actions settings: Forbidden'
+        },
+        {
+          kind: 'actions-policy-allow-list-update',
+          status: 'warning',
+          message: 'Failed to update selected actions settings: Forbidden'
+        }
+      ]);
     });
   });
 });
