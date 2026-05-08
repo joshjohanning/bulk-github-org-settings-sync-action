@@ -3162,6 +3162,51 @@ orgs:
         ])
       ).toThrow('Duplicate code security configuration name "Duplicate"');
     });
+
+    test('should normalize attachment and default fields', () => {
+      const result = normalizeCodeSecurityConfigurations([
+        {
+          name: 'Attachment test',
+          description: 'Config with assignment',
+          'attach-scope': 'selected',
+          'selected-repository-ids': ['123', 456],
+          'default-for-new-repos': 'private_and_internal'
+        }
+      ]);
+
+      expect(result[0]).toEqual({
+        name: 'Attachment test',
+        description: 'Config with assignment',
+        attach_scope: 'selected',
+        selected_repository_ids: [123, 456],
+        default_for_new_repos: 'private_and_internal'
+      });
+    });
+
+    test('should throw when selected attach scope is missing repository ids', () => {
+      expect(() =>
+        normalizeCodeSecurityConfigurations([
+          {
+            name: 'Invalid attach',
+            description: 'Missing repo ids',
+            'attach-scope': 'selected'
+          }
+        ])
+      ).toThrow('must include "selected_repository_ids" when attach_scope is "selected"');
+    });
+
+    test('should throw when repository ids are provided for non-selected scope', () => {
+      expect(() =>
+        normalizeCodeSecurityConfigurations([
+          {
+            name: 'Invalid attach',
+            description: 'Unexpected repo ids',
+            'attach-scope': 'all',
+            'selected-repository-ids': [123]
+          }
+        ])
+      ).toThrow('can only include "selected_repository_ids" when attach_scope is "selected"');
+    });
   });
 
   // ─── compareCodeSecurityConfiguration ─────────────────────────────────
@@ -3224,6 +3269,27 @@ orgs:
 
       expect(result.changed).toBe(true);
       expect(result.changes).toContain('code_scanning_default_setup_options updated');
+    });
+
+    test('should ignore assignment-only fields when comparing', () => {
+      const existing = {
+        id: 1,
+        name: 'Test',
+        description: 'Test',
+        secret_scanning: 'enabled'
+      };
+      const desired = {
+        name: 'Test',
+        description: 'Test',
+        secret_scanning: 'enabled',
+        attach_scope: 'all',
+        default_for_new_repos: 'private_and_internal'
+      };
+
+      const result = compareCodeSecurityConfiguration(existing, desired);
+
+      expect(result.changed).toBe(false);
+      expect(result.changes).toHaveLength(0);
     });
   });
 
@@ -3445,6 +3511,155 @@ orgs:
       expect(mockRequest).not.toHaveBeenCalled();
     });
 
+    test('should attach selected repositories when configured', async () => {
+      const attachConfig = [
+        {
+          name: 'High risk',
+          description: 'High risk config',
+          advanced_security: 'enabled',
+          attach_scope: 'selected',
+          selected_repository_ids: [123, 456]
+        }
+      ];
+
+      mockPaginate.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/code-security/configurations') {
+          return Promise.resolve([
+            {
+              id: 1,
+              name: 'High risk',
+              description: 'High risk config',
+              advanced_security: 'enabled',
+              target_type: 'organization'
+            }
+          ]);
+        }
+        if (route === 'GET /orgs/{org}/code-security/configurations/{configuration_id}/repositories') {
+          return Promise.resolve([{ status: 'attached', repository: { id: 123 } }]);
+        }
+        return Promise.resolve([]);
+      });
+      mockRequest.mockResolvedValue({ data: [] });
+
+      const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', attachConfig, false, false);
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults.some(r => r.kind === 'code-security-config-attach')).toBe(true);
+      expect(mockRequest).toHaveBeenCalledWith(
+        'POST /orgs/{org}/code-security/configurations/{configuration_id}/attach',
+        expect.objectContaining({
+          org: 'my-org',
+          configuration_id: 1,
+          scope: 'selected',
+          selected_repository_ids: [123, 456]
+        })
+      );
+    });
+
+    test('should skip selected attachment when repository list already matches', async () => {
+      const attachConfig = [
+        {
+          name: 'High risk',
+          description: 'High risk config',
+          attach_scope: 'selected',
+          selected_repository_ids: [456, 123]
+        }
+      ];
+
+      mockPaginate.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/code-security/configurations') {
+          return Promise.resolve([
+            { id: 1, name: 'High risk', description: 'High risk config', target_type: 'organization' }
+          ]);
+        }
+        if (route === 'GET /orgs/{org}/code-security/configurations/{configuration_id}/repositories') {
+          return Promise.resolve([
+            { status: 'attached', repository: { id: 123 } },
+            { status: 'enforced', repository: { id: 456 } }
+          ]);
+        }
+        return Promise.resolve([]);
+      });
+
+      const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', attachConfig, false, false);
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults.some(r => r.kind === 'code-security-config-attach')).toBe(false);
+      expect(mockRequest).not.toHaveBeenCalledWith(
+        'POST /orgs/{org}/code-security/configurations/{configuration_id}/attach',
+        expect.anything()
+      );
+    });
+
+    test('should set default for new repositories when configured', async () => {
+      const defaultConfig = [
+        {
+          name: 'High risk',
+          description: 'High risk config',
+          default_for_new_repos: 'private_and_internal'
+        }
+      ];
+
+      mockPaginate.mockResolvedValueOnce([
+        { id: 1, name: 'High risk', description: 'High risk config', target_type: 'organization' }
+      ]);
+      mockRequest.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/code-security/configurations/defaults') {
+          return Promise.resolve({
+            data: [{ default_for_new_repos: 'public', configuration: { id: 1 } }]
+          });
+        }
+        if (route === 'PUT /orgs/{org}/code-security/configurations/{configuration_id}/defaults') {
+          return Promise.resolve({ data: {} });
+        }
+        return Promise.resolve({ data: {} });
+      });
+
+      const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', defaultConfig, false, false);
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults.some(r => r.kind === 'code-security-config-default')).toBe(true);
+      expect(mockRequest).toHaveBeenCalledWith(
+        'PUT /orgs/{org}/code-security/configurations/{configuration_id}/defaults',
+        expect.objectContaining({
+          org: 'my-org',
+          configuration_id: 1,
+          default_for_new_repos: 'private_and_internal'
+        })
+      );
+    });
+
+    test('should skip default update when already matching', async () => {
+      const defaultConfig = [
+        {
+          name: 'High risk',
+          description: 'High risk config',
+          default_for_new_repos: 'private_and_internal'
+        }
+      ];
+
+      mockPaginate.mockResolvedValueOnce([
+        { id: 1, name: 'High risk', description: 'High risk config', target_type: 'organization' }
+      ]);
+      mockRequest.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/code-security/configurations/defaults') {
+          return Promise.resolve({
+            data: [{ default_for_new_repos: 'private_and_internal', configuration: { id: 1 } }]
+          });
+        }
+        return Promise.resolve({ data: {} });
+      });
+
+      const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', defaultConfig, false, false);
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults.some(r => r.kind === 'code-security-config-default')).toBe(false);
+      expect(mockRequest).not.toHaveBeenCalledWith(
+        'PUT /orgs/{org}/code-security/configurations/{configuration_id}/defaults',
+        expect.anything()
+      );
+    });
+
     test('should throw before API calls when desired configurations contain duplicate names', async () => {
       await expect(
         syncCodeSecurityConfigurations(
@@ -3525,6 +3740,47 @@ orgs:
       // Second org gets base + inline merged
       expect(result[1].codeSecurityConfigurations).toHaveLength(2);
       expect(result[1].codeSecurityConfigurations.map(c => c.name)).toEqual(['Base config', 'Custom config']);
+    });
+
+    test('should layer attachment and default fields in per-org overrides', () => {
+      const orgsYaml = `orgs:
+  - org: my-org
+    code-security-configurations:
+      - name: Base config
+        description: Org override
+        attach-scope: selected
+        selected-repository-ids: [123]
+        default-for-new-repos: private_and_internal
+`;
+      const cscYaml = `- name: Base config
+  description: Base security config
+  advanced_security: enabled
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+      setMockFileContent(cscYaml, '/mock/code-security-configs.yml');
+
+      const result = parseOrganizations(
+        '',
+        '/mock/orgs.yml',
+        '',
+        [],
+        false,
+        '',
+        null,
+        '/mock/code-security-configs.yml'
+      );
+
+      expect(result).toHaveLength(1);
+      expect(result[0].codeSecurityConfigurations).toEqual([
+        {
+          name: 'Base config',
+          description: 'Org override',
+          advanced_security: 'enabled',
+          attach_scope: 'selected',
+          selected_repository_ids: [123],
+          default_for_new_repos: 'private_and_internal'
+        }
+      ]);
     });
   });
 

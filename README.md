@@ -667,6 +667,25 @@ Sync named code security configurations across organizations. These configuratio
 
 All enablement fields accept: `enabled`, `disabled`, or `not_set`. The `enforcement` field accepts: `enforced` or `unenforced`.
 
+### Optional Repository Attachment and Defaults
+
+You can also configure how each code security configuration is applied:
+
+- `attach-scope`: attach to `all`, `all_without_configurations`, `public`, `private_or_internal`, or `selected` repositories
+- `selected-repository-ids`: required when `attach-scope: selected`
+- `default-for-new-repos`: set default for newly created repos (`all`, `none`, `public`, `private_and_internal`)
+
+Example:
+
+```yaml
+- name: High risk settings
+  description: Security configuration for high risk repositories
+  advanced_security: enabled
+  attach-scope: selected
+  selected-repository-ids: [123456789, 234567890]
+  default-for-new-repos: private_and_internal
+```
+
 ### Per-Org Code Security Configuration Overrides
 
 In `orgs.yml`, use `code-security-configurations` to override specific configurations for an org:
@@ -685,11 +704,15 @@ orgs:
         secret_scanning: enabled
         secret_scanning_push_protection: enabled
         enforcement: enforced
+        attach-scope: all_without_configurations
+        default-for-new-repos: private_and_internal
 ```
 
 ### Delete Unmanaged Configurations
 
 Set `delete-unmanaged-code-security-configurations: true` to remove code security configurations not defined in the configuration file. Only custom (organization-owned) configurations are deleted — global GitHub-managed configurations are never touched.
+
+When `attach-scope` and/or `default-for-new-repos` are configured, the action also applies repository attachment and default assignment for that named configuration.
 
 > [!NOTE]
 > Requires a GitHub Advanced Security (GHAS) license for `advanced_security` features. Available on GitHub.com (GHEC) and GHES 3.x+.

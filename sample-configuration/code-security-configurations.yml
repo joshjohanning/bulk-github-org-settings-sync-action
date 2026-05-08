@@ -7,6 +7,10 @@
 #
 # All enablement fields accept: enabled, disabled, or not_set
 # The enforcement field accepts: enforced or unenforced
+# Optional assignment fields:
+# - attach-scope: all | all_without_configurations | public | private_or_internal | selected
+# - selected-repository-ids: required when attach-scope is selected
+# - default-for-new-repos: all | none | public | private_and_internal
 #
 # Requires GitHub Advanced Security (GHAS) license for advanced_security features.
 # Available on GitHub.com (GHEC) and GHES 3.x+.
@@ -25,6 +29,11 @@
   secret_scanning_non_provider_patterns: enabled
   private_vulnerability_reporting: enabled
   enforcement: enforced
+  attach-scope: selected
+  selected-repository-ids:
+    - 123456789
+    - 234567890
+  default-for-new-repos: private_and_internal
 
 - name: Standard settings
   description: Security configuration for standard repositories

@@ -201,6 +201,7 @@ const ORG_CONFIG_TOP_LEVEL_KEYS = new Set([
   'delete-unmanaged-rulesets',
   'member-privileges',
   'code-security-configurations-file',
+  'code-security-configurations',
   'delete-unmanaged-code-security-configurations',
   'actions-policy',
   'actions-allow-list-file'
@@ -434,6 +435,8 @@ const SYNC_KIND_LABELS = Object.freeze({
   'code-security-config-create': 'code security configuration (created)',
   'code-security-config-update': 'code security configuration (updated)',
   'code-security-config-delete': 'code security configuration (deleted)',
+  'code-security-config-attach': 'code security configuration (attached)',
+  'code-security-config-default': 'code security configuration (default updated)',
   'actions-policy-permissions-update': 'actions policy (permissions updated)',
   'actions-policy-workflow-update': 'actions policy (workflow permissions updated)',
   'actions-policy-selected-actions-update': 'actions policy (selected actions updated)',
@@ -884,7 +887,7 @@ export function parseActionsAllowListFile(filePath) {
 /**
  * Parse the organizations YAML config file.
  * @param {string} filePath - Path to the YAML file
- * @returns {Array<{ org: string, customPropertiesFile?: string, customProperties?: Array, issueTypesFile?: string, issueTypes?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, deleteUnmanagedProperties?: boolean, deleteUnmanagedIssueTypes?: boolean, memberPrivileges?: Object, codeSecurityConfigurationsFile?: string, codeSecurityConfigurations?: Array, deleteUnmanagedCodeSecurityConfigurations?: boolean }>}
+ * @returns {Array<{ org: string, customPropertiesFile?: string, customProperties?: Array, issueTypesFile?: string, issueTypes?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, deleteUnmanagedProperties?: boolean, deleteUnmanagedIssueTypes?: boolean, memberPrivileges?: Object, codeSecurityConfigurationsFile?: string, codeSecurityConfigurations?: Array, deleteUnmanagedCodeSecurityConfigurations?: boolean, actionsPolicy?: Object, actionsAllowListFile?: string }>}
  */
 export function parseOrganizationsFile(filePath) {
   if (!fs.existsSync(filePath)) {
@@ -2424,6 +2427,14 @@ const CODE_SECURITY_CONFIG_READONLY_FIELDS = new Set([
 
 const CODE_SECURITY_ENABLEMENT_VALUES = new Set(['enabled', 'disabled', 'not_set']);
 const CODE_SECURITY_ENFORCEMENT_VALUES = new Set(['enforced', 'unenforced']);
+const CODE_SECURITY_ATTACH_SCOPE_VALUES = new Set([
+  'all',
+  'all_without_configurations',
+  'public',
+  'private_or_internal',
+  'selected'
+]);
+const CODE_SECURITY_DEFAULT_FOR_NEW_REPOS_VALUES = new Set(['all', 'none', 'private_and_internal', 'public']);
 const CODE_SECURITY_OPTION_FIELDS = [
   'dependency_graph_autosubmit_action_options',
   'code_scanning_default_setup_options',
@@ -2452,6 +2463,31 @@ function normalizeCodeSecurityOptionsValue(value, field, configName) {
     throw new Error(`Code security configuration "${configName}" field "${field}" must be a key-value map`);
   }
   return value;
+}
+
+function normalizeRepositoryIdsValue(value, configName) {
+  const rawIds = Array.isArray(value) ? value : String(value).split(',');
+  const ids = [];
+
+  for (const rawId of rawIds) {
+    const normalized = Number.parseInt(String(rawId).trim(), 10);
+    if (!Number.isInteger(normalized) || normalized <= 0) {
+      throw new Error(
+        `Code security configuration "${configName}" field "selected_repository_ids" must contain positive integer IDs`
+      );
+    }
+    if (!ids.includes(normalized)) {
+      ids.push(normalized);
+    }
+  }
+
+  if (ids.length === 0) {
+    throw new Error(
+      `Code security configuration "${configName}" field "selected_repository_ids" must contain at least one repository ID`
+    );
+  }
+
+  return ids;
 }
 
 function validateUniqueCodeSecurityConfigurationNames(configs) {
@@ -2565,6 +2601,42 @@ export function normalizeCodeSecurityConfigurations(configs) {
       }
     }
 
+    const attachScope = getCodeSecurityConfigValue(config, 'attach_scope');
+    if (attachScope !== undefined && attachScope !== null) {
+      normalized.attach_scope = normalizeCodeSecurityEnumValue(
+        attachScope,
+        'attach_scope',
+        normalized.name,
+        CODE_SECURITY_ATTACH_SCOPE_VALUES
+      );
+    }
+
+    const selectedRepositoryIds = getCodeSecurityConfigValue(config, 'selected_repository_ids');
+    if (selectedRepositoryIds !== undefined && selectedRepositoryIds !== null) {
+      normalized.selected_repository_ids = normalizeRepositoryIdsValue(selectedRepositoryIds, normalized.name);
+    }
+
+    const defaultForNewRepos = getCodeSecurityConfigValue(config, 'default_for_new_repos');
+    if (defaultForNewRepos !== undefined && defaultForNewRepos !== null) {
+      normalized.default_for_new_repos = normalizeCodeSecurityEnumValue(
+        defaultForNewRepos,
+        'default_for_new_repos',
+        normalized.name,
+        CODE_SECURITY_DEFAULT_FOR_NEW_REPOS_VALUES
+      );
+    }
+
+    if (normalized.attach_scope === 'selected' && !normalized.selected_repository_ids) {
+      throw new Error(
+        `Code security configuration "${normalized.name}" must include "selected_repository_ids" when attach_scope is "selected"`
+      );
+    }
+    if (normalized.attach_scope !== 'selected' && normalized.selected_repository_ids) {
+      throw new Error(
+        `Code security configuration "${normalized.name}" can only include "selected_repository_ids" when attach_scope is "selected"`
+      );
+    }
+
     return normalized;
   });
 
@@ -2606,6 +2678,14 @@ function stripCodeSecurityConfigReadonlyFields(config) {
   return stripped;
 }
 
+function stripCodeSecurityConfigManagementFields(config) {
+  const stripped = { ...config };
+  delete stripped.attach_scope;
+  delete stripped.selected_repository_ids;
+  delete stripped.default_for_new_repos;
+  return stripped;
+}
+
 /**
  * Compare two code security configurations to check if they differ.
  * Only compares fields present in the desired config.
@@ -2616,8 +2696,9 @@ function stripCodeSecurityConfigReadonlyFields(config) {
 export function compareCodeSecurityConfiguration(existing, desired) {
   const changes = [];
   const strippedExisting = stripCodeSecurityConfigReadonlyFields(existing);
+  const desiredDefinition = stripCodeSecurityConfigManagementFields(desired);
 
-  for (const [key, desiredValue] of Object.entries(desired)) {
+  for (const [key, desiredValue] of Object.entries(desiredDefinition)) {
     const existingValue = strippedExisting[key];
 
     if (typeof desiredValue === 'object' && desiredValue !== null) {
@@ -2665,10 +2746,12 @@ export async function syncCodeSecurityConfigurations(octokit, org, desiredConfig
 
   const existingMap = new Map(managedExisting.map(c => [c.name, c]));
   const desiredMap = new Map(desiredConfigs.map(c => [c.name, c]));
+  const syncedConfigIds = new Map();
 
   // Determine creates and updates
   for (const desired of desiredConfigs) {
     const existing = existingMap.get(desired.name);
+    const desiredDefinition = stripCodeSecurityConfigManagementFields(desired);
 
     if (!existing) {
       // New configuration
@@ -2683,10 +2766,11 @@ export async function syncCodeSecurityConfigurations(octokit, org, desiredConfig
 
       if (!dryRun) {
         try {
-          await octokit.request('POST /orgs/{org}/code-security/configurations', {
+          const { data: created } = await octokit.request('POST /orgs/{org}/code-security/configurations', {
             org,
-            ...desired
+            ...desiredDefinition
           });
+          syncedConfigIds.set(desired.name, created.id);
         } catch (error) {
           hasFailed = true;
           core.warning(`  ⚠️  Failed to create code security configuration "${desired.name}": ${error.message}`);
@@ -2696,10 +2780,14 @@ export async function syncCodeSecurityConfigurations(octokit, org, desiredConfig
             `Failed to create "${desired.name}": ${error.message}`
           );
         }
+      } else {
+        syncedConfigIds.set(desired.name, existing?.id ?? -1);
       }
     } else {
+      syncedConfigIds.set(desired.name, existing.id);
+
       // Check for updates
-      const { changed, changes } = compareCodeSecurityConfiguration(existing, desired);
+      const { changed, changes } = compareCodeSecurityConfiguration(existing, desiredDefinition);
       if (changed) {
         core.info(`  📝 ${wouldPrefix}Update code security configuration: ${desired.name} (${changes.join(', ')})`);
         subResults.push(
@@ -2715,7 +2803,7 @@ export async function syncCodeSecurityConfigurations(octokit, org, desiredConfig
             await octokit.request('PATCH /orgs/{org}/code-security/configurations/{configuration_id}', {
               org,
               configuration_id: existing.id,
-              ...desired
+              ...desiredDefinition
             });
           } catch (error) {
             hasFailed = true;
@@ -2766,7 +2854,181 @@ export async function syncCodeSecurityConfigurations(octokit, org, desiredConfig
     }
   }
 
+  // Apply optional attachment/default behavior to managed configurations.
+  for (const desired of desiredConfigs) {
+    const configId = syncedConfigIds.get(desired.name) || existingMap.get(desired.name)?.id;
+    if (!configId) {
+      continue;
+    }
+
+    if (desired.attach_scope) {
+      const attachResult = await syncCodeSecurityConfigurationAttachment(
+        octokit,
+        org,
+        configId,
+        desired.name,
+        desired.attach_scope,
+        desired.selected_repository_ids,
+        dryRun
+      );
+      subResults.push(...attachResult.subResults);
+      if (attachResult.failed) {
+        hasFailed = true;
+      }
+    }
+
+    if (desired.default_for_new_repos !== undefined) {
+      const defaultResult = await syncCodeSecurityConfigurationDefault(
+        octokit,
+        org,
+        configId,
+        desired.name,
+        desired.default_for_new_repos,
+        dryRun
+      );
+      subResults.push(...defaultResult.subResults);
+      if (defaultResult.failed) {
+        hasFailed = true;
+      }
+    }
+  }
+
   return { subResults, failed: hasFailed };
+}
+
+async function syncCodeSecurityConfigurationAttachment(
+  octokit,
+  org,
+  configurationId,
+  configurationName,
+  scope,
+  selectedRepositoryIds,
+  dryRun
+) {
+  const subResults = [];
+  const wouldPrefix = dryRun ? 'Would ' : '';
+  const canQueryCurrentState = Number.isInteger(configurationId) && configurationId > 0;
+
+  let needsUpdate = true;
+  const normalizedSelectedIds = (selectedRepositoryIds || []).slice().sort((a, b) => a - b);
+
+  if (scope === 'selected' && canQueryCurrentState) {
+    try {
+      const associatedRepos = await octokit.paginate(
+        'GET /orgs/{org}/code-security/configurations/{configuration_id}/repositories',
+        {
+          org,
+          configuration_id: configurationId,
+          per_page: 100
+        }
+      );
+
+      const currentAttachedIds = associatedRepos
+        .filter(entry => ['attached', 'attaching', 'enforced', 'updating'].includes(entry.status))
+        .map(entry => entry.repository?.id)
+        .filter(id => Number.isInteger(id))
+        .sort((a, b) => a - b);
+
+      needsUpdate = JSON.stringify(currentAttachedIds) !== JSON.stringify(normalizedSelectedIds);
+      if (!needsUpdate) {
+        core.info(`  ✅ Code security attachment unchanged for "${configurationName}"`);
+      }
+    } catch (error) {
+      core.warning(
+        `  ⚠️  Failed to verify current repository attachments for "${configurationName}": ${error.message}`
+      );
+    }
+  }
+
+  if (!needsUpdate) {
+    return { subResults, failed: false };
+  }
+
+  const detail =
+    scope === 'selected'
+      ? `${wouldPrefix}attach "${configurationName}" to selected repositories (${normalizedSelectedIds.length} repo IDs)`
+      : `${wouldPrefix}attach "${configurationName}" to ${scope} repositories`;
+
+  core.info(`  🔒 ${detail}`);
+  subResults.push(createSubResult('code-security-config-attach', SubResultStatus.CHANGED, detail));
+
+  if (!dryRun) {
+    try {
+      const payload = {
+        org,
+        configuration_id: configurationId,
+        scope
+      };
+      if (scope === 'selected') {
+        payload.selected_repository_ids = normalizedSelectedIds;
+      }
+      await octokit.request('POST /orgs/{org}/code-security/configurations/{configuration_id}/attach', payload);
+    } catch (error) {
+      subResults[subResults.length - 1] = createSubResult(
+        'code-security-config-attach',
+        SubResultStatus.WARNING,
+        `Failed to attach "${configurationName}": ${error.message}`
+      );
+      return { subResults, failed: true };
+    }
+  }
+
+  return { subResults, failed: false };
+}
+
+async function syncCodeSecurityConfigurationDefault(
+  octokit,
+  org,
+  configurationId,
+  configurationName,
+  defaultForNewRepos,
+  dryRun
+) {
+  const subResults = [];
+  const wouldPrefix = dryRun ? 'Would ' : '';
+  const canQueryCurrentState = Number.isInteger(configurationId) && configurationId > 0;
+
+  let currentDefault = null;
+  if (canQueryCurrentState) {
+    try {
+      const { data } = await octokit.request('GET /orgs/{org}/code-security/configurations/defaults', { org });
+      const currentEntry = (data || []).find(entry => {
+        const entryId = entry?.configuration?.id ?? entry?.configuration?.value?.id;
+        return entryId === configurationId;
+      });
+      currentDefault = currentEntry?.default_for_new_repos ?? null;
+    } catch (error) {
+      core.warning(`  ⚠️  Failed to fetch current code security defaults for "${configurationName}": ${error.message}`);
+    }
+  }
+
+  if (currentDefault === defaultForNewRepos) {
+    core.info(`  ✅ Code security default unchanged for "${configurationName}"`);
+    return { subResults, failed: false };
+  }
+
+  const detail = `${wouldPrefix}set "${configurationName}" as default for new repos: ${defaultForNewRepos}`;
+  core.info(`  🔒 ${detail}`);
+  subResults.push(createSubResult('code-security-config-default', SubResultStatus.CHANGED, detail));
+
+  if (!dryRun) {
+    try {
+      await octokit.request('PUT /orgs/{org}/code-security/configurations/{configuration_id}/defaults', {
+        org,
+        configuration_id: configurationId,
+        default_for_new_repos: defaultForNewRepos
+      });
+    } catch (error) {
+      subResults[subResults.length - 1] = createSubResult(
+        'code-security-config-default',
+        SubResultStatus.WARNING,
+        `Failed to update default for "${configurationName}": ${error.message}`
+      );
+      return { subResults, failed: true };
+    }
+  }
+
+  return { subResults, failed: false };
 }
 
 // ─── Result helpers ─────────────────────────────────────────────────────────────
