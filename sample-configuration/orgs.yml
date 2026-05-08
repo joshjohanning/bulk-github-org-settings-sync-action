@@ -21,6 +21,10 @@
 # member-privileges overrides layer on top — settings with the same key
 # override the base value.
 #
+# Organization profile fields can be defined as direct action inputs. Per-org
+# org-profile overrides layer on top — fields with the same key override the
+# base value.
+#
 # Code security configurations can be defined in a separate
 # code-security-configurations.yml file and provided via the
 # code-security-configurations-file input. Per-org overrides below
@@ -65,6 +69,10 @@ orgs:
     member-privileges:
       members-can-fork-private-repositories: true # Override the base setting for this org
       members-can-create-internal-repositories: true # GHEC/GHES only
+    # Per-org organization profile overrides (layers on top of base action inputs)
+    org-profile:
+      org-name: 'My Other Org'
+      org-description: 'Custom description for this org'
     # Per-org code security configuration overrides (layers on top of base code-security-configurations-file)
     # code-security-configurations-file: './config/code-security/other-org.yml' # Use a different base file for this org
     # delete-unmanaged-code-security-configurations: true # Override the action input for this org

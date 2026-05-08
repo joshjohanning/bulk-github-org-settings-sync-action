@@ -188,6 +188,11 @@ const {
   getMemberPrivilegesFromInputs,
   syncMemberPrivileges,
   MEMBER_PRIVILEGE_SETTINGS,
+  ORG_PROFILE_SETTINGS,
+  parseOrgProfile,
+  getOrgProfileFromInputs,
+  mergeOrgProfile,
+  syncOrgProfile,
   ACTIONS_POLICY_SETTINGS,
   parseActionsPolicy,
   getActionsPolicyFromInputs,
@@ -3023,6 +3028,276 @@ orgs:
     });
   });
 
+  // ─── Organization Profile ──────────────────────────────────────────────
+
+  describe('ORG_PROFILE_SETTINGS', () => {
+    test('should have 7 settings defined', () => {
+      expect(ORG_PROFILE_SETTINGS.size).toBe(7);
+    });
+
+    test('should have unique API keys', () => {
+      const apiKeys = new Set();
+      for (const [, setting] of ORG_PROFILE_SETTINGS) {
+        expect(apiKeys.has(setting.apiKey)).toBe(false);
+        apiKeys.add(setting.apiKey);
+      }
+    });
+  });
+
+  describe('parseOrgProfile', () => {
+    test('should parse valid string settings', () => {
+      const result = parseOrgProfile({
+        'org-name': 'My Org',
+        'org-description': 'A test org',
+        'org-blog': 'https://example.com'
+      });
+      expect(result).toEqual({
+        name: 'My Org',
+        description: 'A test org',
+        blog: 'https://example.com'
+      });
+    });
+
+    test('should trim string settings and allow empty strings', () => {
+      const result = parseOrgProfile({
+        'org-name': '  My Org  ',
+        'org-description': '   '
+      });
+
+      expect(result).toEqual({
+        name: 'My Org',
+        description: ''
+      });
+    });
+
+    test('should throw for unknown key', () => {
+      expect(() => parseOrgProfile({ 'org-name': 'test', 'unknown-key': 'val' })).toThrow(
+        /Unknown org profile key "unknown-key"/
+      );
+    });
+
+    test('should throw for non-string value', () => {
+      expect(() => parseOrgProfile({ 'org-name': 123 })).toThrow(/must be a string/);
+    });
+
+    test('should throw for non-object config', () => {
+      expect(() => parseOrgProfile('not-an-object')).toThrow(/expected a key-value map/);
+    });
+
+    test('should include org context in error messages', () => {
+      expect(() => parseOrgProfile({ 'bad-key': 'val' }, 'my-org')).toThrow(/for org "my-org"/);
+    });
+  });
+
+  describe('getOrgProfileFromInputs', () => {
+    test('should return null when no org profile inputs are set', () => {
+      mockCore.getInput.mockReturnValue('');
+      const result = getOrgProfileFromInputs();
+      expect(result).toBeNull();
+    });
+
+    test('should parse string inputs', () => {
+      mockCore.getInput.mockImplementation(name => {
+        if (name === 'org-name') return '  My Org  ';
+        if (name === 'org-email') return 'org@example.com';
+        if (name === 'org-blog') return '   ';
+        return '';
+      });
+      const result = getOrgProfileFromInputs();
+      expect(result).toEqual({
+        name: 'My Org',
+        email: 'org@example.com'
+      });
+    });
+  });
+
+  describe('mergeOrgProfile', () => {
+    test('should merge base and override settings', () => {
+      const result = mergeOrgProfile({ name: 'Base', blog: 'https://base.com' }, { name: 'Override' });
+      expect(result).toEqual({ name: 'Override', blog: 'https://base.com' });
+    });
+
+    test('should return base when overrides are empty', () => {
+      const result = mergeOrgProfile({ name: 'Base' }, {});
+      expect(result).toEqual({ name: 'Base' });
+    });
+  });
+
+  describe('syncOrgProfile', () => {
+    test('should detect and apply changes', async () => {
+      mockRequest.mockResolvedValueOnce({
+        data: { name: 'Old Name', description: 'Old desc', blog: '' }
+      });
+      mockRequest.mockResolvedValueOnce({ data: {} });
+
+      const result = await syncOrgProfile(
+        mockOctokit,
+        'test-org',
+        { name: 'New Name', description: 'New desc' },
+        false
+      );
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].status).toBe('changed');
+      expect(mockRequest).toHaveBeenCalledWith('PATCH /orgs/{org}', {
+        org: 'test-org',
+        name: 'New Name',
+        description: 'New desc'
+      });
+    });
+
+    test('should detect no changes for identical settings', async () => {
+      mockRequest.mockResolvedValueOnce({
+        data: { name: 'Same', description: 'Same desc' }
+      });
+
+      const result = await syncOrgProfile(mockOctokit, 'test-org', { name: 'Same', description: 'Same desc' }, false);
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults).toHaveLength(0);
+      expect(mockRequest).toHaveBeenCalledTimes(1); // only GET
+    });
+
+    test('should handle dry-run mode without making API changes', async () => {
+      mockRequest.mockResolvedValueOnce({
+        data: { name: 'Old Name' }
+      });
+
+      const result = await syncOrgProfile(mockOctokit, 'test-org', { name: 'New Name' }, true);
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].status).toBe('changed');
+      expect(mockRequest).toHaveBeenCalledTimes(1); // only GET, no PATCH
+    });
+
+    test('should handle GET API error gracefully', async () => {
+      mockRequest.mockRejectedValueOnce(new Error('Not found'));
+
+      const result = await syncOrgProfile(mockOctokit, 'test-org', { name: 'New' }, false);
+
+      expect(result.failed).toBe(true);
+      expect(result.subResults[0].status).toBe('warning');
+    });
+
+    test('should handle PATCH API error gracefully', async () => {
+      mockRequest.mockResolvedValueOnce({ data: { name: 'Old' } });
+      mockRequest.mockRejectedValueOnce(new Error('Forbidden'));
+
+      const result = await syncOrgProfile(mockOctokit, 'test-org', { name: 'New' }, false);
+
+      expect(result.failed).toBe(true);
+      expect(result.subResults[0].status).toBe('warning');
+    });
+
+    test('should reuse shared organization settings cache', async () => {
+      mockRequest.mockResolvedValueOnce({
+        data: {
+          default_repository_permission: 'write',
+          name: 'Old Name'
+        }
+      });
+
+      const orgSettingsCache = new Map();
+
+      const memberResult = await syncMemberPrivileges(
+        mockOctokit,
+        'test-org',
+        { default_repository_permission: 'read' },
+        true,
+        orgSettingsCache
+      );
+      const profileResult = await syncOrgProfile(mockOctokit, 'test-org', { name: 'New Name' }, true, orgSettingsCache);
+
+      expect(memberResult.failed).toBe(false);
+      expect(profileResult.failed).toBe(false);
+      expect(mockRequest).toHaveBeenCalledTimes(1);
+      expect(mockRequest).toHaveBeenCalledWith('GET /orgs/{org}', { org: 'test-org' });
+    });
+  });
+
+  describe('parseOrganizations with org profile inputs', () => {
+    test('should use org profile from inputs', () => {
+      const inputProfile = { name: 'My Org', blog: 'https://example.com' };
+
+      const result = parseOrganizations('org1', '', '', [], false, '', null, inputProfile);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].orgProfile).toEqual({
+        name: 'My Org',
+        blog: 'https://example.com'
+      });
+    });
+
+    test('should layer per-org overrides on top of inputs', () => {
+      const inputProfile = { name: 'Base Name', blog: 'https://base.com' };
+
+      const orgsYaml = `orgs:
+  - org: my-org
+  - org: my-other-org
+    org-profile:
+      org-name: Override Name
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+
+      const result = parseOrganizations('', '/mock/orgs.yml', '', [], false, '', null, inputProfile);
+
+      expect(result).toHaveLength(2);
+      expect(result[0].orgProfile).toEqual({
+        name: 'Base Name',
+        blog: 'https://base.com'
+      });
+      expect(result[1].orgProfile).toEqual({
+        name: 'Override Name',
+        blog: 'https://base.com'
+      });
+    });
+
+    test('should support top-level org profile aliases in orgs file', () => {
+      const orgsYaml = `orgs:
+  - org: my-org
+    org-name: Top Level Name
+    org-blog: ' https://example.com '
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+
+      const result = parseOrganizations('', '/mock/orgs.yml');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].orgProfile).toEqual({
+        name: 'Top Level Name',
+        blog: 'https://example.com'
+      });
+    });
+
+    test('should let nested org-profile override top-level aliases', () => {
+      const orgsYaml = `orgs:
+  - org: my-org
+    org-name: Top Level Name
+    org-profile:
+      org-name: Nested Name
+      org-description: Nested description
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+
+      const result = parseOrganizations('', '/mock/orgs.yml');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].orgProfile).toEqual({
+        name: 'Nested Name',
+        description: 'Nested description'
+      });
+    });
+  });
+
+  describe('validateOrgConfig with org-profile', () => {
+    test('should not warn for valid org-profile key', () => {
+      validateOrgConfig({ org: 'my-org', 'org-profile': { 'org-name': 'Test' } }, 'my-org');
+      expect(mockCore.warning).not.toHaveBeenCalled();
+    });
+  });
+
   // ─── parseCodeSecurityConfigurationsFile ──────────────────────────────
 
   describe('parseCodeSecurityConfigurationsFile', () => {
@@ -4318,6 +4593,7 @@ orgs:
         false,
         '',
         null,
+        null,
         '/mock/code-security-configs.yml'
       );
 
@@ -4350,6 +4626,7 @@ orgs:
         [],
         false,
         '',
+        null,
         null,
         '/mock/code-security-configs.yml'
       );
@@ -4388,6 +4665,7 @@ orgs:
         [],
         false,
         '',
+        null,
         null,
         '/mock/code-security-configs.yml'
       );
@@ -4661,7 +4939,7 @@ orgs:
         default_workflow_permissions: 'read'
       };
 
-      const result = parseOrganizations('org1', '', '', [], false, '', null, inputPolicy, '');
+      const result = parseOrganizations('org1', '', '', [], false, '', null, null, '', inputPolicy, '');
 
       expect(result).toHaveLength(1);
       expect(result[0].actionsPolicy).toEqual({
@@ -4684,7 +4962,7 @@ orgs:
 `;
       setMockFileContent(orgsYaml, '/mock/orgs.yml');
 
-      const result = parseOrganizations('', '/mock/orgs.yml', '', [], false, '', null, inputPolicy, '');
+      const result = parseOrganizations('', '/mock/orgs.yml', '', [], false, '', null, null, '', inputPolicy, '');
 
       expect(result).toHaveLength(2);
       expect(result[0].actionsPolicy).toEqual({
@@ -4704,7 +4982,7 @@ orgs:
 `;
       setMockFileContent(allowListContent, '/mock/allow-list.yml');
 
-      const result = parseOrganizations('org1', '', '', [], false, '', null, null, '/mock/allow-list.yml');
+      const result = parseOrganizations('org1', '', '', [], false, '', null, null, '', null, '/mock/allow-list.yml');
 
       expect(result).toHaveLength(1);
       expect(result[0].actionsAllowList).toEqual(['actions/cache@*', 'myorg/*']);
@@ -4727,7 +5005,19 @@ orgs:
 `;
       setMockFileContent(orgsYaml, '/mock/orgs.yml');
 
-      const result = parseOrganizations('', '/mock/orgs.yml', '', [], false, '', null, null, '/mock/base-allow.yml');
+      const result = parseOrganizations(
+        '',
+        '/mock/orgs.yml',
+        '',
+        [],
+        false,
+        '',
+        null,
+        null,
+        '',
+        null,
+        '/mock/base-allow.yml'
+      );
 
       expect(result).toHaveLength(2);
       expect(result[0].actionsAllowList).toEqual(['base-action@*']);

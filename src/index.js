@@ -45,6 +45,7 @@ function getKnownOrgConfigKeys() {
   // 'custom-properties' is inline property definitions (YAML-only, not an action input)
   // 'issue-types' is inline issue type definitions (YAML-only, not an action input)
   // 'member-privileges' is inline member privilege overrides (YAML-only, not an action input)
+  // 'org-profile' is inline organization profile overrides (YAML-only, not an action input)
   // 'code-security-configurations' is inline code security configuration overrides (YAML-only, not an action input)
   // 'actions-policy' is inline actions policy overrides (YAML-only; individual settings are also available as action inputs)
   const keys = new Set([
@@ -52,6 +53,7 @@ function getKnownOrgConfigKeys() {
     'custom-properties',
     'issue-types',
     'member-privileges',
+    'org-profile',
     'code-security-configurations',
     'actions-policy'
   ]);
@@ -152,6 +154,21 @@ export const MEMBER_PRIVILEGE_SETTINGS = new Map([
 ]);
 
 /**
+ * Supported organization profile settings.
+ * Maps YAML keys (hyphenated) to GitHub REST API parameter names.
+ * @type {Map<string, { apiKey: string }>}
+ */
+export const ORG_PROFILE_SETTINGS = new Map([
+  ['org-name', { apiKey: 'name' }],
+  ['org-description', { apiKey: 'description' }],
+  ['org-company', { apiKey: 'company' }],
+  ['org-location', { apiKey: 'location' }],
+  ['org-email', { apiKey: 'email' }],
+  ['org-twitter-username', { apiKey: 'twitter_username' }],
+  ['org-blog', { apiKey: 'blog' }]
+]);
+
+/**
  * Supported Actions policy settings.
  * Maps YAML key (hyphenated) to API key (snake_case), expected type, and endpoint group.
  * @type {Map<string, { apiKey: string, type: string, validValues?: string[], endpoint: string }>}
@@ -200,6 +217,7 @@ const ORG_CONFIG_TOP_LEVEL_KEYS = new Set([
   'rulesets-file',
   'delete-unmanaged-rulesets',
   'member-privileges',
+  'org-profile',
   'code-security-configurations-file',
   'code-security-configurations',
   'delete-unmanaged-code-security-configurations',
@@ -429,6 +447,7 @@ const SYNC_KIND_LABELS = Object.freeze({
   'issue-type-update': 'issue type (updated)',
   'issue-type-delete': 'issue type (deleted)',
   'member-privileges-update': 'member privileges (updated)',
+  'org-profile-update': 'organization profile (updated)',
   'ruleset-create': 'ruleset (created)',
   'ruleset-update': 'ruleset (updated)',
   'ruleset-delete': 'ruleset (deleted)',
@@ -455,6 +474,35 @@ function createSubResult(kind, status, message) {
 }
 
 /**
+ * Fetch organization settings, optionally reusing a cache shared by sync calls for the current org.
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} org - Organization name
+ * @param {Map<string, Promise<Object>>} [orgSettingsCache] - Cache shared across org settings sync calls
+ * @returns {Promise<Object>} Current organization settings
+ */
+async function getOrganizationSettings(octokit, org, orgSettingsCache) {
+  if (!orgSettingsCache) {
+    const { data } = await octokit.request('GET /orgs/{org}', { org });
+    return data;
+  }
+
+  if (!orgSettingsCache.has(org)) {
+    const settingsPromise = (async () => {
+      try {
+        const { data } = await octokit.request('GET /orgs/{org}', { org });
+        return data;
+      } catch (err) {
+        orgSettingsCache.delete(org);
+        throw err;
+      }
+    })();
+    orgSettingsCache.set(org, settingsPromise);
+  }
+
+  return orgSettingsCache.get(org);
+}
+
+/**
  * Format a curated summary message for a sub-result in the summary table.
  * @param {{ kind: string, status: string, message: string }} subResult
  * @returns {string} Curated summary text
@@ -471,7 +519,7 @@ function formatSubResultSummary(subResult) {
  * Supports two modes:
  *   1. organizations-file: YAML file with full org + settings config
  * Supports layering: base settings from action inputs (custom-properties-file, rulesets-file, direct
- * member privilege inputs, direct actions policy inputs, and actions-allow-list-file) are merged with
+ * member privilege inputs, org profile fields, direct actions policy inputs, and actions-allow-list-file) are merged with
  * per-org overrides from organizations-file.
  * Per-org properties override base properties with the same name; base properties
  * not overridden are preserved.
@@ -489,10 +537,11 @@ function formatSubResultSummary(subResult) {
  * @param {boolean} [deleteUnmanagedRulesets] - Whether to delete rulesets not in config
  * @param {string} [issueTypesFile] - Path to issue types YAML file (base for all orgs)
  * @param {Object|null} [memberPrivilegesFromInputs] - Member privileges parsed from action inputs (base for all orgs)
+ * @param {Object|null} [orgProfileFromInputs] - Org profile parsed from action inputs (base for all orgs)
  * @param {string} [codeSecurityConfigurationsFile] - Path to code security configurations YAML file (base for all orgs)
  * @param {Object|null} [actionsPolicyFromInputs] - Actions policy parsed from action inputs (base for all orgs)
  * @param {string} [actionsAllowListFile] - Path to actions allow list YAML file (base for all orgs)
- * @returns {Array<{ org: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, issueTypes?: Array, memberPrivileges?: Object, codeSecurityConfigurations?: Array, deleteUnmanagedCodeSecurityConfigurations?: boolean, actionsPolicy?: Object, actionsAllowList?: string[] }>} Parsed org configs
+ * @returns {Array<{ org: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, issueTypes?: Array, memberPrivileges?: Object, orgProfile?: Object, codeSecurityConfigurations?: Array, deleteUnmanagedCodeSecurityConfigurations?: boolean, actionsPolicy?: Object, actionsAllowList?: string[] }>} Parsed org configs
  */
 export function parseOrganizations(
   organizationsInput,
@@ -502,6 +551,7 @@ export function parseOrganizations(
   deleteUnmanagedRulesets,
   issueTypesFile,
   memberPrivilegesFromInputs,
+  orgProfileFromInputs,
   codeSecurityConfigurationsFile,
   actionsPolicyFromInputs,
   actionsAllowListFile
@@ -539,6 +589,12 @@ export function parseOrganizations(
   let baseMemberPrivileges = null;
   if (memberPrivilegesFromInputs) {
     baseMemberPrivileges = { ...memberPrivilegesFromInputs };
+  }
+
+  // Load base org profile from direct action inputs.
+  let baseOrgProfile = null;
+  if (orgProfileFromInputs) {
+    baseOrgProfile = { ...orgProfileFromInputs };
   }
 
   // Load base code security configurations from separate file (applies to all orgs)
@@ -623,6 +679,11 @@ export function parseOrganizations(
         );
       }
 
+      // Per-org org-profile layer on top of base org profile
+      if (baseOrgProfile || orgConfig.orgProfile) {
+        orgConfig.orgProfile = mergeOrgProfile(baseOrgProfile || {}, orgConfig.orgProfile || {});
+      }
+
       // Per-org code-security-configurations-file overrides the base for this org
       let orgCodeSecConfBase = baseCodeSecurityConfigurations;
       if (orgConfig.codeSecurityConfigurationsFile) {
@@ -691,6 +752,7 @@ export function parseOrganizations(
     ...(rulesetsFiles && rulesetsFiles.length > 0 ? { rulesetsFiles } : {}),
     ...(deleteUnmanagedRulesets !== undefined ? { deleteUnmanagedRulesets } : {}),
     ...(baseMemberPrivileges ? { memberPrivileges: baseMemberPrivileges } : {}),
+    ...(baseOrgProfile ? { orgProfile: baseOrgProfile } : {}),
     ...(baseCodeSecurityConfigurations ? { codeSecurityConfigurations: baseCodeSecurityConfigurations } : {}),
     ...(baseActionsPolicy ? { actionsPolicy: baseActionsPolicy } : {}),
     ...(baseActionsAllowList ? { actionsAllowList: baseActionsAllowList } : {})
@@ -885,9 +947,21 @@ export function parseActionsAllowListFile(filePath) {
 }
 
 /**
+ * Merge base org profile with per-org overrides.
+ * Per-org settings override base settings with the same key.
+ * Base settings not overridden are preserved.
+ * @param {Object} baseProfile - Base org profile settings (API-keyed)
+ * @param {Object} orgProfile - Per-org org profile overrides (API-keyed)
+ * @returns {Object} Merged profile
+ */
+export function mergeOrgProfile(baseProfile, orgProfile) {
+  return { ...baseProfile, ...orgProfile };
+}
+
+/**
  * Parse the organizations YAML config file.
  * @param {string} filePath - Path to the YAML file
- * @returns {Array<{ org: string, customPropertiesFile?: string, customProperties?: Array, issueTypesFile?: string, issueTypes?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, deleteUnmanagedProperties?: boolean, deleteUnmanagedIssueTypes?: boolean, memberPrivileges?: Object, codeSecurityConfigurationsFile?: string, codeSecurityConfigurations?: Array, deleteUnmanagedCodeSecurityConfigurations?: boolean, actionsPolicy?: Object, actionsAllowListFile?: string }>}
+ * @returns {Array<{ org: string, customPropertiesFile?: string, customProperties?: Array, issueTypesFile?: string, issueTypes?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, deleteUnmanagedProperties?: boolean, deleteUnmanagedIssueTypes?: boolean, memberPrivileges?: Object, orgProfile?: Object, codeSecurityConfigurationsFile?: string, codeSecurityConfigurations?: Array, deleteUnmanagedCodeSecurityConfigurations?: boolean, actionsPolicy?: Object, actionsAllowListFile?: string }>}
  */
 export function parseOrganizationsFile(filePath) {
   if (!fs.existsSync(filePath)) {
@@ -977,6 +1051,24 @@ export function parseOrganizationsFile(filePath) {
 
     if (Object.prototype.hasOwnProperty.call(orgConfig, 'member-privileges')) {
       result.memberPrivileges = parseMemberPrivileges(orgConfig['member-privileges'], orgConfig.org);
+    }
+
+    const topLevelOrgProfile = {};
+    for (const key of ORG_PROFILE_SETTINGS.keys()) {
+      if (Object.prototype.hasOwnProperty.call(orgConfig, key)) {
+        topLevelOrgProfile[key] = orgConfig[key];
+      }
+    }
+
+    if (Object.keys(topLevelOrgProfile).length > 0) {
+      result.orgProfile = parseOrgProfile(topLevelOrgProfile, orgConfig.org);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'org-profile')) {
+      result.orgProfile = mergeOrgProfile(
+        result.orgProfile || {},
+        parseOrgProfile(orgConfig['org-profile'], orgConfig.org)
+      );
     }
 
     if (Object.prototype.hasOwnProperty.call(orgConfig, 'code-security-configurations-file')) {
@@ -1397,7 +1489,7 @@ export async function syncIssueTypes(octokit, org, desiredIssueTypes, deleteUnma
 
 /**
  * Parse and validate a member privileges YAML config object (inline or from file).
- * Converts YAML keys (hyphenated) to API keys (snake_case) and validates types.
+ * Converts YAML keys (hyphenated) to GitHub REST API parameter names and validates types.
  * @param {Object} config - Raw key-value map from YAML
  * @param {string} [context] - Context for error messages (e.g., org name)
  * @returns {Object} Normalized privileges with API keys
@@ -1477,6 +1569,62 @@ export function getMemberPrivilegesFromInputs() {
       }
       result[setting.apiKey] = trimmedRaw;
     }
+  }
+
+  return Object.keys(result).length > 0 ? result : null;
+}
+
+// ─── Organization Profile Parsing ───────────────────────────────────────────────
+
+/**
+ * Parse and validate an organization profile YAML config object (inline or from file).
+ * Converts YAML keys (hyphenated) to GitHub REST API parameter names and validates types.
+ * @param {Object} config - Raw key-value map from YAML
+ * @param {string} [context] - Context for error messages (e.g., org name)
+ * @returns {Object} Normalized profile with API keys
+ */
+export function parseOrgProfile(config, context) {
+  if (typeof config !== 'object' || config === null || Array.isArray(config)) {
+    const label = context ? ` for org "${context}"` : '';
+    throw new Error(`Invalid org-profile${label}: expected a key-value map`);
+  }
+
+  const normalized = {};
+  const label = context ? ` for org "${context}"` : '';
+
+  for (const [yamlKey, value] of Object.entries(config)) {
+    const setting = ORG_PROFILE_SETTINGS.get(yamlKey);
+    if (!setting) {
+      throw new Error(
+        `Unknown org profile key "${yamlKey}"${label}. ` +
+          `Valid keys: ${Array.from(ORG_PROFILE_SETTINGS.keys()).join(', ')}`
+      );
+    }
+
+    if (typeof value !== 'string') {
+      throw new Error(`Org profile "${yamlKey}"${label} must be a string, got "${typeof value}"`);
+    }
+
+    normalized[setting.apiKey] = value.trim();
+  }
+
+  return normalized;
+}
+
+/**
+ * Build organization profile settings from action inputs.
+ * Reads each org profile setting from core.getInput() and returns
+ * a normalized object with API keys for any non-empty inputs.
+ * @returns {Object|null} Normalized profile with API keys, or null if no inputs set
+ */
+export function getOrgProfileFromInputs() {
+  const result = {};
+
+  for (const [yamlKey, setting] of ORG_PROFILE_SETTINGS) {
+    const raw = core.getInput(yamlKey);
+    const trimmed = raw.trim();
+    if (trimmed === '') continue;
+    result[setting.apiKey] = trimmed;
   }
 
   return Object.keys(result).length > 0 ? result : null;
@@ -1670,17 +1818,17 @@ const API_TO_YAML_KEY = buildApiToYamlKeyMap();
  * @param {string} org - Organization name
  * @param {Object} desiredSettings - Desired member privilege settings (API-keyed)
  * @param {boolean} dryRun - Preview mode
+ * @param {Map<string, Promise<Object>>} [orgSettingsCache] - Optional shared organization settings cache
  * @returns {Promise<Object>} Result object with subResults
  */
-export async function syncMemberPrivileges(octokit, org, desiredSettings, dryRun) {
+export async function syncMemberPrivileges(octokit, org, desiredSettings, dryRun, orgSettingsCache) {
   const subResults = [];
   const wouldPrefix = dryRun ? 'Would ' : '';
 
   // Fetch current organization settings
   let currentOrg;
   try {
-    const { data } = await octokit.request('GET /orgs/{org}', { org });
-    currentOrg = data;
+    currentOrg = await getOrganizationSettings(octokit, org, orgSettingsCache);
   } catch (error) {
     core.warning(`  ⚠️  Failed to fetch organization settings: ${error.message}`);
     subResults.push(
@@ -1738,6 +1886,107 @@ export async function syncMemberPrivileges(octokit, org, desiredSettings, dryRun
         'member-privileges-update',
         SubResultStatus.WARNING,
         `Failed to update member privileges: ${error.message}`
+      );
+      return { subResults, failed: true };
+    }
+  }
+
+  return { subResults, failed: false };
+}
+
+// ─── Organization Profile Sync ──────────────────────────────────────────────────
+
+/**
+ * Build a reverse lookup from API key to YAML key for org profile settings.
+ * @returns {Map<string, string>}
+ */
+function buildProfileApiToYamlKeyMap() {
+  const map = new Map();
+  for (const [yamlKey, setting] of ORG_PROFILE_SETTINGS) {
+    map.set(setting.apiKey, yamlKey);
+  }
+  return map;
+}
+
+const PROFILE_API_TO_YAML_KEY = buildProfileApiToYamlKeyMap();
+
+/**
+ * Sync organization profile settings for an organization.
+ * Fetches current org settings via GET, compares with desired values,
+ * and applies a single PATCH if any settings differ.
+ *
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} org - Organization name
+ * @param {Object} desiredSettings - Desired org profile settings (API-keyed)
+ * @param {boolean} dryRun - Preview mode
+ * @param {Map<string, Promise<Object>>} [orgSettingsCache] - Optional shared organization settings cache
+ * @returns {Promise<Object>} Result object with subResults
+ */
+export async function syncOrgProfile(octokit, org, desiredSettings, dryRun, orgSettingsCache) {
+  const subResults = [];
+  const wouldPrefix = dryRun ? 'Would ' : '';
+
+  // Fetch current organization settings
+  let currentOrg;
+  try {
+    currentOrg = await getOrganizationSettings(octokit, org, orgSettingsCache);
+  } catch (error) {
+    core.warning(`  ⚠️  Failed to fetch organization settings: ${error.message}`);
+    subResults.push(
+      createSubResult(
+        'org-profile-update',
+        SubResultStatus.WARNING,
+        `Failed to fetch organization settings: ${error.message}`
+      )
+    );
+    return { subResults, failed: true };
+  }
+
+  // Compare each desired setting with current
+  const patch = {};
+  const changes = [];
+
+  for (const [apiKey, desiredValue] of Object.entries(desiredSettings)) {
+    const currentValue = currentOrg[apiKey] ?? '';
+    const yamlKey = PROFILE_API_TO_YAML_KEY.get(apiKey) || apiKey;
+
+    if (currentValue !== desiredValue) {
+      patch[apiKey] = desiredValue;
+      changes.push(`${yamlKey}: ${currentValue} → ${desiredValue}`);
+    }
+  }
+
+  if (changes.length === 0) {
+    core.info(`  ✅ Organization profile unchanged`);
+    return { subResults, failed: false };
+  }
+
+  // Log changes
+  for (const change of changes) {
+    core.info(`  🏢 ${wouldPrefix}Update ${change}`);
+  }
+
+  subResults.push(
+    createSubResult(
+      'org-profile-update',
+      SubResultStatus.CHANGED,
+      `${wouldPrefix}update ${changes.length} profile field(s): ${changes.join(', ')}`
+    )
+  );
+
+  // Apply the patch
+  if (!dryRun) {
+    try {
+      await octokit.request('PATCH /orgs/{org}', {
+        org,
+        ...patch
+      });
+    } catch (error) {
+      core.warning(`  ⚠️  Failed to update organization profile: ${error.message}`);
+      subResults[subResults.length - 1] = createSubResult(
+        'org-profile-update',
+        SubResultStatus.WARNING,
+        `Failed to update organization profile: ${error.message}`
       );
       return { subResults, failed: true };
     }
@@ -3360,6 +3609,7 @@ export async function run() {
     const issueTypesFile = core.getInput('issue-types-file');
     const deleteUnmanagedIssueTypes = getBooleanInput('delete-unmanaged-issue-types') ?? false;
     const memberPrivilegesFromInputs = getMemberPrivilegesFromInputs();
+    const orgProfileFromInputs = getOrgProfileFromInputs();
     const codeSecurityConfigurationsFile = core.getInput('code-security-configurations-file');
     const deleteUnmanagedCodeSecurityConfigurations =
       getBooleanInput('delete-unmanaged-code-security-configurations') ?? false;
@@ -3386,6 +3636,7 @@ export async function run() {
       deleteUnmanagedRulesets,
       issueTypesFile,
       memberPrivilegesFromInputs,
+      orgProfileFromInputs,
       codeSecurityConfigurationsFile,
       actionsPolicyFromInputs,
       actionsAllowListFile
@@ -3396,6 +3647,7 @@ export async function run() {
     const hasRulesets = orgList.some(o => o.rulesetsFiles && o.rulesetsFiles.length > 0);
     const hasIssueTypes = orgList.some(o => o.issueTypes && o.issueTypes.length > 0);
     const hasMemberPrivileges = orgList.some(o => o.memberPrivileges && Object.keys(o.memberPrivileges).length > 0);
+    const hasOrgProfileSettings = orgList.some(o => o.orgProfile && Object.keys(o.orgProfile).length > 0);
     const hasCodeSecurityConfigurations = orgList.some(
       o => o.codeSecurityConfigurations && o.codeSecurityConfigurations.length > 0
     );
@@ -3409,15 +3661,17 @@ export async function run() {
       !hasRulesets &&
       !hasIssueTypes &&
       !hasMemberPrivileges &&
+      !hasOrgProfileSettings &&
       !hasCodeSecurityConfigurations &&
       !hasActionsPolicy
     ) {
       throw new Error(
         'At least one setting must be specified. Provide custom properties via ' +
           '"organizations-file" or via "organizations" + "custom-properties-file" inputs, ' +
-          'provide issue types via "issue-types-file", rulesets via "rulesets-file", ' +
-          'code security configurations via "code-security-configurations-file", member privileges via ' +
-          'individual inputs (e.g., "default-repository-permission"), or actions policy via ' +
+          'provide issue types via "issue-types-file", rulesets via "rulesets-file", member privileges via ' +
+          'individual inputs (e.g., "default-repository-permission"), org profile via ' +
+          'individual inputs (e.g., "org-name", "org-description"), ' +
+          'code security configurations via "code-security-configurations-file", or actions policy via ' +
           'individual inputs (e.g., "actions-policy-allowed-actions").'
       );
     }
@@ -3466,6 +3720,7 @@ export async function run() {
         subResults: [],
         dryRun
       };
+      const orgSettingsCache = new Map();
 
       try {
         // Sync custom properties
@@ -3526,7 +3781,13 @@ export async function run() {
         if (orgConfig.memberPrivileges && Object.keys(orgConfig.memberPrivileges).length > 0) {
           const settingCount = Object.keys(orgConfig.memberPrivileges).length;
           core.info(`  🔧 Syncing member privileges (${settingCount} setting(s))...`);
-          const mpResult = await syncMemberPrivileges(octokit, org, orgConfig.memberPrivileges, dryRun);
+          const mpResult = await syncMemberPrivileges(
+            octokit,
+            org,
+            orgConfig.memberPrivileges,
+            dryRun,
+            orgSettingsCache
+          );
           result.subResults.push(...mpResult.subResults);
 
           if (mpResult.failed) {
@@ -3534,6 +3795,21 @@ export async function run() {
             result.error = result.error
               ? `${result.error}; Member privileges sync failed`
               : 'Member privileges sync failed';
+          }
+        }
+
+        // Sync organization profile
+        if (orgConfig.orgProfile && Object.keys(orgConfig.orgProfile).length > 0) {
+          const fieldCount = Object.keys(orgConfig.orgProfile).length;
+          core.info(`  🏢 Syncing organization profile (${fieldCount} field(s))...`);
+          const opResult = await syncOrgProfile(octokit, org, orgConfig.orgProfile, dryRun, orgSettingsCache);
+          result.subResults.push(...opResult.subResults);
+
+          if (opResult.failed) {
+            result.success = false;
+            result.error = result.error
+              ? `${result.error}; Organization profile sync failed`
+              : 'Organization profile sync failed';
           }
         }
 
