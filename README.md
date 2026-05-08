@@ -674,6 +674,7 @@ You can also configure how each code security configuration is applied:
 - `attach-scope`: attach to `all`, `all_without_configurations`, `public`, `private_or_internal`, or `selected` repositories
 - `selected-repository-ids`: optional repository IDs when `attach-scope: selected`
 - `selected-repositories`: optional repository names (for example `high-risk-service` or `app-api`) when `attach-scope: selected`
+- `selected-repositories-by-property`: optional list of `{property, value}` filters; any repo in the org matching any filter is included when `attach-scope: selected`
 - `default-for-new-repos`: set default for newly created repos (`all`, `none`, `public`, `private_and_internal`)
 
 Example:
@@ -687,7 +688,20 @@ Example:
   default-for-new-repos: private_and_internal
 ```
 
-When both `selected-repository-ids` and `selected-repositories` are provided, the action merges them into one selected repository set. Repository names are matched within the org — the `org/repo` full-name format is accepted but the org prefix is not required.
+Or select repositories by custom property:
+
+```yaml
+- name: High risk settings
+  description: Security configuration for high risk repositories
+  advanced_security: enabled
+  attach-scope: selected
+  selected-repositories-by-property:
+    - property: criticality
+      value: high
+  default-for-new-repos: private_and_internal
+```
+
+`selected-repository-ids`, `selected-repositories`, and `selected-repositories-by-property` can all be combined — matching repos from all three sources are merged into one set.
 
 If multiple configurations use `attach-scope`, broader scopes are applied first and `selected` is applied last, so selected repositories can override broad assignments.
 

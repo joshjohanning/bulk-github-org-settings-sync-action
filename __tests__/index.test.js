@@ -3171,6 +3171,7 @@ orgs:
           'attach-scope': 'selected',
           'selected-repository-ids': ['123', 456],
           'selected-repositories': ['my-org/repo-a', 'repo-b'],
+          'selected-repositories-by-property': [{ property: 'team', value: 'platform' }],
           'default-for-new-repos': 'private_and_internal'
         }
       ]);
@@ -3181,8 +3182,67 @@ orgs:
         attach_scope: 'selected',
         selected_repository_ids: [123, 456],
         selected_repositories: ['my-org/repo-a', 'repo-b'],
+        selected_repositories_by_property: [{ property: 'team', value: 'platform' }],
         default_for_new_repos: 'private_and_internal'
       });
+    });
+
+    test('should normalize selected-repositories-by-property alone', () => {
+      const result = normalizeCodeSecurityConfigurations([
+        {
+          name: 'Property filter test',
+          description: 'Config with property filter',
+          'attach-scope': 'selected',
+          'selected-repositories-by-property': [
+            { property: 'team', value: 'platform' },
+            { property: 'criticality', value: 'high' }
+          ]
+        }
+      ]);
+
+      expect(result[0].selected_repositories_by_property).toEqual([
+        { property: 'team', value: 'platform' },
+        { property: 'criticality', value: 'high' }
+      ]);
+    });
+
+    test('should throw for invalid selected-repositories-by-property entry', () => {
+      expect(() =>
+        normalizeCodeSecurityConfigurations([
+          {
+            name: 'Invalid filter',
+            description: 'Bad property filter',
+            'attach-scope': 'selected',
+            'selected-repositories-by-property': ['not-an-object']
+          }
+        ])
+      ).toThrow('entries must be objects with "property" and "value" keys');
+    });
+
+    test('should throw for property filter missing property key', () => {
+      expect(() =>
+        normalizeCodeSecurityConfigurations([
+          {
+            name: 'Invalid filter',
+            description: 'Missing property key',
+            'attach-scope': 'selected',
+            'selected-repositories-by-property': [{ value: 'platform' }]
+          }
+        ])
+      ).toThrow('entry is missing "property"');
+    });
+
+    test('should allow selected-repositories-by-property to satisfy selected scope requirement', () => {
+      expect(() =>
+        normalizeCodeSecurityConfigurations([
+          {
+            name: 'Property only',
+            description: 'No explicit IDs',
+            'attach-scope': 'selected',
+            'selected-repositories-by-property': [{ property: 'team', value: 'platform' }]
+          }
+        ])
+      ).not.toThrow();
     });
 
     test('should throw when selected attach scope is missing repository ids', () => {
@@ -3194,7 +3254,9 @@ orgs:
             'attach-scope': 'selected'
           }
         ])
-      ).toThrow('must include "selected_repository_ids" or "selected_repositories" when attach_scope is "selected"');
+      ).toThrow(
+        'must include "selected_repository_ids", "selected_repositories", or "selected_repositories_by_property" when attach_scope is "selected"'
+      );
     });
 
     test('should throw when repository ids are provided for non-selected scope', () => {
@@ -3675,6 +3737,143 @@ orgs:
       expect(attachCalls[1][1]).toEqual(
         expect.objectContaining({ configuration_id: 2, scope: 'selected', selected_repository_ids: [123] })
       );
+    });
+
+    test('should resolve selected repositories by custom property and attach using ids', async () => {
+      const attachConfig = [
+        {
+          name: 'High risk',
+          description: 'High risk config',
+          attach_scope: 'selected',
+          selected_repositories_by_property: [{ property: 'team', value: 'platform' }]
+        }
+      ];
+
+      mockPaginate.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/code-security/configurations') {
+          return Promise.resolve([
+            { id: 1, name: 'High risk', description: 'High risk config', target_type: 'organization' }
+          ]);
+        }
+        if (route === 'GET /orgs/{org}/properties/values') {
+          return Promise.resolve([
+            {
+              repository_id: 123,
+              repository_name: 'platform-api',
+              repository_full_name: 'my-org/platform-api',
+              properties: [{ property_name: 'team', value: 'platform' }]
+            },
+            {
+              repository_id: 456,
+              repository_name: 'data-service',
+              repository_full_name: 'my-org/data-service',
+              properties: [{ property_name: 'team', value: 'data' }]
+            }
+          ]);
+        }
+        if (route === 'GET /orgs/{org}/code-security/configurations/{configuration_id}/repositories') {
+          return Promise.resolve([]);
+        }
+        return Promise.resolve([]);
+      });
+      mockRequest.mockResolvedValue({ data: [] });
+
+      const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', attachConfig, false, false);
+
+      expect(result.failed).toBe(false);
+      expect(mockRequest).toHaveBeenCalledWith(
+        'POST /orgs/{org}/code-security/configurations/{configuration_id}/attach',
+        expect.objectContaining({
+          org: 'my-org',
+          configuration_id: 1,
+          scope: 'selected',
+          selected_repository_ids: [123]
+        })
+      );
+    });
+
+    test('should merge property-based and explicit repo selections', async () => {
+      const attachConfig = [
+        {
+          name: 'High risk',
+          description: 'High risk config',
+          attach_scope: 'selected',
+          selected_repository_ids: [789],
+          selected_repositories_by_property: [{ property: 'criticality', value: 'high' }]
+        }
+      ];
+
+      mockPaginate.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/code-security/configurations') {
+          return Promise.resolve([
+            { id: 1, name: 'High risk', description: 'High risk config', target_type: 'organization' }
+          ]);
+        }
+        if (route === 'GET /orgs/{org}/properties/values') {
+          return Promise.resolve([
+            {
+              repository_id: 123,
+              repository_name: 'critical-app',
+              repository_full_name: 'my-org/critical-app',
+              properties: [{ property_name: 'criticality', value: 'high' }]
+            }
+          ]);
+        }
+        if (route === 'GET /orgs/{org}/code-security/configurations/{configuration_id}/repositories') {
+          return Promise.resolve([]);
+        }
+        return Promise.resolve([]);
+      });
+      mockRequest.mockResolvedValue({ data: [] });
+
+      await syncCodeSecurityConfigurations(mockOctokit, 'my-org', attachConfig, false, false);
+
+      expect(mockRequest).toHaveBeenCalledWith(
+        'POST /orgs/{org}/code-security/configurations/{configuration_id}/attach',
+        expect.objectContaining({
+          scope: 'selected',
+          selected_repository_ids: [123, 789]
+        })
+      );
+    });
+
+    test('should warn but not fail when no repos match property filter', async () => {
+      const attachConfig = [
+        {
+          name: 'High risk',
+          description: 'High risk config',
+          attach_scope: 'selected',
+          selected_repositories_by_property: [{ property: 'team', value: 'nonexistent' }]
+        }
+      ];
+
+      mockPaginate.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/code-security/configurations') {
+          return Promise.resolve([
+            { id: 1, name: 'High risk', description: 'High risk config', target_type: 'organization' }
+          ]);
+        }
+        if (route === 'GET /orgs/{org}/properties/values') {
+          return Promise.resolve([
+            {
+              repository_id: 123,
+              repository_name: 'some-repo',
+              repository_full_name: 'my-org/some-repo',
+              properties: [{ property_name: 'team', value: 'platform' }]
+            }
+          ]);
+        }
+        if (route === 'GET /orgs/{org}/code-security/configurations/{configuration_id}/repositories') {
+          return Promise.resolve([]);
+        }
+        return Promise.resolve([]);
+      });
+      mockRequest.mockResolvedValue({ data: [] });
+
+      const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', attachConfig, false, false);
+
+      expect(result.failed).toBe(false);
+      expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('No repositories'));
     });
 
     test('should set default for new repositories when configured', async () => {

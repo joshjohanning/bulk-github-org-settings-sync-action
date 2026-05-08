@@ -9,9 +9,14 @@
 # The enforcement field accepts: enforced or unenforced
 # Optional assignment fields:
 # - attach-scope: all | all_without_configurations | public | private_or_internal | selected
-# - selected-repository-ids: optional when attach-scope is selected
-# - selected-repositories: optional repo names/full names when attach-scope is selected
+# - selected-repository-ids: optional list of repo IDs when attach-scope is selected
+# - selected-repositories: optional list of repo names when attach-scope is selected
+# - selected-repositories-by-property: optional list of {property, value} filters when attach-scope is selected
+#     Any repo matching any filter is included (OR logic). Unknown property/value combos emit a warning.
 # - default-for-new-repos: all | none | public | private_and_internal
+#
+# selected-repository-ids, selected-repositories, and selected-repositories-by-property
+# can all be combined — matching repos from all three sources are merged.
 #
 # Requires GitHub Advanced Security (GHAS) license for advanced_security features.
 # Available on GitHub.com (GHEC) and GHES 3.x+.
@@ -34,7 +39,24 @@
   selected-repositories:
     - high-risk-service
     - app-api
+  selected-repositories-by-property:
+    - property: criticality
+      value: high
   default-for-new-repos: private_and_internal
+
+- name: Standard settings
+  description: Security configuration for standard repositories
+  advanced_security: enabled
+  dependency_graph: enabled
+  dependabot_alerts: enabled
+  dependabot_security_updates: not_set
+  code_scanning_default_setup: not_set
+  secret_scanning: enabled
+  secret_scanning_push_protection: enabled
+  secret_scanning_validity_checks: disabled
+  secret_scanning_non_provider_patterns: disabled
+  private_vulnerability_reporting: enabled
+  enforcement: unenforced
 
 - name: Standard settings
   description: Security configuration for standard repositories

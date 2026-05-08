@@ -2497,6 +2497,37 @@ function normalizeRepositoryIdsValue(value, configName) {
   return ids;
 }
 
+function normalizeRepositoryPropertyFiltersValue(value, configName) {
+  const rawFilters = Array.isArray(value) ? value : [value];
+  const filters = [];
+
+  for (const rawFilter of rawFilters) {
+    if (!rawFilter || typeof rawFilter !== 'object') {
+      throw new Error(
+        `Code security configuration "${configName}" field "selected_repositories_by_property" entries must be objects with "property" and "value" keys`
+      );
+    }
+    const property = String(rawFilter.property ?? '').trim();
+    const filterValue = rawFilter.value !== undefined ? String(rawFilter.value).trim() : '';
+
+    if (!property) {
+      throw new Error(
+        `Code security configuration "${configName}" field "selected_repositories_by_property" entry is missing "property"`
+      );
+    }
+
+    filters.push({ property, value: filterValue });
+  }
+
+  if (filters.length === 0) {
+    throw new Error(
+      `Code security configuration "${configName}" field "selected_repositories_by_property" must contain at least one filter`
+    );
+  }
+
+  return filters;
+}
+
 function normalizeRepositoryNamesValue(value, configName) {
   const rawNames = Array.isArray(value) ? value : String(value).split(',');
   const names = [];
@@ -2651,6 +2682,14 @@ export function normalizeCodeSecurityConfigurations(configs) {
       normalized.selected_repositories = normalizeRepositoryNamesValue(selectedRepositories, normalized.name);
     }
 
+    const selectedRepositoriesByProperty = getCodeSecurityConfigValue(config, 'selected_repositories_by_property');
+    if (selectedRepositoriesByProperty !== undefined && selectedRepositoriesByProperty !== null) {
+      normalized.selected_repositories_by_property = normalizeRepositoryPropertyFiltersValue(
+        selectedRepositoriesByProperty,
+        normalized.name
+      );
+    }
+
     const defaultForNewRepos = getCodeSecurityConfigValue(config, 'default_for_new_repos');
     if (defaultForNewRepos !== undefined && defaultForNewRepos !== null) {
       normalized.default_for_new_repos = normalizeCodeSecurityEnumValue(
@@ -2663,10 +2702,11 @@ export function normalizeCodeSecurityConfigurations(configs) {
 
     const hasSelectedTargets =
       (normalized.selected_repository_ids && normalized.selected_repository_ids.length > 0) ||
-      (normalized.selected_repositories && normalized.selected_repositories.length > 0);
+      (normalized.selected_repositories && normalized.selected_repositories.length > 0) ||
+      (normalized.selected_repositories_by_property && normalized.selected_repositories_by_property.length > 0);
     if (normalized.attach_scope === 'selected' && !hasSelectedTargets) {
       throw new Error(
-        `Code security configuration "${normalized.name}" must include "selected_repository_ids" or "selected_repositories" when attach_scope is "selected"`
+        `Code security configuration "${normalized.name}" must include "selected_repository_ids", "selected_repositories", or "selected_repositories_by_property" when attach_scope is "selected"`
       );
     }
     if (normalized.attach_scope !== 'selected' && hasSelectedTargets) {
@@ -2721,6 +2761,7 @@ function stripCodeSecurityConfigManagementFields(config) {
   delete stripped.attach_scope;
   delete stripped.selected_repository_ids;
   delete stripped.selected_repositories;
+  delete stripped.selected_repositories_by_property;
   delete stripped.default_for_new_repos;
   return stripped;
 }
@@ -2788,7 +2829,14 @@ function validateCodeSecurityDefaultAssignments(desiredConfigs) {
   }
 }
 
-async function resolveSelectedRepositoryIds(octokit, org, selectedRepositoryIds, selectedRepositories, repoCache) {
+async function resolveSelectedRepositoryIds(
+  octokit,
+  org,
+  selectedRepositoryIds,
+  selectedRepositories,
+  selectedRepositoriesByProperty,
+  repoCache
+) {
   const ids = [...(selectedRepositoryIds || [])];
   const names = selectedRepositories || [];
 
@@ -2818,7 +2866,52 @@ async function resolveSelectedRepositoryIds(octokit, org, selectedRepositoryIds,
     }
   }
 
+  const propertyIds = await resolveRepositoryIdsByProperty(octokit, org, selectedRepositoriesByProperty, repoCache);
+  for (const id of propertyIds) {
+    if (!ids.includes(id)) {
+      ids.push(id);
+    }
+  }
+
   return ids.sort((a, b) => a - b);
+}
+
+async function resolveRepositoryIdsByProperty(octokit, org, propertyFilters, repoCache) {
+  if (!propertyFilters || propertyFilters.length === 0) {
+    return [];
+  }
+
+  if (!repoCache.propertyValues) {
+    try {
+      repoCache.propertyValues = await octokit.paginate('GET /orgs/{org}/properties/values', {
+        org,
+        per_page: 100
+      });
+    } catch (error) {
+      core.warning(`Could not fetch custom property values for org "${org}": ${error.message}`);
+      repoCache.propertyValues = [];
+    }
+  }
+
+  const matchingIds = [];
+
+  for (const { property, value } of propertyFilters) {
+    const matchingRepos = repoCache.propertyValues.filter(repoEntry =>
+      repoEntry.properties?.some(p => p.property_name === property && String(p.value ?? '').trim() === value)
+    );
+
+    if (matchingRepos.length === 0) {
+      core.warning(`No repositories in org "${org}" matched custom property filter "${property}=${value}"`);
+    }
+
+    for (const repoEntry of matchingRepos) {
+      if (!matchingIds.includes(repoEntry.repository_id)) {
+        matchingIds.push(repoEntry.repository_id);
+      }
+    }
+  }
+
+  return matchingIds;
 }
 
 /**
@@ -2985,6 +3078,7 @@ export async function syncCodeSecurityConfigurations(octokit, org, desiredConfig
       org,
       desired.selected_repository_ids,
       desired.selected_repositories,
+      desired.selected_repositories_by_property,
       repoCache
     );
 
