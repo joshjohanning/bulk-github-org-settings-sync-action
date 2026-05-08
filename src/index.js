@@ -168,6 +168,7 @@ export const ORG_PROFILE_SETTINGS = new Map([
   ['org-blog', { apiKey: 'blog' }]
 ]);
 
+/**
  * Supported Actions policy settings.
  * Maps YAML key (hyphenated) to API key (snake_case), expected type, and endpoint group.
  * @type {Map<string, { apiKey: string, type: string, validValues?: string[], endpoint: string }>}
@@ -487,8 +488,13 @@ async function getOrganizationSettings(octokit, org, orgSettingsCache) {
 
   if (!orgSettingsCache.has(org)) {
     const settingsPromise = (async () => {
-      const { data } = await octokit.request('GET /orgs/{org}', { org });
-      return data;
+      try {
+        const { data } = await octokit.request('GET /orgs/{org}', { org });
+        return data;
+      } catch (err) {
+        orgSettingsCache.delete(org);
+        throw err;
+      }
     })();
     orgSettingsCache.set(org, settingsPromise);
   }
@@ -513,7 +519,7 @@ function formatSubResultSummary(subResult) {
  * Supports two modes:
  *   1. organizations-file: YAML file with full org + settings config
  * Supports layering: base settings from action inputs (custom-properties-file, rulesets-file, direct
- * member privilege inputs, direct actions policy inputs, and actions-allow-list-file) are merged with
+ * member privilege inputs, org profile fields, direct actions policy inputs, and actions-allow-list-file) are merged with
  * per-org overrides from organizations-file.
  * Per-org properties override base properties with the same name; base properties
  * not overridden are preserved.
@@ -1064,7 +1070,6 @@ export function parseOrganizationsFile(filePath) {
         parseOrgProfile(orgConfig['org-profile'], orgConfig.org)
       );
     }
-
 
     if (Object.prototype.hasOwnProperty.call(orgConfig, 'code-security-configurations-file')) {
       const cscFile = orgConfig['code-security-configurations-file'];
@@ -2409,7 +2414,6 @@ async function syncActionsSelectedActions(octokit, org, desiredSettings, allowLi
 
   return { subResults, failed: false };
 }
-
 
 // ─── Organization Rulesets Sync ─────────────────────────────────────────────────
 

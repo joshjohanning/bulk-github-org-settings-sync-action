@@ -3297,7 +3297,6 @@ orgs:
       expect(mockCore.warning).not.toHaveBeenCalled();
     });
   });
-});
 
   // ─── parseCodeSecurityConfigurationsFile ──────────────────────────────
 
@@ -4594,6 +4593,7 @@ orgs:
         false,
         '',
         null,
+        null,
         '/mock/code-security-configs.yml'
       );
 
@@ -4626,6 +4626,7 @@ orgs:
         [],
         false,
         '',
+        null,
         null,
         '/mock/code-security-configs.yml'
       );
@@ -4664,6 +4665,7 @@ orgs:
         [],
         false,
         '',
+        null,
         null,
         '/mock/code-security-configs.yml'
       );
@@ -4937,7 +4939,7 @@ orgs:
         default_workflow_permissions: 'read'
       };
 
-      const result = parseOrganizations('org1', '', '', [], false, '', null, inputPolicy, '');
+      const result = parseOrganizations('org1', '', '', [], false, '', null, null, '', inputPolicy, '');
 
       expect(result).toHaveLength(1);
       expect(result[0].actionsPolicy).toEqual({
@@ -4960,7 +4962,7 @@ orgs:
 `;
       setMockFileContent(orgsYaml, '/mock/orgs.yml');
 
-      const result = parseOrganizations('', '/mock/orgs.yml', '', [], false, '', null, inputPolicy, '');
+      const result = parseOrganizations('', '/mock/orgs.yml', '', [], false, '', null, null, '', inputPolicy, '');
 
       expect(result).toHaveLength(2);
       expect(result[0].actionsPolicy).toEqual({
@@ -4980,7 +4982,7 @@ orgs:
 `;
       setMockFileContent(allowListContent, '/mock/allow-list.yml');
 
-      const result = parseOrganizations('org1', '', '', [], false, '', null, null, '/mock/allow-list.yml');
+      const result = parseOrganizations('org1', '', '', [], false, '', null, null, '', null, '/mock/allow-list.yml');
 
       expect(result).toHaveLength(1);
       expect(result[0].actionsAllowList).toEqual(['actions/cache@*', 'myorg/*']);
@@ -5003,7 +5005,19 @@ orgs:
 `;
       setMockFileContent(orgsYaml, '/mock/orgs.yml');
 
-      const result = parseOrganizations('', '/mock/orgs.yml', '', [], false, '', null, null, '/mock/base-allow.yml');
+      const result = parseOrganizations(
+        '',
+        '/mock/orgs.yml',
+        '',
+        [],
+        false,
+        '',
+        null,
+        null,
+        '',
+        null,
+        '/mock/base-allow.yml'
+      );
 
       expect(result).toHaveLength(2);
       expect(result[0].actionsAllowList).toEqual(['base-action@*']);
