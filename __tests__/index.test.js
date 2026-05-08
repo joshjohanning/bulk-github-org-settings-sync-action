@@ -1163,6 +1163,12 @@ orgs:
       const result = applyBasePathToOrgConfig(config, './base/');
       expect(result['issue-types-file']).toBe('base/issue-types.yml');
     });
+
+    test('should resolve actions-allow-list-file', () => {
+      const config = { org: 'my-org', 'actions-allow-list-file': 'actions/allow-list.yml' };
+      const result = applyBasePathToOrgConfig(config, './base/');
+      expect(result['actions-allow-list-file']).toBe('base/actions/allow-list.yml');
+    });
   });
 
   // ─── parseCustomPropertiesFile ──────────────────────────────────────────
@@ -3393,6 +3399,9 @@ orgs:
 
     test('should sync allow list patterns', async () => {
       mockRequest.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/actions/permissions') {
+          return { data: { allowed_actions: 'selected', enabled_repositories: 'all' } };
+        }
         if (route === 'GET /orgs/{org}/actions/permissions/selected-actions') {
           return {
             data: {
@@ -3409,7 +3418,7 @@ orgs:
       });
 
       const allowList = ['new-action@*', 'another-action@*'];
-      const result = await syncActionsPolicy(mockOctokit, 'my-org', {}, allowList, false);
+      const result = await syncActionsPolicy(mockOctokit, 'my-org', { allowed_actions: 'selected' }, allowList, false);
 
       expect(result.failed).toBe(false);
       expect(result.subResults.some(s => s.kind === 'actions-policy-allow-list-update')).toBe(true);
@@ -3417,6 +3426,9 @@ orgs:
 
     test('should detect no changes when allow list matches', async () => {
       mockRequest.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/actions/permissions') {
+          return { data: { allowed_actions: 'selected', enabled_repositories: 'all' } };
+        }
         if (route === 'GET /orgs/{org}/actions/permissions/selected-actions') {
           return {
             data: {
@@ -3430,7 +3442,7 @@ orgs:
       });
 
       const allowList = ['action-b@*', 'action-a@*']; // Same patterns, different order
-      const result = await syncActionsPolicy(mockOctokit, 'my-org', {}, allowList, false);
+      const result = await syncActionsPolicy(mockOctokit, 'my-org', { allowed_actions: 'selected' }, allowList, false);
 
       expect(result.failed).toBe(false);
       expect(result.subResults).toHaveLength(0);
@@ -3438,6 +3450,9 @@ orgs:
 
     test('should ignore duplicate allow list patterns when comparing', async () => {
       mockRequest.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/actions/permissions') {
+          return { data: { allowed_actions: 'selected', enabled_repositories: 'all' } };
+        }
         if (route === 'GET /orgs/{org}/actions/permissions/selected-actions') {
           return {
             data: {
@@ -3451,7 +3466,7 @@ orgs:
       });
 
       const allowList = ['action-b@*', 'action-a@*', 'action-a@*'];
-      const result = await syncActionsPolicy(mockOctokit, 'my-org', {}, allowList, false);
+      const result = await syncActionsPolicy(mockOctokit, 'my-org', { allowed_actions: 'selected' }, allowList, false);
 
       expect(result.failed).toBe(false);
       expect(result.subResults).toHaveLength(0);
@@ -3461,8 +3476,37 @@ orgs:
       );
     });
 
+    test('should skip selected actions settings unless allowed-actions is selected', async () => {
+      const desired = { github_owned_allowed: true };
+      const allowList = ['new-action@*'];
+      const result = await syncActionsPolicy(mockOctokit, 'my-org', desired, allowList, false);
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults).toEqual([
+        {
+          kind: 'actions-policy-selected-actions-update',
+          status: 'warning',
+          message:
+            'Skipping selected actions settings because actions-policy-allowed-actions must be "selected" when managing selected actions or the allow list (got not configured)'
+        },
+        {
+          kind: 'actions-policy-allow-list-update',
+          status: 'warning',
+          message:
+            'Skipping selected actions settings because actions-policy-allowed-actions must be "selected" when managing selected actions or the allow list (got not configured)'
+        }
+      ]);
+      expect(mockRequest).not.toHaveBeenCalledWith(
+        'GET /orgs/{org}/actions/permissions/selected-actions',
+        expect.anything()
+      );
+    });
+
     test('should mark all selected actions sub-results as warnings when update fails', async () => {
       mockRequest.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/actions/permissions') {
+          return { data: { allowed_actions: 'selected', enabled_repositories: 'all' } };
+        }
         if (route === 'GET /orgs/{org}/actions/permissions/selected-actions') {
           return {
             data: {
@@ -3478,7 +3522,7 @@ orgs:
         return { data: {} };
       });
 
-      const desired = { github_owned_allowed: true };
+      const desired = { allowed_actions: 'selected', github_owned_allowed: true };
       const allowList = ['new-action@*'];
       const result = await syncActionsPolicy(mockOctokit, 'my-org', desired, allowList, false);
 

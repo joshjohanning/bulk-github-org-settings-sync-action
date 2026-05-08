@@ -122,14 +122,14 @@ inputs:
   actions-policy-verified-allowed:
     description: 'Whether actions from GitHub Marketplace verified creators are allowed (only when allowed-actions is selected)'
     required: false
+  actions-allow-list-file:
+    description: 'Path to a YAML file defining allowed actions/reusable workflow patterns (only when allowed-actions is selected)'
+    required: false
   actions-policy-default-workflow-permissions:
     description: 'Default GITHUB_TOKEN permissions for workflows: read or write'
     required: false
   actions-policy-actions-can-approve-pull-request-reviews:
     description: 'Whether GitHub Actions can approve pull request reviews'
-    required: false
-  actions-allow-list-file:
-    description: 'Path to a YAML file defining allowed actions/reusable workflow patterns (only when allowed-actions is selected)'
     required: false
 
   # === Execution Options ===

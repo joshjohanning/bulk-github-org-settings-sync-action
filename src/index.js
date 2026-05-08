@@ -1675,6 +1675,27 @@ export async function syncActionsPolicy(octokit, org, desiredSettings, allowList
 
   // 3. Sync /actions/permissions/selected-actions (github_owned_allowed, verified_allowed, patterns)
   if (Object.keys(selectedActionsSettings).length > 0 || allowList) {
+    if (permissionsSettings.allowed_actions !== 'selected') {
+      const configuredValue =
+        permissionsSettings.allowed_actions === undefined
+          ? 'not configured'
+          : `"${permissionsSettings.allowed_actions}"`;
+      const message =
+        `Skipping selected actions settings because actions-policy-allowed-actions must be "selected" ` +
+        `when managing selected actions or the allow list (got ${configuredValue})`;
+
+      core.warning(`  ⚠️  ${message}`);
+
+      if (Object.keys(selectedActionsSettings).length > 0) {
+        subResults.push(createSubResult('actions-policy-selected-actions-update', SubResultStatus.WARNING, message));
+      }
+      if (allowList) {
+        subResults.push(createSubResult('actions-policy-allow-list-update', SubResultStatus.WARNING, message));
+      }
+
+      return { subResults, failed: false };
+    }
+
     const result = await syncActionsSelectedActions(
       octokit,
       org,
