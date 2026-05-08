@@ -3980,6 +3980,297 @@ orgs:
       expect(mockPaginate).not.toHaveBeenCalled();
       expect(mockRequest).not.toHaveBeenCalled();
     });
+
+    test('should throw when two configs use the same broad attach_scope', async () => {
+      await expect(
+        syncCodeSecurityConfigurations(
+          mockOctokit,
+          'my-org',
+          [
+            { name: 'Config A', description: 'A', attach_scope: 'all' },
+            { name: 'Config B', description: 'B', attach_scope: 'all' }
+          ],
+          false,
+          false
+        )
+      ).rejects.toThrow('Multiple code security configurations use attach_scope "all": "Config A" and "Config B"');
+
+      expect(mockPaginate).not.toHaveBeenCalled();
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    test('should throw when two configs use the same public attach_scope', async () => {
+      await expect(
+        syncCodeSecurityConfigurations(
+          mockOctokit,
+          'my-org',
+          [
+            { name: 'Config A', description: 'A', attach_scope: 'public' },
+            { name: 'Config B', description: 'B', attach_scope: 'public' }
+          ],
+          false,
+          false
+        )
+      ).rejects.toThrow('Multiple code security configurations use attach_scope "public"');
+
+      expect(mockPaginate).not.toHaveBeenCalled();
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    test('should throw when all is combined with public attach_scope', async () => {
+      await expect(
+        syncCodeSecurityConfigurations(
+          mockOctokit,
+          'my-org',
+          [
+            { name: 'Config A', description: 'A', attach_scope: 'all' },
+            { name: 'Config B', description: 'B', attach_scope: 'public' }
+          ],
+          false,
+          false
+        )
+      ).rejects.toThrow(
+        '"Config A" and "Config B" have conflicting attach scopes: "all" cannot be combined with "public"'
+      );
+
+      expect(mockPaginate).not.toHaveBeenCalled();
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    test('should throw when all is combined with private_or_internal attach_scope', async () => {
+      await expect(
+        syncCodeSecurityConfigurations(
+          mockOctokit,
+          'my-org',
+          [
+            { name: 'Config A', description: 'A', attach_scope: 'all' },
+            { name: 'Config B', description: 'B', attach_scope: 'private_or_internal' }
+          ],
+          false,
+          false
+        )
+      ).rejects.toThrow(
+        '"Config A" and "Config B" have conflicting attach scopes: "all" cannot be combined with "private_or_internal"'
+      );
+
+      expect(mockPaginate).not.toHaveBeenCalled();
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    test('should throw when all is combined with all_without_configurations attach_scope', async () => {
+      await expect(
+        syncCodeSecurityConfigurations(
+          mockOctokit,
+          'my-org',
+          [
+            { name: 'Config A', description: 'A', attach_scope: 'all' },
+            { name: 'Config B', description: 'B', attach_scope: 'all_without_configurations' }
+          ],
+          false,
+          false
+        )
+      ).rejects.toThrow(
+        '"Config A" and "Config B" have conflicting attach scopes: "all" cannot be combined with "all_without_configurations"'
+      );
+
+      expect(mockPaginate).not.toHaveBeenCalled();
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    test('should throw when all_without_configurations is combined with public attach_scope', async () => {
+      await expect(
+        syncCodeSecurityConfigurations(
+          mockOctokit,
+          'my-org',
+          [
+            { name: 'Config A', description: 'A', attach_scope: 'all_without_configurations' },
+            { name: 'Config B', description: 'B', attach_scope: 'public' }
+          ],
+          false,
+          false
+        )
+      ).rejects.toThrow(
+        '"Config A" and "Config B" have conflicting attach scopes: "all_without_configurations" cannot be combined with "public"'
+      );
+
+      expect(mockPaginate).not.toHaveBeenCalled();
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    test('should throw when all_without_configurations is combined with private_or_internal attach_scope', async () => {
+      await expect(
+        syncCodeSecurityConfigurations(
+          mockOctokit,
+          'my-org',
+          [
+            { name: 'Config A', description: 'A', attach_scope: 'all_without_configurations' },
+            { name: 'Config B', description: 'B', attach_scope: 'private_or_internal' }
+          ],
+          false,
+          false
+        )
+      ).rejects.toThrow(
+        '"Config A" and "Config B" have conflicting attach scopes: "all_without_configurations" cannot be combined with "private_or_internal"'
+      );
+
+      expect(mockPaginate).not.toHaveBeenCalled();
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    test('should throw when public and private_or_internal are combined (covers all repos)', async () => {
+      await expect(
+        syncCodeSecurityConfigurations(
+          mockOctokit,
+          'my-org',
+          [
+            { name: 'Config A', description: 'A', attach_scope: 'public' },
+            { name: 'Config B', description: 'B', attach_scope: 'private_or_internal' }
+          ],
+          false,
+          false
+        )
+      ).rejects.toThrow(
+        '"Config A" and "Config B" have conflicting attach scopes: "public" and "private_or_internal" together cover all repositories'
+      );
+
+      expect(mockPaginate).not.toHaveBeenCalled();
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    test('should allow all and selected attach scopes together (override pattern)', async () => {
+      const configs = [
+        { name: 'Baseline', description: 'All repos', attach_scope: 'all' },
+        { name: 'High risk', description: 'Selected repos', attach_scope: 'selected', selected_repository_ids: [123] }
+      ];
+
+      mockPaginate.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/code-security/configurations') {
+          return Promise.resolve([
+            { id: 1, name: 'Baseline', description: 'All repos', target_type: 'organization' },
+            { id: 2, name: 'High risk', description: 'Selected repos', target_type: 'organization' }
+          ]);
+        }
+        if (route === 'GET /orgs/{org}/code-security/configurations/{configuration_id}/repositories') {
+          return Promise.resolve([]);
+        }
+        return Promise.resolve([]);
+      });
+      mockRequest.mockResolvedValue({ data: [] });
+
+      await expect(syncCodeSecurityConfigurations(mockOctokit, 'my-org', configs, false, false)).resolves.not.toThrow();
+    });
+
+    test('should allow multiple selected-scope configs with disjoint repo IDs', async () => {
+      const configs = [
+        {
+          name: 'High risk',
+          description: 'High risk repos',
+          attach_scope: 'selected',
+          selected_repository_ids: [123, 456]
+        },
+        {
+          name: 'Critical',
+          description: 'Critical repos',
+          attach_scope: 'selected',
+          selected_repository_ids: [789]
+        }
+      ];
+
+      mockPaginate.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/code-security/configurations') {
+          return Promise.resolve([
+            { id: 1, name: 'High risk', description: 'High risk repos', target_type: 'organization' },
+            { id: 2, name: 'Critical', description: 'Critical repos', target_type: 'organization' }
+          ]);
+        }
+        if (route === 'GET /orgs/{org}/code-security/configurations/{configuration_id}/repositories') {
+          return Promise.resolve([]);
+        }
+        return Promise.resolve([]);
+      });
+      mockRequest.mockResolvedValue({ data: [] });
+
+      await expect(syncCodeSecurityConfigurations(mockOctokit, 'my-org', configs, false, false)).resolves.not.toThrow();
+    });
+
+    test('should throw when multiple selected-scope configs claim the same repo ID', async () => {
+      const configs = [
+        {
+          name: 'High risk',
+          description: 'High risk repos',
+          attach_scope: 'selected',
+          selected_repository_ids: [123, 456]
+        },
+        {
+          name: 'Critical',
+          description: 'Critical repos',
+          attach_scope: 'selected',
+          selected_repository_ids: [456, 789]
+        }
+      ];
+
+      mockPaginate.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/code-security/configurations') {
+          return Promise.resolve([
+            { id: 1, name: 'High risk', description: 'High risk repos', target_type: 'organization' },
+            { id: 2, name: 'Critical', description: 'Critical repos', target_type: 'organization' }
+          ]);
+        }
+        return Promise.resolve([]);
+      });
+
+      await expect(syncCodeSecurityConfigurations(mockOctokit, 'my-org', configs, false, false)).rejects.toThrow(
+        'Repository ID 456 is claimed by multiple code security configurations with attach_scope "selected": "High risk" and "Critical"'
+      );
+
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    test('should throw when selected-scope configs overlap via name and property resolution', async () => {
+      const configs = [
+        {
+          name: 'By name',
+          description: 'Targets by repo name',
+          attach_scope: 'selected',
+          selected_repositories: ['critical-app']
+        },
+        {
+          name: 'By property',
+          description: 'Targets by property filter',
+          attach_scope: 'selected',
+          selected_repositories_by_property: [{ property: 'criticality', value: 'high' }]
+        }
+      ];
+
+      mockPaginate.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/code-security/configurations') {
+          return Promise.resolve([
+            { id: 1, name: 'By name', description: 'Targets by repo name', target_type: 'organization' },
+            { id: 2, name: 'By property', description: 'Targets by property filter', target_type: 'organization' }
+          ]);
+        }
+        if (route === 'GET /orgs/{org}/repos') {
+          return Promise.resolve([{ id: 123, name: 'critical-app', full_name: 'my-org/critical-app' }]);
+        }
+        if (route === 'GET /orgs/{org}/properties/values') {
+          return Promise.resolve([
+            {
+              repository_id: 123,
+              repository_name: 'critical-app',
+              repository_full_name: 'my-org/critical-app',
+              properties: [{ property_name: 'criticality', value: 'high' }]
+            }
+          ]);
+        }
+        return Promise.resolve([]);
+      });
+
+      await expect(syncCodeSecurityConfigurations(mockOctokit, 'my-org', configs, false, false)).rejects.toThrow(
+        'Repository ID 123 is claimed by multiple code security configurations with attach_scope "selected": "By name" and "By property"'
+      );
+
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
   });
 
   // ─── parseOrganizations with code security configurations ─────────────

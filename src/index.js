@@ -2793,6 +2793,55 @@ export function compareCodeSecurityConfiguration(existing, desired) {
   return { changed: changes.length > 0, changes };
 }
 
+function validateCodeSecurityAttachScopeAssignments(configs) {
+  const broadScopes = configs.filter(c => c.attach_scope && c.attach_scope !== 'selected');
+
+  if (broadScopes.length <= 1) {
+    return;
+  }
+
+  const scopeToConfig = new Map();
+  for (const config of broadScopes) {
+    const scope = config.attach_scope;
+    if (scopeToConfig.has(scope)) {
+      throw new Error(
+        `Multiple code security configurations use attach_scope "${scope}": ` +
+          `"${scopeToConfig.get(scope)}" and "${config.name}".`
+      );
+    }
+    scopeToConfig.set(scope, config.name);
+  }
+
+  if (scopeToConfig.has('all')) {
+    for (const conflicting of ['all_without_configurations', 'public', 'private_or_internal']) {
+      if (scopeToConfig.has(conflicting)) {
+        throw new Error(
+          `Code security configurations "${scopeToConfig.get('all')}" and "${scopeToConfig.get(conflicting)}" ` +
+            `have conflicting attach scopes: "all" cannot be combined with "${conflicting}".`
+        );
+      }
+    }
+  }
+
+  if (scopeToConfig.has('all_without_configurations')) {
+    for (const conflicting of ['public', 'private_or_internal']) {
+      if (scopeToConfig.has(conflicting)) {
+        throw new Error(
+          `Code security configurations "${scopeToConfig.get('all_without_configurations')}" and "${scopeToConfig.get(conflicting)}" ` +
+            `have conflicting attach scopes: "all_without_configurations" cannot be combined with "${conflicting}".`
+        );
+      }
+    }
+  }
+
+  if (scopeToConfig.has('public') && scopeToConfig.has('private_or_internal')) {
+    throw new Error(
+      `Code security configurations "${scopeToConfig.get('public')}" and "${scopeToConfig.get('private_or_internal')}" ` +
+        `have conflicting attach scopes: "public" and "private_or_internal" together cover all repositories.`
+    );
+  }
+}
+
 function validateCodeSecurityDefaultAssignments(desiredConfigs) {
   const byTarget = new Map();
   const defaults = desiredConfigs.filter(c => c.default_for_new_repos !== undefined);
@@ -2930,6 +2979,7 @@ export async function syncCodeSecurityConfigurations(octokit, org, desiredConfig
   const repoCache = {};
 
   validateUniqueCodeSecurityConfigurationNames(desiredConfigs);
+  validateCodeSecurityAttachScopeAssignments(desiredConfigs);
   validateCodeSecurityDefaultAssignments(desiredConfigs);
 
   // Fetch current code security configurations
@@ -3067,20 +3117,53 @@ export async function syncCodeSecurityConfigurations(octokit, org, desiredConfig
         (CODE_SECURITY_ATTACH_SCOPE_PRIORITY.get(b.attach_scope) || 99)
     );
 
+  // Pre-resolve IDs for selected-scope configs and validate they target disjoint repo sets.
+  // Must happen at runtime (not in normalizeCodeSecurityConfigurations) because name/property
+  // resolution requires API calls that we can't make during pure normalization.
+  const resolvedIdsCache = new Map(); // configName → number[]
+  const selectedAttachConfigs = attachConfigs.filter(c => c.attach_scope === 'selected');
+  if (selectedAttachConfigs.length > 1) {
+    const claimedByConfig = new Map(); // repoId → configName
+    for (const desired of selectedAttachConfigs) {
+      const configId = syncedConfigIds.get(desired.name) || existingMap.get(desired.name)?.id;
+      if (!configId) continue;
+      const ids = await resolveSelectedRepositoryIds(
+        octokit,
+        org,
+        desired.selected_repository_ids,
+        desired.selected_repositories,
+        desired.selected_repositories_by_property,
+        repoCache
+      );
+      resolvedIdsCache.set(desired.name, ids);
+      for (const id of ids) {
+        if (claimedByConfig.has(id)) {
+          throw new Error(
+            `Repository ID ${id} is claimed by multiple code security configurations ` +
+              `with attach_scope "selected": "${claimedByConfig.get(id)}" and "${desired.name}".`
+          );
+        }
+        claimedByConfig.set(id, desired.name);
+      }
+    }
+  }
+
   for (const desired of attachConfigs) {
     const configId = syncedConfigIds.get(desired.name) || existingMap.get(desired.name)?.id;
     if (!configId) {
       continue;
     }
 
-    const selectedIds = await resolveSelectedRepositoryIds(
-      octokit,
-      org,
-      desired.selected_repository_ids,
-      desired.selected_repositories,
-      desired.selected_repositories_by_property,
-      repoCache
-    );
+    const selectedIds = resolvedIdsCache.has(desired.name)
+      ? resolvedIdsCache.get(desired.name)
+      : await resolveSelectedRepositoryIds(
+          octokit,
+          org,
+          desired.selected_repository_ids,
+          desired.selected_repositories,
+          desired.selected_repositories_by_property,
+          repoCache
+        );
 
     const attachResult = await syncCodeSecurityConfigurationAttachment(
       octokit,
