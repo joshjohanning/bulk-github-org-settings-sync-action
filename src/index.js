@@ -1187,7 +1187,7 @@ export function getMemberPrivilegesFromInputs() {
 
 /**
  * Parse and validate an organization profile YAML config object (inline or from file).
- * Converts YAML keys (hyphenated) to API keys (snake_case) and validates types.
+ * Converts YAML keys (hyphenated) to GitHub REST API parameter names and validates types.
  * @param {Object} config - Raw key-value map from YAML
  * @param {string} [context] - Context for error messages (e.g., org name)
  * @returns {Object} Normalized profile with API keys
