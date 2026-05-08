@@ -578,7 +578,7 @@ Set organization profile fields directly as action inputs:
 **Behavior:**
 
 - Only fields included in the config are managed — omitted fields remain unchanged
-- If a field already matches the config, no API call is made
+- If all managed fields already match the config, no update/PATCH call is made
 - Fields are applied via a single `PATCH /orgs/{org}` call per organization
 
 ### Per-Org Organization Profile Overrides
