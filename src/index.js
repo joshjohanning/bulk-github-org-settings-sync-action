@@ -3394,6 +3394,21 @@ function formatChangedFilesForPullRequest(changedFiles, limit = 50) {
 }
 
 /**
+ * Format a bounded changed-files summary for logs and action outputs.
+ * @param {Array<{ path: string, sha?: string|null }>} changedFiles - Changed files
+ * @param {number} [limit] - Maximum files to list inline
+ * @returns {string} Comma-separated summary
+ */
+function formatChangedFilesSummary(changedFiles, limit = 10) {
+  const visibleFiles = changedFiles.slice(0, limit).map(f => `${f.sha ? 'update' : 'create'} ${f.path}`);
+  const remainingCount = changedFiles.length - visibleFiles.length;
+  if (remainingCount > 0) {
+    visibleFiles.push(`...and ${remainingCount} more file(s)`);
+  }
+  return visibleFiles.join(', ');
+}
+
+/**
  * Sync a local directory to a .github or .github-private repository via PR.
  * Compares local files against the repo's default branch, and creates a PR
  * if there are differences.
@@ -3438,7 +3453,7 @@ export async function syncDotGithubRepo(octokit, org, sourceDir, repoName, dryRu
     if (error.status === 404) {
       core.warning(`  ⚠️  Repository "${org}/${repoName}" not found — skipping`);
       subResults.push(createSubResult(kindLabel, SubResultStatus.WARNING, `Repository "${org}/${repoName}" not found`));
-      return { subResults, failed: true };
+      return { subResults, failed: false };
     }
     throw error;
   }
@@ -3530,7 +3545,7 @@ export async function syncDotGithubRepo(octokit, org, sourceDir, repoName, dryRu
     return { subResults, failed: hasFailed };
   }
 
-  const changesSummary = changedFiles.map(f => (f.sha ? `update ${f.path}` : `create ${f.path}`)).join(', ');
+  const changesSummary = formatChangedFilesSummary(changedFiles);
   core.info(`  📝 ${wouldPrefix}Sync ${changedFiles.length} file(s) to ${org}/${repoName}: ${changesSummary}`);
   subResults.push(
     createSubResult(

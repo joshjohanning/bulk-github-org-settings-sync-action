@@ -3259,7 +3259,40 @@ orgs:
       expect(result.subResults).toHaveLength(1);
       expect(result.subResults[0].status).toBe('warning');
       expect(result.subResults[0].message).toContain('not found');
-      expect(result.failed).toBe(true);
+      expect(result.failed).toBe(false);
+    });
+
+    test('should cap changed file summaries in dry-run mode', async () => {
+      const fileEntries = Array.from({ length: 12 }, (_, index) => ({
+        name: `file-${index}.txt`,
+        isDirectory: () => false,
+        isFile: () => true
+      }));
+      mockFs.readdirSync.mockImplementation(dirPath => {
+        if (dirPath === '/source') return fileEntries;
+        return [];
+      });
+
+      mockFs.readFileSync.mockImplementation((filePath, _encoding) => {
+        if (typeof filePath === 'string' && filePath.startsWith('/source/file-')) {
+          return Buffer.from(`content for ${filePath}`);
+        }
+        if (typeof filePath === 'string' && filePath.endsWith('action.yml')) return mockActionYmlContent;
+        throw new Error(`ENOENT: ${filePath}`);
+      });
+
+      mockRequest
+        .mockResolvedValueOnce({ data: { default_branch: 'main' } })
+        .mockResolvedValueOnce({ data: { object: { sha: 'base-sha-123' } } })
+        .mockResolvedValueOnce({ data: { tree: { sha: 'base-tree-sha' } } })
+        .mockResolvedValueOnce({ data: { tree: [] } });
+
+      const result = await syncDotGithubRepo(mockOctokit, 'my-org', '/source', '.github', true);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].message).toContain('...and 2 more file(s)');
+      expect(result.subResults[0].message).not.toContain('file-11.txt');
+      expect(mockCore.info).toHaveBeenCalledWith(expect.stringContaining('...and 2 more file(s)'));
     });
 
     test('should report no changes when files match', async () => {
