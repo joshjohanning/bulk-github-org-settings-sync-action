@@ -19,6 +19,7 @@ Please refer to the [release page](https://github.com/joshjohanning/bulk-github-
 - 📋 Sync organization-level rulesets across organizations
 - 🏷️ Sync issue type definitions across organizations
 - 🔧 Sync member privileges and repository policies across organizations
+- 🔒 Sync code security configurations across organizations
 - 🔒 Sync GitHub Actions security and policy settings across organizations
 - ✅ Support for all custom property types: `string`, `single_select`, `multi_select`, `true_false`, `url`
 - 🔍 Dry-run mode with change preview and intelligent change detection
@@ -621,6 +622,175 @@ orgs:
 ```
 
 ---
+
+## Syncing Code Security Configurations
+
+Sync named code security configurations across organizations. These configurations define security feature enablement policies (e.g., Dependabot, secret scanning, code scanning) that can be applied to repositories.
+
+### Basic Usage
+
+```yml
+- name: Sync Organization Settings
+  uses: joshjohanning/bulk-github-org-settings-sync-action@v1
+  with:
+    github-token: ${{ secrets.ORG_ADMIN_TOKEN }}
+    organizations: 'my-org,my-other-org'
+    code-security-configurations-file: './code-security-configurations.yml'
+```
+
+### Example Configuration File
+
+```yaml
+# code-security-configurations.yml
+- name: High risk settings
+  description: Security configuration for high risk repositories
+  advanced_security: enabled
+  dependency_graph: enabled
+  dependabot_alerts: enabled
+  dependabot_security_updates: enabled
+  code_scanning_default_setup: enabled
+  secret_scanning: enabled
+  secret_scanning_push_protection: enabled
+  private_vulnerability_reporting: enabled
+  enforcement: enforced
+
+- name: Standard settings
+  description: Security configuration for standard repositories
+  advanced_security: enabled
+  dependency_graph: enabled
+  dependabot_alerts: enabled
+  secret_scanning: enabled
+  secret_scanning_push_protection: enabled
+  private_vulnerability_reporting: enabled
+  enforcement: unenforced
+```
+
+All enablement fields accept: `enabled`, `disabled`, or `not_set`. The `enforcement` field accepts: `enforced` or `unenforced`.
+
+### Optional Repository Attachment and Defaults
+
+You can also configure how each code security configuration is applied:
+
+- `attach-scope`: attach to `all`, `all_without_configurations`, `public`, `private_or_internal`, or `selected` repositories
+- `selected-repository-ids`: optional repository IDs when `attach-scope: selected`
+- `selected-repositories`: optional repository names (for example `high-risk-service` or `app-api`) when `attach-scope: selected`
+- `selected-repositories-by-property`: optional list of `{property, value}` filters; any repo in the org matching any filter is included when `attach-scope: selected`
+- `default-for-new-repos`: set default for newly created repos (`all`, `none`, `public`, `private_and_internal`)
+
+Example:
+
+```yaml
+- name: High risk settings
+  description: Security configuration for high risk repositories
+  advanced_security: enabled
+  attach-scope: selected
+  selected-repositories: [high-risk-service, app-api]
+  default-for-new-repos: private_and_internal
+```
+
+Or select repositories by custom property:
+
+```yaml
+- name: High risk settings
+  description: Security configuration for high risk repositories
+  advanced_security: enabled
+  attach-scope: selected
+  selected-repositories-by-property:
+    - property: criticality
+      value: high
+  default-for-new-repos: private_and_internal
+```
+
+`selected-repository-ids`, `selected-repositories`, and `selected-repositories-by-property` can all be combined — matching repos from all three sources are merged into one set.
+
+If multiple configurations use `attach-scope`, broader scopes are applied first and `selected` is applied last, so selected repositories can override broad assignments.
+
+For `attach-scope`, the following combinations are invalid and will fail the run:
+
+- The same broad scope (`all`, `all_without_configurations`, `public`, `private_or_internal`) cannot appear on more than one configuration.
+- `all` cannot be combined with `all_without_configurations`, `public`, or `private_or_internal`.
+- `all_without_configurations` cannot be combined with `public` or `private_or_internal` (unconfigured repos in those visibility categories would be targeted by both).
+- `selected` may appear on multiple configurations, but each repository may only be targeted by one of them — overlapping repo sets across `selected`-scope configurations will fail the run.
+
+For `default-for-new-repos`, values must not conflict:
+
+- `none` cannot be combined with any other default assignment.
+- `all` cannot be combined with `public` or `private_and_internal`.
+- You cannot define the same default target more than once.
+
+### Per-Org Code Security Configuration Overrides
+
+In `orgs.yml`, use `code-security-configurations` to override specific configurations for an org:
+
+```yaml
+orgs:
+  - org: my-org
+    # inherits base code-security-configurations-file as-is
+
+  - org: my-other-org
+    # code-security-configurations-file: './other-org-configs.yml' # use a different base file
+    code-security-configurations:
+      - name: High risk settings
+        description: Stricter settings for this org
+        advanced_security: enabled
+        secret_scanning: enabled
+        secret_scanning_push_protection: enabled
+        enforcement: enforced
+        attach-scope: all_without_configurations
+        default-for-new-repos: private_and_internal
+```
+
+### Delete Unmanaged Configurations
+
+Set `delete-unmanaged-code-security-configurations: true` to remove code security configurations not defined in the configuration file. Only custom (organization-owned) configurations are deleted — global GitHub-managed configurations are never touched.
+
+When `attach-scope` and/or `default-for-new-repos` are configured, the action also applies repository attachment and default assignment for that named configuration.
+
+> [!NOTE]
+> Requires a GitHub Advanced Security (GHAS) license for `advanced_security` features. Available on GitHub.com (GHEC) and GHES 3.x+.
+
+---
+
+## Action Inputs
+
+| Input                                           | Description                                                                         | Required | Default                 |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------- | -------- | ----------------------- |
+| `github-token`                                  | GitHub token for API access (requires `admin:org` scope)                            | Yes      |                         |
+| `github-api-url`                                | GitHub API URL (e.g., `https://api.github.com` or `https://ghes.domain.com/api/v3`) | No       | `${{ github.api_url }}` |
+| `organizations`                                 | Comma-separated list of organization names                                          | No       |                         |
+| `organizations-file`                            | Path to YAML file containing organization settings configuration                    | No       |                         |
+| `custom-properties-file`                        | Path to a YAML file defining custom property schemas                                | No       |                         |
+| `delete-unmanaged-properties`                   | Delete custom properties not defined in the configuration file                      | No       | `false`                 |
+| `issue-types-file`                              | Path to a YAML file defining issue type definitions                                 | No       |                         |
+| `delete-unmanaged-issue-types`                  | Delete issue types not defined in the configuration file                            | No       | `false`                 |
+| `default-repository-permission`                 | Default permission for org members: `read`, `write`, `admin`, `none`                | No       |                         |
+| `members-can-create-repositories`               | Whether members can create repositories                                             | No       |                         |
+| `members-can-create-public-repositories`        | Whether members can create public repositories                                      | No       |                         |
+| `members-can-create-private-repositories`       | Whether members can create private repositories                                     | No       |                         |
+| `members-can-create-internal-repositories`      | Whether members can create internal repositories (GHEC/GHES only)                   | No       |                         |
+| `members-can-fork-private-repositories`         | Whether members can fork private repositories                                       | No       |                         |
+| `web-commit-signoff-required`                   | Whether web UI commits require signoff                                              | No       |                         |
+| `members-can-create-pages`                      | Whether members can create GitHub Pages sites                                       | No       |                         |
+| `members-can-create-public-pages`               | Whether members can create public GitHub Pages sites                                | No       |                         |
+| `members-can-create-private-pages`              | Whether members can create private GitHub Pages sites                               | No       |                         |
+| `members-can-invite-outside-collaborators`      | Whether members can invite outside collaborators                                    | No       |                         |
+| `members-can-create-teams`                      | Whether members can create teams                                                    | No       |                         |
+| `members-can-delete-repositories`               | Whether members can delete repositories                                             | No       |                         |
+| `members-can-change-repo-visibility`            | Whether members can change repository visibility                                    | No       |                         |
+| `members-can-delete-issues`                     | Whether members can delete issues                                                   | No       |                         |
+| `default-repository-branch`                     | Default branch name for new repositories                                            | No       |                         |
+| `deploy-keys-enabled-for-repositories`          | Whether deploy keys can be added to repositories                                    | No       |                         |
+| `readers-can-create-discussions`                | Whether users with read access can create discussions                               | No       |                         |
+| `members-can-view-dependency-insights`          | Whether members can view dependency insights                                        | No       |                         |
+| `display-commenter-full-name-setting-enabled`   | Whether to display commenter full name in issues and PRs                            | No       |                         |
+| `rulesets-file`                                 | Comma-separated paths to JSON files, each with a single org ruleset config          | No       |                         |
+| `delete-unmanaged-rulesets`                     | Delete all other rulesets besides those being synced                                | No       | `false`                 |
+| `code-security-configurations-file`             | Path to a YAML file defining code security configurations to sync                   | No       |                         |
+| `delete-unmanaged-code-security-configurations` | Delete code security configurations not defined in the configuration file           | No       | `false`                 |
+| `dry-run`                                       | Preview changes without applying them                                               | No       | `false`                 |
+
+> [!NOTE]
+> You must provide either `organizations` or `organizations-file`. The `custom-properties-file`, `issue-types-file`, `rulesets-file`, and `code-security-configurations-file` inputs provide base settings for all orgs and can be combined with either approach. Member privilege settings can be provided as individual inputs (e.g., `default-repository-permission`). Per-org overrides in `organizations-file` layer on top of the base.
 
 ## Syncing Actions Policy
 
