@@ -2110,6 +2110,72 @@ orgs:
       expect(mockCore.setOutput).toHaveBeenCalledWith('updated-organizations', '1');
       expect(mockCore.setOutput).toHaveBeenCalledWith('changed-organizations', '1');
     });
+
+    test('should allow empty custom org roles file when delete-unmanaged-org-roles is enabled', async () => {
+      setMockFileContent('[]', '/mock/custom-org-roles.yml');
+
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          'github-api-url': 'https://api.github.com',
+          organizations: 'my-org',
+          'organizations-file': '',
+          'custom-org-roles-file': '/mock/custom-org-roles.yml',
+          'delete-unmanaged-org-roles': 'true',
+          'dry-run': 'true'
+        };
+        return inputs[name] ?? '';
+      });
+      mockCore.getBooleanInput.mockImplementation(name => {
+        if (name === 'dry-run') return true;
+        if (name === 'delete-unmanaged-org-roles') return true;
+        return false;
+      });
+      mockPaginate.mockResolvedValueOnce([{ id: 1, name: 'Unmanaged', description: null, permissions: ['x'] }]);
+
+      await run();
+
+      expect(mockCore.setFailed).not.toHaveBeenCalled();
+      expect(mockPaginate).toHaveBeenCalledWith(
+        'GET /orgs/{org}/organization-roles',
+        { org: 'my-org', per_page: 100 },
+        expect.any(Function)
+      );
+      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-organizations', '1');
+    });
+
+    test('should allow empty custom repo roles file when delete-unmanaged-repo-roles is enabled', async () => {
+      setMockFileContent('[]', '/mock/custom-repo-roles.yml');
+
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          'github-api-url': 'https://api.github.com',
+          organizations: 'my-org',
+          'organizations-file': '',
+          'custom-repo-roles-file': '/mock/custom-repo-roles.yml',
+          'delete-unmanaged-repo-roles': 'true',
+          'dry-run': 'true'
+        };
+        return inputs[name] ?? '';
+      });
+      mockCore.getBooleanInput.mockImplementation(name => {
+        if (name === 'dry-run') return true;
+        if (name === 'delete-unmanaged-repo-roles') return true;
+        return false;
+      });
+      mockPaginate.mockResolvedValueOnce([{ id: 1, name: 'Unmanaged', description: null, permissions: ['x'] }]);
+
+      await run();
+
+      expect(mockCore.setFailed).not.toHaveBeenCalled();
+      expect(mockPaginate).toHaveBeenCalledWith(
+        'GET /orgs/{org}/custom-repository-roles',
+        { org: 'my-org', per_page: 100 },
+        expect.any(Function)
+      );
+      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-organizations', '1');
+    });
   });
 
   // ─── syncOrgRulesets ────────────────────────────────────────────────────

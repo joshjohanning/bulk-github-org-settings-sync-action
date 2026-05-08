@@ -2291,8 +2291,13 @@ export async function run() {
     const hasRulesets = orgList.some(o => o.rulesetsFiles && o.rulesetsFiles.length > 0);
     const hasIssueTypes = orgList.some(o => o.issueTypes && o.issueTypes.length > 0);
     const hasMemberPrivileges = orgList.some(o => o.memberPrivileges && Object.keys(o.memberPrivileges).length > 0);
-    const hasCustomOrgRoles = orgList.some(o => o.customOrgRoles && o.customOrgRoles.length > 0);
-    const hasCustomRepoRoles = orgList.some(o => o.customRepoRoles && o.customRepoRoles.length > 0);
+    const hasCustomOrgRoles = orgList.some(
+      o => o.customOrgRoles && (o.customOrgRoles.length > 0 || (o.deleteUnmanagedOrgRoles ?? deleteUnmanagedOrgRoles))
+    );
+    const hasCustomRepoRoles = orgList.some(
+      o =>
+        o.customRepoRoles && (o.customRepoRoles.length > 0 || (o.deleteUnmanagedRepoRoles ?? deleteUnmanagedRepoRoles))
+    );
     if (
       !hasCustomProperties &&
       !hasRulesets &&
@@ -2428,7 +2433,10 @@ export async function run() {
         }
 
         // Sync custom organization roles
-        if (orgConfig.customOrgRoles && orgConfig.customOrgRoles.length > 0) {
+        if (
+          orgConfig.customOrgRoles &&
+          (orgConfig.customOrgRoles.length > 0 || (orgConfig.deleteUnmanagedOrgRoles ?? deleteUnmanagedOrgRoles))
+        ) {
           core.info(`  👤 Syncing custom org roles (${orgConfig.customOrgRoles.length} defined)...`);
           const orResult = await syncCustomOrgRoles(
             octokit,
@@ -2448,7 +2456,10 @@ export async function run() {
         }
 
         // Sync custom repository roles
-        if (orgConfig.customRepoRoles && orgConfig.customRepoRoles.length > 0) {
+        if (
+          orgConfig.customRepoRoles &&
+          (orgConfig.customRepoRoles.length > 0 || (orgConfig.deleteUnmanagedRepoRoles ?? deleteUnmanagedRepoRoles))
+        ) {
           core.info(`  📦 Syncing custom repo roles (${orgConfig.customRepoRoles.length} defined)...`);
           const rrResult = await syncCustomRepoRoles(
             octokit,
