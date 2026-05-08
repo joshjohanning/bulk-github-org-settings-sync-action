@@ -45,7 +45,8 @@ function getKnownOrgConfigKeys() {
   // 'custom-properties' is inline property definitions (YAML-only, not an action input)
   // 'issue-types' is inline issue type definitions (YAML-only, not an action input)
   // 'member-privileges' is inline member privilege overrides (YAML-only, not an action input)
-  const keys = new Set(['org', 'custom-properties', 'issue-types', 'member-privileges']);
+  // 'actions-policy' is inline actions policy overrides (YAML-only; individual settings are also available as action inputs)
+  const keys = new Set(['org', 'custom-properties', 'issue-types', 'member-privileges', 'actions-policy']);
 
   try {
     const __filename = url.fileURLToPath(import.meta.url);
@@ -143,6 +144,59 @@ export const MEMBER_PRIVILEGE_SETTINGS = new Map([
 ]);
 
 /**
+ * Supported Actions policy settings.
+ * Maps YAML key (hyphenated) to API key (snake_case), expected type, and endpoint group.
+ * @type {Map<string, { apiKey: string, type: string, validValues?: string[], endpoint: string }>}
+ */
+export const ACTIONS_POLICY_SETTINGS = new Map([
+  [
+    'allowed-actions',
+    {
+      apiKey: 'allowed_actions',
+      type: 'string',
+      validValues: ['all', 'local_only', 'selected'],
+      endpoint: 'permissions'
+    }
+  ],
+  [
+    'default-workflow-permissions',
+    {
+      apiKey: 'default_workflow_permissions',
+      type: 'string',
+      validValues: ['read', 'write'],
+      endpoint: 'workflow'
+    }
+  ],
+  [
+    'actions-can-approve-pull-request-reviews',
+    { apiKey: 'can_approve_pull_request_reviews', type: 'boolean', endpoint: 'workflow' }
+  ],
+  ['github-owned-allowed', { apiKey: 'github_owned_allowed', type: 'boolean', endpoint: 'selected-actions' }],
+  ['verified-allowed', { apiKey: 'verified_allowed', type: 'boolean', endpoint: 'selected-actions' }]
+]);
+
+/**
+ * Org-level keys parsed from organizations-file entries.
+ * Some action inputs are base-only and must not be accepted silently as
+ * per-org keys because parseOrganizationsFile() will otherwise ignore them.
+ * @type {Set<string>}
+ */
+const ORG_CONFIG_TOP_LEVEL_KEYS = new Set([
+  'org',
+  'custom-properties',
+  'custom-properties-file',
+  'delete-unmanaged-properties',
+  'issue-types',
+  'issue-types-file',
+  'delete-unmanaged-issue-types',
+  'rulesets-file',
+  'delete-unmanaged-rulesets',
+  'member-privileges',
+  'actions-policy',
+  'actions-allow-list-file'
+]);
+
+/**
  * Validate organization configuration and warn about unknown keys.
  * @param {Object} orgConfig - Organization configuration object from YAML
  * @param {string} orgName - Organization name for logging context
@@ -155,6 +209,33 @@ export function validateOrgConfig(orgConfig, orgName) {
   const knownKeys = getCachedKnownOrgConfigKeys();
 
   for (const key of Object.keys(orgConfig)) {
+    if (MEMBER_PRIVILEGE_SETTINGS.has(key)) {
+      core.warning(
+        `⚠️  Configuration key "${key}" for organization "${orgName}" must be nested under "member-privileges". ` +
+          `This top-level value will be ignored.`
+      );
+      continue;
+    }
+
+    if (key.startsWith('actions-policy-')) {
+      const nestedKey = key.slice('actions-policy-'.length);
+      if (ACTIONS_POLICY_SETTINGS.has(nestedKey)) {
+        core.warning(
+          `⚠️  Configuration key "${key}" for organization "${orgName}" must be nested under "actions-policy" ` +
+            `as "${nestedKey}". This top-level value will be ignored.`
+        );
+        continue;
+      }
+    }
+
+    if (knownKeys.has(key) && !ORG_CONFIG_TOP_LEVEL_KEYS.has(key)) {
+      core.warning(
+        `⚠️  Action input "${key}" is not supported as a per-org configuration key for organization "${orgName}". ` +
+          `This top-level value will be ignored.`
+      );
+      continue;
+    }
+
     if (!knownKeys.has(key)) {
       core.warning(
         `⚠️  Unknown configuration key "${key}" found for organization "${orgName}". ` +
@@ -229,6 +310,8 @@ export function validateOrgConfig(orgConfig, orgName) {
   }
 
   // member-privileges is fully validated by parseMemberPrivileges(), which throws contextual errors.
+
+  // actions-policy is fully validated by parseActionsPolicy(), which throws contextual errors.
 }
 
 // ─── Base-path resolution ────────────────────────────────────────────────────
@@ -237,7 +320,12 @@ export function validateOrgConfig(orgConfig, orgName) {
  * File-path config keys that should be resolved against base-path.
  * @type {string[]}
  */
-const FILE_PATH_CONFIG_KEYS = ['custom-properties-file', 'issue-types-file', 'rulesets-file'];
+const FILE_PATH_CONFIG_KEYS = [
+  'custom-properties-file',
+  'issue-types-file',
+  'rulesets-file',
+  'actions-allow-list-file'
+];
 
 /**
  * Resolve a single file path against a base path.
@@ -320,7 +408,11 @@ const SYNC_KIND_LABELS = Object.freeze({
   'member-privileges-update': 'member privileges (updated)',
   'ruleset-create': 'ruleset (created)',
   'ruleset-update': 'ruleset (updated)',
-  'ruleset-delete': 'ruleset (deleted)'
+  'ruleset-delete': 'ruleset (deleted)',
+  'actions-policy-permissions-update': 'actions policy (permissions updated)',
+  'actions-policy-workflow-update': 'actions policy (workflow permissions updated)',
+  'actions-policy-selected-actions-update': 'actions policy (selected actions updated)',
+  'actions-policy-allow-list-update': 'actions policy (allow list updated)'
 });
 
 /**
@@ -350,17 +442,18 @@ function formatSubResultSummary(subResult) {
  * Parse the list of organizations and their settings from inputs.
  * Supports two modes:
  *   1. organizations-file: YAML file with full org + settings config
- * Supports layering: base settings from action inputs (custom-properties-file, rulesets-file, and direct
- * member privilege inputs) are merged with per-org overrides from organizations-file.
+ * Supports layering: base settings from action inputs (custom-properties-file, rulesets-file, direct
+ * member privilege inputs, direct actions policy inputs, and actions-allow-list-file) are merged with
+ * per-org overrides from organizations-file.
  * Per-org properties override base properties with the same name; base properties
  * not overridden are preserved.
  *
- * Per-org custom-properties-file or rulesets-file in the organizations file
- * overrides the corresponding base file from the action input for that org.
+ * Per-org custom-properties-file, issue-types-file, rulesets-file, or actions-allow-list-file in the
+ * organizations file overrides the corresponding base file from the action input for that org.
  *
  * Modes:
- *   1. organizations-file (optionally combined with custom-properties-file / rulesets-file / direct member privilege inputs for base settings)
- *   2. organizations input + custom-properties-file / rulesets-file / direct member privilege inputs (same properties for all orgs)
+ *   1. organizations-file (optionally combined with custom-properties-file / rulesets-file / direct member privilege inputs / direct actions policy inputs for base settings)
+ *   2. organizations input + custom-properties-file / rulesets-file / direct member privilege inputs / direct actions policy inputs (same properties for all orgs)
  * @param {string} organizationsInput - Comma-separated org names
  * @param {string} organizationsFile - Path to YAML config file
  * @param {string} customPropertiesFile - Path to custom properties YAML file
@@ -368,7 +461,9 @@ function formatSubResultSummary(subResult) {
  * @param {boolean} [deleteUnmanagedRulesets] - Whether to delete rulesets not in config
  * @param {string} [issueTypesFile] - Path to issue types YAML file (base for all orgs)
  * @param {Object|null} [memberPrivilegesFromInputs] - Member privileges parsed from action inputs (base for all orgs)
- * @returns {Array<{ org: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, issueTypes?: Array, memberPrivileges?: Object }>} Parsed org configs
+ * @param {Object|null} [actionsPolicyFromInputs] - Actions policy parsed from action inputs (base for all orgs)
+ * @param {string} [actionsAllowListFile] - Path to actions allow list YAML file (base for all orgs)
+ * @returns {Array<{ org: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, issueTypes?: Array, memberPrivileges?: Object, actionsPolicy?: Object, actionsAllowList?: string[] }>} Parsed org configs
  */
 export function parseOrganizations(
   organizationsInput,
@@ -377,7 +472,9 @@ export function parseOrganizations(
   rulesetsFiles,
   deleteUnmanagedRulesets,
   issueTypesFile,
-  memberPrivilegesFromInputs
+  memberPrivilegesFromInputs,
+  actionsPolicyFromInputs,
+  actionsAllowListFile
 ) {
   // Load base custom properties from separate file (applies to all orgs)
   let baseCustomProperties = null;
@@ -395,6 +492,18 @@ export function parseOrganizations(
   let baseMemberPrivileges = null;
   if (memberPrivilegesFromInputs) {
     baseMemberPrivileges = { ...memberPrivilegesFromInputs };
+  }
+
+  // Load base actions policy from direct action inputs.
+  let baseActionsPolicy = null;
+  if (actionsPolicyFromInputs) {
+    baseActionsPolicy = { ...actionsPolicyFromInputs };
+  }
+
+  // Load base actions allow list from separate file (applies to all orgs)
+  let baseActionsAllowList = null;
+  if (actionsAllowListFile) {
+    baseActionsAllowList = parseActionsAllowListFile(actionsAllowListFile);
   }
 
   if (organizationsFile) {
@@ -460,6 +569,28 @@ export function parseOrganizations(
           orgConfig.memberPrivileges || {}
         );
       }
+
+      // Per-org actions-policy layer on top of base actions policy
+      if (baseActionsPolicy || orgConfig.actionsPolicy) {
+        orgConfig.actionsPolicy = mergeActionsPolicy(baseActionsPolicy || {}, orgConfig.actionsPolicy || {});
+      }
+
+      // Per-org actions-allow-list-file overrides the base for this org
+      if (orgConfig.actionsAllowListFile) {
+        try {
+          orgConfig.actionsAllowList = parseActionsAllowListFile(orgConfig.actionsAllowListFile);
+        } catch (error) {
+          throw new Error(
+            `Failed to parse actions allow list file "${orgConfig.actionsAllowListFile}" for organization "${orgConfig.org}": ${error.message}`,
+            { cause: error }
+          );
+        }
+      } else if (baseActionsAllowList) {
+        orgConfig.actionsAllowList = [...baseActionsAllowList];
+      }
+
+      // Clean up the intermediate field
+      delete orgConfig.actionsAllowListFile;
     }
 
     return orgConfigs;
@@ -484,7 +615,9 @@ export function parseOrganizations(
     ...(baseIssueTypes ? { issueTypes: baseIssueTypes } : {}),
     ...(rulesetsFiles && rulesetsFiles.length > 0 ? { rulesetsFiles } : {}),
     ...(deleteUnmanagedRulesets !== undefined ? { deleteUnmanagedRulesets } : {}),
-    ...(baseMemberPrivileges ? { memberPrivileges: baseMemberPrivileges } : {})
+    ...(baseMemberPrivileges ? { memberPrivileges: baseMemberPrivileges } : {}),
+    ...(baseActionsPolicy ? { actionsPolicy: baseActionsPolicy } : {}),
+    ...(baseActionsAllowList ? { actionsAllowList: baseActionsAllowList } : {})
   }));
 }
 
@@ -536,6 +669,143 @@ export function mergeIssueTypes(baseIssueTypes, orgIssueTypes) {
  */
 export function mergeMemberPrivileges(basePrivileges, orgPrivileges) {
   return { ...basePrivileges, ...orgPrivileges };
+}
+
+// ─── Actions Policy Parsing ─────────────────────────────────────────────────────
+
+/**
+ * Parse and validate an actions policy YAML config object (inline or from file).
+ * Converts YAML keys (hyphenated) to API keys (snake_case) and validates types.
+ * @param {Object} config - Raw key-value map from YAML
+ * @param {string} [context] - Context for error messages (e.g., org name)
+ * @returns {Object} Normalized policy with API keys
+ */
+export function parseActionsPolicy(config, context) {
+  if (typeof config !== 'object' || config === null || Array.isArray(config)) {
+    const label = context ? ` for org "${context}"` : '';
+    throw new Error(`Invalid actions-policy${label}: expected a key-value map`);
+  }
+
+  const normalized = {};
+  const label = context ? ` for org "${context}"` : '';
+
+  for (const [yamlKey, value] of Object.entries(config)) {
+    const setting = ACTIONS_POLICY_SETTINGS.get(yamlKey);
+    if (!setting) {
+      throw new Error(
+        `Unknown actions policy key "${yamlKey}"${label}. ` +
+          `Valid keys: ${[...ACTIONS_POLICY_SETTINGS.keys()].join(', ')}`
+      );
+    }
+
+    if (setting.type === 'boolean') {
+      if (typeof value !== 'boolean') {
+        throw new Error(`Actions policy key "${yamlKey}"${label} must be a boolean, got "${value}"`);
+      }
+      normalized[setting.apiKey] = value;
+    } else if (setting.type === 'string') {
+      const strValue = String(value).trim();
+      if (setting.validValues && !setting.validValues.includes(strValue)) {
+        throw new Error(
+          `Actions policy key "${yamlKey}"${label} has invalid value "${strValue}". ` +
+            `Valid values: ${setting.validValues.join(', ')}`
+        );
+      }
+      normalized[setting.apiKey] = strValue;
+    }
+  }
+
+  return normalized;
+}
+
+/**
+ * Build actions policy from action inputs.
+ * Reads each actions policy setting from core.getInput() and returns
+ * a normalized object with API keys for any non-empty inputs.
+ * @returns {Object|null} Normalized policy with API keys, or null if no inputs set
+ */
+export function getActionsPolicyFromInputs() {
+  const result = {};
+
+  for (const [yamlKey, setting] of ACTIONS_POLICY_SETTINGS) {
+    const inputName = `actions-policy-${yamlKey}`;
+    const raw = core.getInput(inputName);
+    if (raw === '') continue;
+
+    if (setting.type === 'boolean') {
+      const lower = raw.toLowerCase();
+      if (lower === 'true') {
+        result[setting.apiKey] = true;
+      } else if (lower === 'false') {
+        result[setting.apiKey] = false;
+      } else {
+        throw new Error(`Input "${inputName}" must be a boolean (true/false), got "${raw}"`);
+      }
+    } else if (setting.type === 'string') {
+      const trimmedRaw = raw.trim();
+      if (trimmedRaw === '') continue;
+      if (setting.validValues && !setting.validValues.includes(trimmedRaw)) {
+        throw new Error(
+          `Input "${inputName}" has invalid value "${trimmedRaw}". Valid values: ${setting.validValues.join(', ')}`
+        );
+      }
+      result[setting.apiKey] = trimmedRaw;
+    }
+  }
+
+  return Object.keys(result).length > 0 ? result : null;
+}
+
+/**
+ * Merge base actions policy with per-org overrides.
+ * Per-org settings override base settings with the same key.
+ * Base settings not overridden are preserved.
+ * @param {Object} basePolicy - Base actions policy settings (API-keyed)
+ * @param {Object} orgPolicy - Per-org actions policy overrides (API-keyed)
+ * @returns {Object} Merged policy
+ */
+export function mergeActionsPolicy(basePolicy, orgPolicy) {
+  return { ...basePolicy, ...orgPolicy };
+}
+
+/**
+ * Parse an actions allow list YAML file.
+ * The file should contain an 'actions' key with an array of pattern strings.
+ * @param {string} filePath - Path to the YAML file
+ * @returns {string[]} Array of allow list patterns
+ */
+export function parseActionsAllowListFile(filePath) {
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`Actions allow list file not found: ${filePath}`);
+  }
+
+  const content = fs.readFileSync(filePath, 'utf8');
+  const config = yaml.load(content);
+
+  if (!config || !config.actions || !Array.isArray(config.actions)) {
+    throw new Error(`Invalid actions allow list file format: expected an "actions" array in ${filePath}`);
+  }
+
+  const patterns = [];
+  const seenPatterns = new Set();
+
+  for (const entry of config.actions) {
+    if (typeof entry !== 'string') {
+      throw new Error(`Invalid entry in actions allow list: expected a string, got ${typeof entry}`);
+    }
+
+    const pattern = entry.trim();
+    if (pattern.length > 0 && !seenPatterns.has(pattern)) {
+      patterns.push(pattern);
+      seenPatterns.add(pattern);
+    }
+  }
+
+  if (patterns.length === 0) {
+    throw new Error(`Actions allow list file contains no valid patterns: ${filePath}`);
+  }
+
+  return patterns;
 }
 
 /**
@@ -631,6 +901,18 @@ export function parseOrganizationsFile(filePath) {
 
     if (Object.prototype.hasOwnProperty.call(orgConfig, 'member-privileges')) {
       result.memberPrivileges = parseMemberPrivileges(orgConfig['member-privileges'], orgConfig.org);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'actions-policy')) {
+      result.actionsPolicy = parseActionsPolicy(orgConfig['actions-policy'], orgConfig.org);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'actions-allow-list-file')) {
+      const alFile = orgConfig['actions-allow-list-file'];
+      if (typeof alFile !== 'string' || alFile.trim() === '') {
+        throw new Error(`Invalid "actions-allow-list-file" for org "${orgConfig.org}": expected a non-empty string`);
+      }
+      result.actionsAllowListFile = alFile.trim();
     }
 
     return result;
@@ -1362,6 +1644,426 @@ export async function syncMemberPrivileges(octokit, org, desiredSettings, dryRun
   return { subResults, failed: false };
 }
 
+// ─── Actions Policy Sync ────────────────────────────────────────────────────────
+
+/**
+ * Build a reverse lookup from API key to YAML key for actions policy settings.
+ * @returns {Map<string, string>}
+ */
+function buildActionsPolicyApiToYamlKeyMap() {
+  const map = new Map();
+  for (const [yamlKey, setting] of ACTIONS_POLICY_SETTINGS) {
+    map.set(setting.apiKey, yamlKey);
+  }
+  return map;
+}
+
+const ACTIONS_POLICY_API_TO_YAML_KEY = buildActionsPolicyApiToYamlKeyMap();
+
+/**
+ * Return de-duplicated allow-list patterns while preserving original order.
+ * @param {string[]} patterns
+ * @returns {string[]}
+ */
+function uniqueActionsAllowListPatterns(patterns) {
+  return [...new Set(patterns)];
+}
+
+/**
+ * Sync Actions policy settings for an organization.
+ * Manages three API endpoints:
+ *   1. GET/PUT /orgs/{org}/actions/permissions — allowed_actions
+ *   2. GET/PUT /orgs/{org}/actions/permissions/workflow — default_workflow_permissions, can_approve_pull_request_reviews
+ *   3. GET/PUT /orgs/{org}/actions/permissions/selected-actions — github_owned_allowed, verified_allowed, patterns_allowed
+ *
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} org - Organization name
+ * @param {Object} desiredSettings - Desired actions policy settings (API-keyed)
+ * @param {string[]|null} allowList - Desired allow list patterns, or null if not managed
+ * @param {boolean} dryRun - Preview mode
+ * @returns {Promise<Object>} Result object with subResults
+ */
+export async function syncActionsPolicy(octokit, org, desiredSettings, allowList, dryRun) {
+  const subResults = [];
+  const wouldPrefix = dryRun ? 'Would ' : '';
+
+  // Group desired settings by endpoint
+  const permissionsSettings = {};
+  const workflowSettings = {};
+  const selectedActionsSettings = {};
+
+  for (const [apiKey, value] of Object.entries(desiredSettings)) {
+    const yamlKey = ACTIONS_POLICY_API_TO_YAML_KEY.get(apiKey);
+    if (!yamlKey) continue;
+    const setting = ACTIONS_POLICY_SETTINGS.get(yamlKey);
+    if (!setting) continue;
+
+    if (setting.endpoint === 'permissions') {
+      permissionsSettings[apiKey] = value;
+    } else if (setting.endpoint === 'workflow') {
+      workflowSettings[apiKey] = value;
+    } else if (setting.endpoint === 'selected-actions') {
+      selectedActionsSettings[apiKey] = value;
+    }
+  }
+
+  // 1. Sync /actions/permissions (allowed_actions)
+  if (Object.keys(permissionsSettings).length > 0) {
+    const result = await syncActionsPermissions(octokit, org, permissionsSettings, dryRun, wouldPrefix);
+    subResults.push(...result.subResults);
+    if (result.failed) return { subResults, failed: true };
+  }
+
+  // 2. Sync /actions/permissions/workflow (default_workflow_permissions, can_approve_pull_request_reviews)
+  if (Object.keys(workflowSettings).length > 0) {
+    const result = await syncActionsWorkflowPermissions(octokit, org, workflowSettings, dryRun, wouldPrefix);
+    subResults.push(...result.subResults);
+    if (result.failed) return { subResults, failed: true };
+  }
+
+  // 3. Sync /actions/permissions/selected-actions (github_owned_allowed, verified_allowed, patterns_allowed)
+  if (Object.keys(selectedActionsSettings).length > 0 || allowList) {
+    let selectedActionsEnabled = permissionsSettings.allowed_actions === 'selected';
+    let selectedActionsBlockReason = '';
+
+    if (permissionsSettings.allowed_actions !== undefined && !selectedActionsEnabled) {
+      selectedActionsBlockReason = `configured: "${permissionsSettings.allowed_actions}"`;
+    } else if (!selectedActionsEnabled) {
+      try {
+        const { data: currentPermissions } = await octokit.request('GET /orgs/{org}/actions/permissions', { org });
+        selectedActionsEnabled = currentPermissions.allowed_actions === 'selected';
+        if (!selectedActionsEnabled) {
+          selectedActionsBlockReason = `current: "${currentPermissions.allowed_actions}"`;
+        }
+      } catch (error) {
+        const message = `Failed to verify actions permissions before syncing selected actions settings: ${error.message}`;
+        core.warning(`  ⚠️  ${message}`);
+        if (Object.keys(selectedActionsSettings).length > 0) {
+          subResults.push(createSubResult('actions-policy-selected-actions-update', SubResultStatus.WARNING, message));
+        }
+        if (allowList) {
+          subResults.push(createSubResult('actions-policy-allow-list-update', SubResultStatus.WARNING, message));
+        }
+        return { subResults, failed: true };
+      }
+    }
+
+    if (!selectedActionsEnabled) {
+      const message =
+        `Skipping selected actions settings because allowed_actions must be "selected" ` +
+        `before managing selected actions or the allow list (${selectedActionsBlockReason})`;
+
+      core.warning(`  ⚠️  ${message}`);
+
+      if (Object.keys(selectedActionsSettings).length > 0) {
+        subResults.push(createSubResult('actions-policy-selected-actions-update', SubResultStatus.WARNING, message));
+      }
+      if (allowList) {
+        subResults.push(createSubResult('actions-policy-allow-list-update', SubResultStatus.WARNING, message));
+      }
+
+      return { subResults, failed: false };
+    }
+
+    const result = await syncActionsSelectedActions(
+      octokit,
+      org,
+      selectedActionsSettings,
+      allowList,
+      dryRun,
+      wouldPrefix
+    );
+    subResults.push(...result.subResults);
+    if (result.failed) return { subResults, failed: true };
+  }
+
+  return { subResults, failed: false };
+}
+
+/**
+ * Sync the /actions/permissions endpoint for allowed_actions.
+ * @param {Octokit} octokit
+ * @param {string} org
+ * @param {Object} desiredSettings
+ * @param {boolean} dryRun
+ * @param {string} wouldPrefix
+ * @returns {Promise<Object>}
+ */
+async function syncActionsPermissions(octokit, org, desiredSettings, dryRun, wouldPrefix) {
+  const subResults = [];
+
+  let current;
+  try {
+    const { data } = await octokit.request('GET /orgs/{org}/actions/permissions', { org });
+    current = data;
+  } catch (error) {
+    core.warning(`  ⚠️  Failed to fetch actions permissions: ${error.message}`);
+    subResults.push(
+      createSubResult(
+        'actions-policy-permissions-update',
+        SubResultStatus.WARNING,
+        `Failed to fetch actions permissions: ${error.message}`
+      )
+    );
+    return { subResults, failed: true };
+  }
+
+  const patch = {};
+  const changes = [];
+
+  for (const [apiKey, desiredValue] of Object.entries(desiredSettings)) {
+    const currentValue = current[apiKey];
+    const yamlKey = ACTIONS_POLICY_API_TO_YAML_KEY.get(apiKey) || apiKey;
+    if (currentValue !== desiredValue) {
+      patch[apiKey] = desiredValue;
+      changes.push(`${yamlKey}: ${currentValue} → ${desiredValue}`);
+    }
+  }
+
+  if (changes.length === 0) {
+    core.info(`  ✅ Actions permissions unchanged`);
+    return { subResults, failed: false };
+  }
+
+  for (const change of changes) {
+    core.info(`  🔧 ${wouldPrefix}Update ${change}`);
+  }
+
+  subResults.push(
+    createSubResult(
+      'actions-policy-permissions-update',
+      SubResultStatus.CHANGED,
+      `${wouldPrefix}update ${changes.length} setting(s): ${changes.join(', ')}`
+    )
+  );
+
+  if (!dryRun) {
+    try {
+      await octokit.request('PUT /orgs/{org}/actions/permissions', {
+        org,
+        enabled_repositories: current.enabled_repositories,
+        ...patch
+      });
+    } catch (error) {
+      core.warning(`  ⚠️  Failed to update actions permissions: ${error.message}`);
+      subResults[subResults.length - 1] = createSubResult(
+        'actions-policy-permissions-update',
+        SubResultStatus.WARNING,
+        `Failed to update actions permissions: ${error.message}`
+      );
+      return { subResults, failed: true };
+    }
+  }
+
+  return { subResults, failed: false };
+}
+
+/**
+ * Sync the /actions/permissions/workflow endpoint.
+ * @param {Octokit} octokit
+ * @param {string} org
+ * @param {Object} desiredSettings
+ * @param {boolean} dryRun
+ * @param {string} wouldPrefix
+ * @returns {Promise<Object>}
+ */
+async function syncActionsWorkflowPermissions(octokit, org, desiredSettings, dryRun, wouldPrefix) {
+  const subResults = [];
+
+  let current;
+  try {
+    const { data } = await octokit.request('GET /orgs/{org}/actions/permissions/workflow', { org });
+    current = data;
+  } catch (error) {
+    core.warning(`  ⚠️  Failed to fetch workflow permissions: ${error.message}`);
+    subResults.push(
+      createSubResult(
+        'actions-policy-workflow-update',
+        SubResultStatus.WARNING,
+        `Failed to fetch workflow permissions: ${error.message}`
+      )
+    );
+    return { subResults, failed: true };
+  }
+
+  const patch = {};
+  const changes = [];
+
+  for (const [apiKey, desiredValue] of Object.entries(desiredSettings)) {
+    const currentValue = current[apiKey];
+    const yamlKey = ACTIONS_POLICY_API_TO_YAML_KEY.get(apiKey) || apiKey;
+    if (currentValue !== desiredValue) {
+      patch[apiKey] = desiredValue;
+      changes.push(`${yamlKey}: ${currentValue} → ${desiredValue}`);
+    }
+  }
+
+  if (changes.length === 0) {
+    core.info(`  ✅ Workflow permissions unchanged`);
+    return { subResults, failed: false };
+  }
+
+  for (const change of changes) {
+    core.info(`  🔧 ${wouldPrefix}Update ${change}`);
+  }
+
+  subResults.push(
+    createSubResult(
+      'actions-policy-workflow-update',
+      SubResultStatus.CHANGED,
+      `${wouldPrefix}update ${changes.length} setting(s): ${changes.join(', ')}`
+    )
+  );
+
+  if (!dryRun) {
+    try {
+      await octokit.request('PUT /orgs/{org}/actions/permissions/workflow', {
+        org,
+        ...patch
+      });
+    } catch (error) {
+      core.warning(`  ⚠️  Failed to update workflow permissions: ${error.message}`);
+      subResults[subResults.length - 1] = createSubResult(
+        'actions-policy-workflow-update',
+        SubResultStatus.WARNING,
+        `Failed to update workflow permissions: ${error.message}`
+      );
+      return { subResults, failed: true };
+    }
+  }
+
+  return { subResults, failed: false };
+}
+
+/**
+ * Sync the /actions/permissions/selected-actions endpoint.
+ * @param {Octokit} octokit
+ * @param {string} org
+ * @param {Object} desiredSettings
+ * @param {string[]|null} allowList
+ * @param {boolean} dryRun
+ * @param {string} wouldPrefix
+ * @returns {Promise<Object>}
+ */
+async function syncActionsSelectedActions(octokit, org, desiredSettings, allowList, dryRun, wouldPrefix) {
+  const subResults = [];
+
+  let current;
+  try {
+    const { data } = await octokit.request('GET /orgs/{org}/actions/permissions/selected-actions', { org });
+    current = data;
+  } catch (error) {
+    core.warning(`  ⚠️  Failed to fetch selected actions settings: ${error.message}`);
+    subResults.push(
+      createSubResult(
+        'actions-policy-selected-actions-update',
+        SubResultStatus.WARNING,
+        `Failed to fetch selected actions settings: ${error.message}`
+      )
+    );
+    return { subResults, failed: true };
+  }
+
+  const patch = {};
+  const changes = [];
+
+  // Compare boolean settings
+  for (const [apiKey, desiredValue] of Object.entries(desiredSettings)) {
+    const currentValue = current[apiKey];
+    const yamlKey = ACTIONS_POLICY_API_TO_YAML_KEY.get(apiKey) || apiKey;
+    if (currentValue !== desiredValue) {
+      patch[apiKey] = desiredValue;
+      changes.push(`${yamlKey}: ${currentValue} → ${desiredValue}`);
+    }
+  }
+
+  // Compare allow list patterns
+  if (allowList) {
+    const currentPatterns = uniqueActionsAllowListPatterns(current.patterns_allowed || []);
+    const desiredPatterns = uniqueActionsAllowListPatterns(allowList);
+    const sortedCurrent = [...currentPatterns].sort();
+    const sortedDesired = [...desiredPatterns].sort();
+    const patternsChanged =
+      sortedCurrent.length !== sortedDesired.length || sortedCurrent.some((v, i) => v !== sortedDesired[i]);
+
+    if (patternsChanged) {
+      patch.patterns_allowed = desiredPatterns;
+      const currentPatternSet = new Set(currentPatterns);
+      const desiredPatternSet = new Set(desiredPatterns);
+      const added = desiredPatterns.filter(p => !currentPatternSet.has(p));
+      const removed = currentPatterns.filter(p => !desiredPatternSet.has(p));
+      const details = [];
+      if (added.length > 0) details.push(`+${added.length} added`);
+      if (removed.length > 0) details.push(`-${removed.length} removed`);
+      changes.push(`allow-list: ${details.join(', ')} (${desiredPatterns.length} total)`);
+    }
+  }
+
+  if (changes.length === 0) {
+    core.info(`  ✅ Selected actions settings unchanged`);
+    return { subResults, failed: false };
+  }
+
+  for (const change of changes) {
+    core.info(`  🔧 ${wouldPrefix}Update ${change}`);
+  }
+
+  // Determine the sync kind for sub-results
+  const hasSettingChanges = Object.keys(desiredSettings).some(k => patch[k] !== undefined);
+  const hasAllowListChanges = patch.patterns_allowed !== undefined;
+
+  if (hasSettingChanges) {
+    const settingChanges = changes.filter(c => !c.startsWith('allow-list:'));
+    subResults.push(
+      createSubResult(
+        'actions-policy-selected-actions-update',
+        SubResultStatus.CHANGED,
+        `${wouldPrefix}update ${settingChanges.length} setting(s): ${settingChanges.join(', ')}`
+      )
+    );
+  }
+
+  if (hasAllowListChanges) {
+    const allowListChange = changes.find(c => c.startsWith('allow-list:'));
+    subResults.push(
+      createSubResult(
+        'actions-policy-allow-list-update',
+        SubResultStatus.CHANGED,
+        `${wouldPrefix}update ${allowListChange}`
+      )
+    );
+  }
+
+  if (!dryRun) {
+    try {
+      // Build the full PUT body: preserve current values for unmanaged keys
+      const putBody = {
+        github_owned_allowed: current.github_owned_allowed,
+        verified_allowed: current.verified_allowed,
+        patterns_allowed: current.patterns_allowed || [],
+        ...patch
+      };
+
+      await octokit.request('PUT /orgs/{org}/actions/permissions/selected-actions', {
+        org,
+        ...putBody
+      });
+    } catch (error) {
+      core.warning(`  ⚠️  Failed to update selected actions settings: ${error.message}`);
+      for (let i = 0; i < subResults.length; i++) {
+        subResults[i] = createSubResult(
+          subResults[i].kind,
+          SubResultStatus.WARNING,
+          `Failed to update selected actions settings: ${error.message}`
+        );
+      }
+      return { subResults, failed: true };
+    }
+  }
+
+  return { subResults, failed: false };
+}
+
 // ─── Organization Rulesets Sync ─────────────────────────────────────────────────
 
 /**
@@ -1638,6 +2340,8 @@ export async function run() {
     const issueTypesFile = core.getInput('issue-types-file');
     const deleteUnmanagedIssueTypes = getBooleanInput('delete-unmanaged-issue-types') ?? false;
     const memberPrivilegesFromInputs = getMemberPrivilegesFromInputs();
+    const actionsPolicyFromInputs = getActionsPolicyFromInputs();
+    const actionsAllowListFile = core.getInput('actions-allow-list-file');
     const dryRun = getBooleanInput('dry-run') ?? false;
 
     core.info('Starting Bulk GitHub Organization Settings Sync Action...');
@@ -1658,7 +2362,9 @@ export async function run() {
       rulesetsFiles,
       deleteUnmanagedRulesets,
       issueTypesFile,
-      memberPrivilegesFromInputs
+      memberPrivilegesFromInputs,
+      actionsPolicyFromInputs,
+      actionsAllowListFile
     );
 
     // Check that at least one setting type is specified
@@ -1666,12 +2372,18 @@ export async function run() {
     const hasRulesets = orgList.some(o => o.rulesetsFiles && o.rulesetsFiles.length > 0);
     const hasIssueTypes = orgList.some(o => o.issueTypes && o.issueTypes.length > 0);
     const hasMemberPrivileges = orgList.some(o => o.memberPrivileges && Object.keys(o.memberPrivileges).length > 0);
-    if (!hasCustomProperties && !hasRulesets && !hasIssueTypes && !hasMemberPrivileges) {
+    const hasActionsPolicy = orgList.some(
+      o =>
+        (o.actionsPolicy && Object.keys(o.actionsPolicy).length > 0) ||
+        (o.actionsAllowList && o.actionsAllowList.length > 0)
+    );
+    if (!hasCustomProperties && !hasRulesets && !hasIssueTypes && !hasMemberPrivileges && !hasActionsPolicy) {
       throw new Error(
         'At least one setting must be specified. Provide custom properties via ' +
           '"organizations-file" or via "organizations" + "custom-properties-file" inputs, ' +
-          'provide issue types via "issue-types-file", rulesets via "rulesets-file", or member privileges via ' +
-          'individual inputs (e.g., "default-repository-permission").'
+          'provide issue types via "issue-types-file", rulesets via "rulesets-file", member privileges via ' +
+          'individual inputs (e.g., "default-repository-permission"), or actions policy via ' +
+          'individual inputs (e.g., "actions-policy-allowed-actions").'
       );
     }
 
@@ -1781,6 +2493,24 @@ export async function run() {
             result.error = result.error
               ? `${result.error}; Member privileges sync failed`
               : 'Member privileges sync failed';
+          }
+        }
+
+        // Sync actions policy
+        const hasActionsPolicyCfg =
+          (orgConfig.actionsPolicy && Object.keys(orgConfig.actionsPolicy).length > 0) ||
+          (orgConfig.actionsAllowList && orgConfig.actionsAllowList.length > 0);
+        if (hasActionsPolicyCfg) {
+          const policySettings = orgConfig.actionsPolicy || {};
+          const allowList = orgConfig.actionsAllowList || null;
+          const settingCount = Object.keys(policySettings).length + (allowList ? 1 : 0);
+          core.info(`  🔒 Syncing actions policy (${settingCount} setting(s))...`);
+          const apResult = await syncActionsPolicy(octokit, org, policySettings, allowList, dryRun);
+          result.subResults.push(...apResult.subResults);
+
+          if (apResult.failed) {
+            result.success = false;
+            result.error = result.error ? `${result.error}; Actions policy sync failed` : 'Actions policy sync failed';
           }
         }
 
