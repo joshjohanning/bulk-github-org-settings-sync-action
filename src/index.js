@@ -1762,7 +1762,10 @@ export async function syncCustomOrgRoles(octokit, org, desiredRoles, deleteUnman
     }
   }
 
-  const existingMap = new Map(existingRoles.map(r => [r.name, r]));
+  // Filter to only manageable (organization-created) roles; skip predefined/enterprise roles
+  const manageableOrgRoles = existingRoles.filter(r => r.source === 'Organization');
+
+  const existingMap = new Map(manageableOrgRoles.map(r => [r.name, r]));
   const desiredMap = new Map(desiredRoles.map(r => [r.name, r]));
 
   // Determine creates and updates
@@ -1834,7 +1837,7 @@ export async function syncCustomOrgRoles(octokit, org, desiredRoles, deleteUnman
 
   // Determine and apply deletions
   if (deleteUnmanaged) {
-    for (const existing of existingRoles) {
+    for (const existing of manageableOrgRoles) {
       if (!desiredMap.has(existing.name)) {
         core.info(`  🗑️ ${wouldPrefix}Delete custom org role: ${existing.name}`);
         subResults.push(

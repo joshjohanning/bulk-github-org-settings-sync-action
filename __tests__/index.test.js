@@ -2194,7 +2194,9 @@ orgs:
         if (name === 'delete-unmanaged-org-roles') return true;
         return false;
       });
-      mockPaginate.mockResolvedValueOnce([{ id: 1, name: 'Unmanaged', description: null, permissions: ['x'] }]);
+      mockPaginate.mockResolvedValueOnce([
+        { id: 1, name: 'Unmanaged', description: null, permissions: ['x'], source: 'Organization' }
+      ]);
 
       await run();
 
@@ -3279,7 +3281,7 @@ orgs:
 
     test('should update an existing org role when changed', async () => {
       mockPaginate.mockResolvedValueOnce([
-        { id: 1, name: 'Auditor', description: 'Old', permissions: ['read_audit_log'] }
+        { id: 1, name: 'Auditor', description: 'Old', permissions: ['read_audit_log'], source: 'Organization' }
       ]);
       mockRequest.mockResolvedValueOnce({ data: {} });
 
@@ -3299,7 +3301,9 @@ orgs:
     });
 
     test('should delete unmanaged org roles when enabled', async () => {
-      mockPaginate.mockResolvedValueOnce([{ id: 1, name: 'Unmanaged', description: null, permissions: ['x'] }]);
+      mockPaginate.mockResolvedValueOnce([
+        { id: 1, name: 'Unmanaged', description: null, permissions: ['x'], source: 'Organization' }
+      ]);
       mockRequest.mockResolvedValueOnce({ data: {} });
 
       const result = await syncCustomOrgRoles(mockOctokit, 'test-org', [], true, false);
@@ -3313,7 +3317,9 @@ orgs:
     });
 
     test('should not delete unmanaged roles when disabled', async () => {
-      mockPaginate.mockResolvedValueOnce([{ id: 1, name: 'Unmanaged', description: null, permissions: ['x'] }]);
+      mockPaginate.mockResolvedValueOnce([
+        { id: 1, name: 'Unmanaged', description: null, permissions: ['x'], source: 'Organization' }
+      ]);
 
       const result = await syncCustomOrgRoles(mockOctokit, 'test-org', [], false, false);
 
@@ -3330,6 +3336,37 @@ orgs:
       expect(result.subResults).toHaveLength(1);
       expect(result.subResults[0].message).toContain('Would');
       expect(mockPaginate).toHaveBeenCalledTimes(1);
+    });
+
+    test('should not modify or delete predefined/enterprise org roles', async () => {
+      mockPaginate.mockResolvedValueOnce([
+        {
+          id: 1,
+          name: 'Predefined Role',
+          description: 'Built-in',
+          permissions: ['read_audit_log'],
+          source: 'Predefined'
+        },
+        {
+          id: 2,
+          name: 'Enterprise Role',
+          description: 'Enterprise',
+          permissions: ['read_audit_log'],
+          source: 'Enterprise'
+        },
+        { id: 3, name: 'Custom Role', description: 'Custom', permissions: ['read_audit_log'], source: 'Organization' }
+      ]);
+      mockRequest.mockResolvedValueOnce({ data: {} });
+
+      // deleteUnmanaged=true; only the Organization-sourced role should be deleted
+      const result = await syncCustomOrgRoles(mockOctokit, 'test-org', [], true, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('custom-org-role-delete');
+      expect(mockRequest).toHaveBeenCalledWith('DELETE /orgs/{org}/organization-roles/{role_id}', {
+        org: 'test-org',
+        role_id: 3
+      });
     });
   });
 
