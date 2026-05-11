@@ -1,0 +1,20 @@
+# Custom organization roles configuration
+# Use with: custom-org-roles-file: './custom-org-roles.yml'
+#
+# Requires GitHub Enterprise Cloud (GHEC)
+#
+# Each role defines a name, optional description, and a list of permissions.
+# See GitHub docs for available organization permissions:
+# https://docs.github.com/en/enterprise-cloud@latest/organizations/managing-peoples-access-to-your-organization-with-roles/managing-custom-organization-roles
+
+- name: Security Auditor
+  description: 'Can view security alerts and manage security settings'
+  permissions:
+    - read_audit_log
+    - manage_organization_security
+
+- name: CI/CD Manager
+  description: 'Can manage Actions settings and self-hosted runners'
+  permissions:
+    - manage_organization_actions_settings
+    - manage_organization_runners

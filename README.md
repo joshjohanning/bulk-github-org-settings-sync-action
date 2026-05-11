@@ -554,6 +554,63 @@ By default, syncing issue types will create or update the specified types, but w
 
 ---
 
+## Syncing Custom Organization Roles
+
+> [!IMPORTANT]
+> Custom organization roles require **GitHub Enterprise Cloud (GHEC)**.
+
+Sync custom organization roles across organizations. These define custom roles with specific organization-level permissions that can be assigned to members.
+
+> [!TIP]
+> 📄 **See full examples:** [sample-configuration/custom-org-roles.yml](sample-configuration/custom-org-roles.yml)
+
+Create a YAML file defining your custom organization roles:
+
+**`custom-org-roles.yml`:**
+
+```yaml
+- name: Security Auditor
+  description: 'Can view security alerts and manage security settings'
+  permissions:
+    - read_audit_log
+    - manage_organization_security
+
+- name: CI/CD Manager
+  description: 'Can manage Actions settings and self-hosted runners'
+  permissions:
+    - manage_organization_actions_settings
+    - manage_organization_runners
+```
+
+Then reference it in your workflow:
+
+```yml
+- name: Sync Organization Settings
+  uses: joshjohanning/bulk-github-org-settings-sync-action@v1
+  with:
+    github-token: ${{ secrets.ORG_ADMIN_TOKEN }}
+    organizations: 'my-org,my-other-org'
+    custom-org-roles-file: './custom-org-roles.yml'
+    delete-unmanaged-org-roles: false
+```
+
+**Behavior:**
+
+- Creates new roles that don't exist yet
+- Updates roles that differ from the config (description or permissions)
+- Only applies changes when the role definition differs from what's already configured
+- In dry-run mode, shows what would be changed without applying
+
+### `delete-unmanaged-org-roles`
+
+When `delete-unmanaged-org-roles: true`:
+
+- Creates and updates roles from the config
+- **Deletes all other custom org roles not defined in the config**
+- In dry-run mode, shows which roles would be deleted without actually deleting them
+
+---
+
 ## Syncing Organization Profile
 
 Sync organization profile/branding fields across organizations. These control the public-facing identity of the organization.
@@ -575,7 +632,67 @@ Set organization profile fields directly as action inputs:
     org-blog: 'https://myorg.com'
 ```
 
+---
+
+## Syncing Custom Repository Roles
+
+> [!IMPORTANT]
+> Custom repository roles require **GitHub Enterprise Cloud (GHEC)**.
+
+Sync custom repository roles across organizations. These define custom roles that extend a base role (read, triage, write, maintain, admin) with additional repository-level permissions.
+
+> [!TIP]
+> 📄 **See full examples:** [sample-configuration/custom-repo-roles.yml](sample-configuration/custom-repo-roles.yml)
+
+Create a YAML file defining your custom repository roles:
+
+**`custom-repo-roles.yml`:**
+
+```yaml
+- name: Contractor
+  description: 'Write access without sensitive settings'
+  base-role: write
+  permissions:
+    - delete_alerts_code_scanning
+
+- name: Release Manager
+  description: 'Can manage releases and deployments'
+  base-role: maintain
+  permissions:
+    - manage_deploy_keys
+    - manage_webhooks
+```
+
+Then reference it in your workflow:
+
+```yml
+- name: Sync Organization Settings
+  uses: joshjohanning/bulk-github-org-settings-sync-action@v1
+  with:
+    github-token: ${{ secrets.ORG_ADMIN_TOKEN }}
+    organizations: 'my-org,my-other-org'
+    custom-repo-roles-file: './custom-repo-roles.yml'
+    delete-unmanaged-repo-roles: false
+```
+
 **Behavior:**
+
+- Creates new roles that don't exist yet
+- Updates roles that differ from the config (description, base role, or permissions)
+- Only applies changes when the role definition differs from what's already configured
+- In dry-run mode, shows what would be changed without applying
+
+### `delete-unmanaged-repo-roles`
+
+When `delete-unmanaged-repo-roles: true`:
+
+- Creates and updates roles from the config
+- **Deletes all other custom repo roles not defined in the config**
+- In dry-run mode, shows which roles would be deleted without actually deleting them
+
+### Per-Org Custom Role Overrides
+
+In `orgs.yml`, you can override custom roles per organization using inline definitions or per-org files:
 
 - Only fields included in the config are managed — omitted fields remain unchanged
 - If all managed fields already match the config, no update/PATCH call is made
@@ -588,6 +705,23 @@ In `orgs.yml`, use `org-profile` to override specific fields for an org:
 ```yaml
 orgs:
   - org: my-org
+    # inherits base roles from custom-org-roles-file / custom-repo-roles-file
+
+  - org: my-other-org
+    custom-org-roles-file: './config/other-org-roles.yml' # Use different file for this org
+    custom-org-roles:
+      - name: Security Auditor
+        description: 'Override for this org'
+        permissions:
+          - read_audit_log
+    custom-repo-roles:
+      - name: Contractor
+        description: 'Override for this org'
+        base-role: write
+        permissions:
+          - delete_alerts_code_scanning
+    delete-unmanaged-org-roles: true
+    delete-unmanaged-repo-roles: true
     # inherits base org profile action inputs
 
   - org: my-other-org
@@ -669,7 +803,47 @@ orgs:
 
 ## Syncing Code Security Configurations
 
-Sync named code security configurations across organizations. These configurations define security feature enablement policies (e.g., Dependabot, secret scanning, code scanning) that can be applied to repositories.
+| Input                                         | Description                                                                         | Required | Default                 |
+| --------------------------------------------- | ----------------------------------------------------------------------------------- | -------- | ----------------------- |
+| `github-token`                                | GitHub token for API access (requires `admin:org` scope)                            | Yes      |                         |
+| `github-api-url`                              | GitHub API URL (e.g., `https://api.github.com` or `https://ghes.domain.com/api/v3`) | No       | `${{ github.api_url }}` |
+| `organizations`                               | Comma-separated list of organization names                                          | No       |                         |
+| `organizations-file`                          | Path to YAML file containing organization settings configuration                    | No       |                         |
+| `custom-properties-file`                      | Path to a YAML file defining custom property schemas                                | No       |                         |
+| `delete-unmanaged-properties`                 | Delete custom properties not defined in the configuration file                      | No       | `false`                 |
+| `issue-types-file`                            | Path to a YAML file defining issue type definitions                                 | No       |                         |
+| `delete-unmanaged-issue-types`                | Delete issue types not defined in the configuration file                            | No       | `false`                 |
+| `default-repository-permission`               | Default permission for org members: `read`, `write`, `admin`, `none`                | No       |                         |
+| `members-can-create-repositories`             | Whether members can create repositories                                             | No       |                         |
+| `members-can-create-public-repositories`      | Whether members can create public repositories                                      | No       |                         |
+| `members-can-create-private-repositories`     | Whether members can create private repositories                                     | No       |                         |
+| `members-can-create-internal-repositories`    | Whether members can create internal repositories (GHEC/GHES only)                   | No       |                         |
+| `members-can-fork-private-repositories`       | Whether members can fork private repositories                                       | No       |                         |
+| `web-commit-signoff-required`                 | Whether web UI commits require signoff                                              | No       |                         |
+| `members-can-create-pages`                    | Whether members can create GitHub Pages sites                                       | No       |                         |
+| `members-can-create-public-pages`             | Whether members can create public GitHub Pages sites                                | No       |                         |
+| `members-can-create-private-pages`            | Whether members can create private GitHub Pages sites                               | No       |                         |
+| `members-can-invite-outside-collaborators`    | Whether members can invite outside collaborators                                    | No       |                         |
+| `members-can-create-teams`                    | Whether members can create teams                                                    | No       |                         |
+| `members-can-delete-repositories`             | Whether members can delete repositories                                             | No       |                         |
+| `members-can-change-repo-visibility`          | Whether members can change repository visibility                                    | No       |                         |
+| `members-can-delete-issues`                   | Whether members can delete issues                                                   | No       |                         |
+| `default-repository-branch`                   | Default branch name for new repositories                                            | No       |                         |
+| `deploy-keys-enabled-for-repositories`        | Whether deploy keys can be added to repositories                                    | No       |                         |
+| `readers-can-create-discussions`              | Whether users with read access can create discussions                               | No       |                         |
+| `members-can-view-dependency-insights`        | Whether members can view dependency insights                                        | No       |                         |
+| `display-commenter-full-name-setting-enabled` | Whether to display commenter full name in issues and PRs                            | No       |                         |
+| `rulesets-file`                               | Comma-separated paths to JSON files, each with a single org ruleset config          | No       |                         |
+| `delete-unmanaged-rulesets`                   | Delete all other rulesets besides those being synced                                | No       | `false`                 |
+| `custom-org-roles-file`                       | Path to a YAML file defining custom organization role definitions (GHEC only)       | No       |                         |
+| `delete-unmanaged-org-roles`                  | Delete custom org roles not defined in the configuration file                       | No       | `false`                 |
+| `custom-repo-roles-file`                      | Path to a YAML file defining custom repository role definitions (GHEC only)         | No       |                         |
+| `delete-unmanaged-repo-roles`                 | Delete custom repo roles not defined in the configuration file                      | No       | `false`                 |
+| `dry-run`                                     | Preview changes without applying them                                               | No       | `false`                 |
+
+> [!NOTE]
+> You must provide either `organizations` or `organizations-file`. The `custom-properties-file`, `issue-types-file`, `rulesets-file`, `custom-org-roles-file`, and `custom-repo-roles-file` inputs provide base settings for all orgs and can be combined with either approach. Member privilege settings can be provided as individual inputs (e.g., `default-repository-permission`). Per-org overrides in `organizations-file` layer on top of the base.
+> Sync named code security configurations across organizations. These configurations define security feature enablement policies (e.g., Dependabot, secret scanning, code scanning) that can be applied to repositories.
 
 ### Basic Usage
 

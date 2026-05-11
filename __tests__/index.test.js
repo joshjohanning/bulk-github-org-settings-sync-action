@@ -77,6 +77,14 @@ inputs:
     description: 'Rulesets file'
   delete-unmanaged-rulesets:
     description: 'Delete unmanaged rulesets'
+  custom-org-roles-file:
+    description: 'Custom org roles file'
+  delete-unmanaged-org-roles:
+    description: 'Delete unmanaged org roles'
+  custom-repo-roles-file:
+    description: 'Custom repo roles file'
+  delete-unmanaged-repo-roles:
+    description: 'Delete unmanaged repo roles'
   code-security-configurations-file:
     description: 'Code security configurations file'
   delete-unmanaged-code-security-configurations:
@@ -184,9 +192,18 @@ const {
   syncOrgRulesets,
   mergeCustomProperties,
   mergeMemberPrivileges,
+  mergeCustomRoles,
   parseMemberPrivileges,
   getMemberPrivilegesFromInputs,
   syncMemberPrivileges,
+  parseCustomOrgRolesFile,
+  normalizeCustomOrgRoles,
+  compareCustomOrgRole,
+  syncCustomOrgRoles,
+  parseCustomRepoRolesFile,
+  normalizeCustomRepoRoles,
+  compareCustomRepoRole,
+  syncCustomRepoRoles,
   MEMBER_PRIVILEGE_SETTINGS,
   ORG_PROFILE_SETTINGS,
   parseOrgProfile,
@@ -2156,6 +2173,74 @@ orgs:
       expect(mockCore.setOutput).toHaveBeenCalledWith('updated-organizations', '1');
       expect(mockCore.setOutput).toHaveBeenCalledWith('changed-organizations', '1');
     });
+
+    test('should allow empty custom org roles file when delete-unmanaged-org-roles is enabled', async () => {
+      setMockFileContent('[]', '/mock/custom-org-roles.yml');
+
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          'github-api-url': 'https://api.github.com',
+          organizations: 'my-org',
+          'organizations-file': '',
+          'custom-org-roles-file': '/mock/custom-org-roles.yml',
+          'delete-unmanaged-org-roles': 'true',
+          'dry-run': 'true'
+        };
+        return inputs[name] ?? '';
+      });
+      mockCore.getBooleanInput.mockImplementation(name => {
+        if (name === 'dry-run') return true;
+        if (name === 'delete-unmanaged-org-roles') return true;
+        return false;
+      });
+      mockPaginate.mockResolvedValueOnce([
+        { id: 1, name: 'Unmanaged', description: null, permissions: ['x'], source: 'Organization' }
+      ]);
+
+      await run();
+
+      expect(mockCore.setFailed).not.toHaveBeenCalled();
+      expect(mockPaginate).toHaveBeenCalledWith(
+        'GET /orgs/{org}/organization-roles',
+        { org: 'my-org', per_page: 100 },
+        expect.any(Function)
+      );
+      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-organizations', '1');
+    });
+
+    test('should allow empty custom repo roles file when delete-unmanaged-repo-roles is enabled', async () => {
+      setMockFileContent('[]', '/mock/custom-repo-roles.yml');
+
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          'github-api-url': 'https://api.github.com',
+          organizations: 'my-org',
+          'organizations-file': '',
+          'custom-repo-roles-file': '/mock/custom-repo-roles.yml',
+          'delete-unmanaged-repo-roles': 'true',
+          'dry-run': 'true'
+        };
+        return inputs[name] ?? '';
+      });
+      mockCore.getBooleanInput.mockImplementation(name => {
+        if (name === 'dry-run') return true;
+        if (name === 'delete-unmanaged-repo-roles') return true;
+        return false;
+      });
+      mockPaginate.mockResolvedValueOnce([{ id: 1, name: 'Unmanaged', description: null, permissions: ['x'] }]);
+
+      await run();
+
+      expect(mockCore.setFailed).not.toHaveBeenCalled();
+      expect(mockPaginate).toHaveBeenCalledWith(
+        'GET /orgs/{org}/custom-repository-roles',
+        { org: 'my-org', per_page: 100 },
+        expect.any(Function)
+      );
+      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-organizations', '1');
+    });
   });
 
   // ─── syncOrgRulesets ────────────────────────────────────────────────────
@@ -3028,6 +3113,320 @@ orgs:
     });
   });
 
+  // ─── Custom Organization Roles ──────────────────────────────────────
+
+  describe('normalizeCustomOrgRoles', () => {
+    test('should normalize valid custom org roles', () => {
+      const roles = [
+        {
+          name: 'Security Auditor',
+          description: 'Can view security alerts',
+          permissions: ['read_audit_log', 'manage_organization_security']
+        }
+      ];
+
+      const result = normalizeCustomOrgRoles(roles);
+
+      expect(result).toEqual([
+        {
+          name: 'Security Auditor',
+          description: 'Can view security alerts',
+          permissions: ['read_audit_log', 'manage_organization_security']
+        }
+      ]);
+    });
+
+    test('should throw if role has no name', () => {
+      expect(() => normalizeCustomOrgRoles([{ permissions: ['read_audit_log'] }])).toThrow(
+        'Each custom organization role must have a "name" field'
+      );
+    });
+
+    test('should throw if role has no permissions', () => {
+      expect(() => normalizeCustomOrgRoles([{ name: 'Test' }])).toThrow('must have a non-empty "permissions" array');
+    });
+
+    test('should throw if role has empty permissions', () => {
+      expect(() => normalizeCustomOrgRoles([{ name: 'Test', permissions: [] }])).toThrow(
+        'must have a non-empty "permissions" array'
+      );
+    });
+
+    test('should set description to null when not provided', () => {
+      const result = normalizeCustomOrgRoles([{ name: 'Test', permissions: ['read_audit_log'] }]);
+      expect(result[0].description).toBeNull();
+    });
+  });
+
+  describe('normalizeCustomRepoRoles', () => {
+    test('should normalize valid custom repo roles', () => {
+      const roles = [
+        {
+          name: 'Contractor',
+          description: 'Limited write access',
+          'base-role': 'write',
+          permissions: ['delete_alerts_code_scanning']
+        }
+      ];
+
+      const result = normalizeCustomRepoRoles(roles);
+
+      expect(result).toEqual([
+        {
+          name: 'Contractor',
+          description: 'Limited write access',
+          base_role: 'write',
+          permissions: ['delete_alerts_code_scanning']
+        }
+      ]);
+    });
+
+    test('should allow admin base-role', () => {
+      const result = normalizeCustomRepoRoles([{ name: 'Admin Plus', 'base-role': 'admin', permissions: ['x'] }]);
+
+      expect(result[0].base_role).toBe('admin');
+    });
+
+    test('should throw if role has no base-role', () => {
+      expect(() => normalizeCustomRepoRoles([{ name: 'Test', permissions: ['x'] }])).toThrow(
+        'must have a "base-role" field'
+      );
+    });
+
+    test('should throw for invalid base-role', () => {
+      expect(() => normalizeCustomRepoRoles([{ name: 'Test', 'base-role': 'superadmin', permissions: ['x'] }])).toThrow(
+        'invalid base-role "superadmin"'
+      );
+    });
+
+    test('should throw if role has no permissions', () => {
+      expect(() => normalizeCustomRepoRoles([{ name: 'Test', 'base-role': 'write' }])).toThrow(
+        'must have a non-empty "permissions" array'
+      );
+    });
+  });
+
+  describe('compareCustomOrgRole', () => {
+    test('should detect no changes', () => {
+      const existing = { name: 'Role', description: 'Desc', permissions: ['a', 'b'] };
+      const desired = { name: 'Role', description: 'Desc', permissions: ['a', 'b'] };
+      const { changed } = compareCustomOrgRole(existing, desired);
+      expect(changed).toBe(false);
+    });
+
+    test('should detect description change', () => {
+      const existing = { name: 'Role', description: 'Old', permissions: ['a'] };
+      const desired = { name: 'Role', description: 'New', permissions: ['a'] };
+      const { changed, changes } = compareCustomOrgRole(existing, desired);
+      expect(changed).toBe(true);
+      expect(changes).toContain('description updated');
+    });
+
+    test('should detect permissions change regardless of order', () => {
+      const existing = { name: 'Role', description: null, permissions: ['a', 'b'] };
+      const desired = { name: 'Role', description: null, permissions: ['a', 'c'] };
+      const { changed, changes } = compareCustomOrgRole(existing, desired);
+      expect(changed).toBe(true);
+      expect(changes).toContain('permissions updated');
+    });
+
+    test('should not detect change when permissions are same but different order', () => {
+      const existing = { name: 'Role', description: null, permissions: ['b', 'a'] };
+      const desired = { name: 'Role', description: null, permissions: ['a', 'b'] };
+      const { changed } = compareCustomOrgRole(existing, desired);
+      expect(changed).toBe(false);
+    });
+  });
+
+  describe('compareCustomRepoRole', () => {
+    test('should detect no changes', () => {
+      const existing = { name: 'Role', description: 'Desc', base_role: 'write', permissions: ['a'] };
+      const desired = { name: 'Role', description: 'Desc', base_role: 'write', permissions: ['a'] };
+      const { changed } = compareCustomRepoRole(existing, desired);
+      expect(changed).toBe(false);
+    });
+
+    test('should detect base_role change', () => {
+      const existing = { name: 'Role', description: null, base_role: 'read', permissions: ['a'] };
+      const desired = { name: 'Role', description: null, base_role: 'write', permissions: ['a'] };
+      const { changed, changes } = compareCustomRepoRole(existing, desired);
+      expect(changed).toBe(true);
+      expect(changes).toContain('base_role: read → write');
+    });
+  });
+
+  describe('syncCustomOrgRoles', () => {
+    test('should create a new org role', async () => {
+      mockPaginate.mockResolvedValueOnce([]);
+      mockRequest.mockResolvedValueOnce({ data: {} });
+
+      const desiredRoles = [{ name: 'Auditor', description: 'Audit role', permissions: ['read_audit_log'] }];
+
+      const result = await syncCustomOrgRoles(mockOctokit, 'test-org', desiredRoles, false, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('custom-org-role-create');
+      expect(mockPaginate).toHaveBeenCalledWith(
+        'GET /orgs/{org}/organization-roles',
+        { org: 'test-org', per_page: 100 },
+        expect.any(Function)
+      );
+      expect(mockRequest).toHaveBeenCalledWith('POST /orgs/{org}/organization-roles', {
+        org: 'test-org',
+        name: 'Auditor',
+        description: 'Audit role',
+        permissions: ['read_audit_log']
+      });
+    });
+
+    test('should update an existing org role when changed', async () => {
+      mockPaginate.mockResolvedValueOnce([
+        { id: 1, name: 'Auditor', description: 'Old', permissions: ['read_audit_log'], source: 'Organization' }
+      ]);
+      mockRequest.mockResolvedValueOnce({ data: {} });
+
+      const desiredRoles = [{ name: 'Auditor', description: 'New', permissions: ['read_audit_log'] }];
+
+      const result = await syncCustomOrgRoles(mockOctokit, 'test-org', desiredRoles, false, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('custom-org-role-update');
+      expect(mockRequest).toHaveBeenCalledWith('PATCH /orgs/{org}/organization-roles/{role_id}', {
+        org: 'test-org',
+        role_id: 1,
+        name: 'Auditor',
+        description: 'New',
+        permissions: ['read_audit_log']
+      });
+    });
+
+    test('should delete unmanaged org roles when enabled', async () => {
+      mockPaginate.mockResolvedValueOnce([
+        { id: 1, name: 'Unmanaged', description: null, permissions: ['x'], source: 'Organization' }
+      ]);
+      mockRequest.mockResolvedValueOnce({ data: {} });
+
+      const result = await syncCustomOrgRoles(mockOctokit, 'test-org', [], true, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('custom-org-role-delete');
+      expect(mockRequest).toHaveBeenCalledWith('DELETE /orgs/{org}/organization-roles/{role_id}', {
+        org: 'test-org',
+        role_id: 1
+      });
+    });
+
+    test('should not delete unmanaged roles when disabled', async () => {
+      mockPaginate.mockResolvedValueOnce([
+        { id: 1, name: 'Unmanaged', description: null, permissions: ['x'], source: 'Organization' }
+      ]);
+
+      const result = await syncCustomOrgRoles(mockOctokit, 'test-org', [], false, false);
+
+      expect(result.subResults).toHaveLength(0);
+    });
+
+    test('should preview changes in dry-run mode', async () => {
+      mockPaginate.mockResolvedValueOnce([]);
+
+      const desiredRoles = [{ name: 'Auditor', description: null, permissions: ['read_audit_log'] }];
+
+      const result = await syncCustomOrgRoles(mockOctokit, 'test-org', desiredRoles, false, true);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].message).toContain('Would');
+      expect(mockPaginate).toHaveBeenCalledTimes(1);
+    });
+
+    test('should not modify or delete predefined/enterprise org roles', async () => {
+      mockPaginate.mockResolvedValueOnce([
+        {
+          id: 1,
+          name: 'Predefined Role',
+          description: 'Built-in',
+          permissions: ['read_audit_log'],
+          source: 'Predefined'
+        },
+        {
+          id: 2,
+          name: 'Enterprise Role',
+          description: 'Enterprise',
+          permissions: ['read_audit_log'],
+          source: 'Enterprise'
+        },
+        { id: 3, name: 'Custom Role', description: 'Custom', permissions: ['read_audit_log'], source: 'Organization' }
+      ]);
+      mockRequest.mockResolvedValueOnce({ data: {} });
+
+      // deleteUnmanaged=true; only the Organization-sourced role should be deleted
+      const result = await syncCustomOrgRoles(mockOctokit, 'test-org', [], true, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('custom-org-role-delete');
+      expect(mockRequest).toHaveBeenCalledWith('DELETE /orgs/{org}/organization-roles/{role_id}', {
+        org: 'test-org',
+        role_id: 3
+      });
+    });
+
+    test('should handle 404 on GET as empty org roles list', async () => {
+      const error404 = new Error('Not Found');
+      error404.status = 404;
+      mockPaginate.mockRejectedValueOnce(error404);
+      mockRequest.mockResolvedValueOnce({ data: {} });
+
+      const desiredRoles = [{ name: 'Auditor', description: null, permissions: ['read_audit_log'] }];
+      const result = await syncCustomOrgRoles(mockOctokit, 'test-org', desiredRoles, false, false);
+
+      // 404 treated as empty: should attempt to create
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('custom-org-role-create');
+      expect(result.failed).toBe(false);
+    });
+
+    test('should mark create API errors as warning and set failed', async () => {
+      mockPaginate.mockResolvedValueOnce([]);
+      mockRequest.mockRejectedValueOnce(new Error('Forbidden'));
+
+      const desiredRoles = [{ name: 'Auditor', description: null, permissions: ['read_audit_log'] }];
+      const result = await syncCustomOrgRoles(mockOctokit, 'test-org', desiredRoles, false, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('custom-org-role-create');
+      expect(result.subResults[0].status).toBe('warning');
+      expect(result.failed).toBe(true);
+    });
+
+    test('should mark update API errors as warning and set failed', async () => {
+      mockPaginate.mockResolvedValueOnce([
+        { id: 1, name: 'Auditor', description: 'Old', permissions: ['read_audit_log'], source: 'Organization' }
+      ]);
+      mockRequest.mockRejectedValueOnce(new Error('Forbidden'));
+
+      const desiredRoles = [{ name: 'Auditor', description: 'New', permissions: ['read_audit_log'] }];
+      const result = await syncCustomOrgRoles(mockOctokit, 'test-org', desiredRoles, false, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('custom-org-role-update');
+      expect(result.subResults[0].status).toBe('warning');
+      expect(result.failed).toBe(true);
+    });
+
+    test('should mark delete API errors as warning and set failed', async () => {
+      mockPaginate.mockResolvedValueOnce([
+        { id: 1, name: 'Unmanaged', description: null, permissions: ['x'], source: 'Organization' }
+      ]);
+      mockRequest.mockRejectedValueOnce(new Error('Forbidden'));
+
+      const result = await syncCustomOrgRoles(mockOctokit, 'test-org', [], true, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('custom-org-role-delete');
+      expect(result.subResults[0].status).toBe('warning');
+      expect(result.failed).toBe(true);
+    });
+  });
+
   // ─── Organization Profile ──────────────────────────────────────────────
 
   describe('ORG_PROFILE_SETTINGS', () => {
@@ -3221,7 +3620,7 @@ orgs:
     test('should use org profile from inputs', () => {
       const inputProfile = { name: 'My Org', blog: 'https://example.com' };
 
-      const result = parseOrganizations('org1', '', '', [], false, '', null, inputProfile);
+      const result = parseOrganizations('org1', '', '', [], false, '', null, null, null, inputProfile);
 
       expect(result).toHaveLength(1);
       expect(result[0].orgProfile).toEqual({
@@ -3241,7 +3640,7 @@ orgs:
 `;
       setMockFileContent(orgsYaml, '/mock/orgs.yml');
 
-      const result = parseOrganizations('', '/mock/orgs.yml', '', [], false, '', null, inputProfile);
+      const result = parseOrganizations('', '/mock/orgs.yml', '', [], false, '', null, null, null, inputProfile);
 
       expect(result).toHaveLength(2);
       expect(result[0].orgProfile).toEqual({
@@ -4575,6 +4974,175 @@ orgs:
     });
   });
 
+  describe('syncCustomRepoRoles', () => {
+    test('should create a new repo role', async () => {
+      mockPaginate.mockResolvedValueOnce([]);
+      mockRequest.mockResolvedValueOnce({ data: {} });
+
+      const desiredRoles = [
+        { name: 'Contractor', description: 'Limited', base_role: 'write', permissions: ['delete_alerts_code_scanning'] }
+      ];
+
+      const result = await syncCustomRepoRoles(mockOctokit, 'test-org', desiredRoles, false, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('custom-repo-role-create');
+      expect(mockPaginate).toHaveBeenCalledWith(
+        'GET /orgs/{org}/custom-repository-roles',
+        { org: 'test-org', per_page: 100 },
+        expect.any(Function)
+      );
+      expect(mockRequest).toHaveBeenCalledWith('POST /orgs/{org}/custom-repository-roles', {
+        org: 'test-org',
+        name: 'Contractor',
+        description: 'Limited',
+        base_role: 'write',
+        permissions: ['delete_alerts_code_scanning']
+      });
+    });
+
+    test('should update an existing repo role when changed', async () => {
+      mockPaginate.mockResolvedValueOnce([
+        { id: 5, name: 'Contractor', description: 'Old', base_role: 'write', permissions: ['x'] }
+      ]);
+      mockRequest.mockResolvedValueOnce({ data: {} });
+
+      const desiredRoles = [{ name: 'Contractor', description: 'New', base_role: 'write', permissions: ['x'] }];
+
+      const result = await syncCustomRepoRoles(mockOctokit, 'test-org', desiredRoles, false, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('custom-repo-role-update');
+    });
+
+    test('should delete unmanaged repo roles when enabled', async () => {
+      mockPaginate.mockResolvedValueOnce([
+        { id: 5, name: 'Old Role', description: null, base_role: 'read', permissions: ['x'] }
+      ]);
+      mockRequest.mockResolvedValueOnce({ data: {} });
+
+      const result = await syncCustomRepoRoles(mockOctokit, 'test-org', [], true, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('custom-repo-role-delete');
+    });
+
+    test('should handle 404 on GET as empty repo roles list', async () => {
+      const error404 = new Error('Not Found');
+      error404.status = 404;
+      mockPaginate.mockRejectedValueOnce(error404);
+      mockRequest.mockResolvedValueOnce({ data: {} });
+
+      const desiredRoles = [{ name: 'Contractor', description: null, base_role: 'write', permissions: ['x'] }];
+      const result = await syncCustomRepoRoles(mockOctokit, 'test-org', desiredRoles, false, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('custom-repo-role-create');
+      expect(result.failed).toBe(false);
+    });
+
+    test('should mark create API errors as warning and set failed', async () => {
+      mockPaginate.mockResolvedValueOnce([]);
+      mockRequest.mockRejectedValueOnce(new Error('Forbidden'));
+
+      const desiredRoles = [{ name: 'Contractor', description: null, base_role: 'write', permissions: ['x'] }];
+      const result = await syncCustomRepoRoles(mockOctokit, 'test-org', desiredRoles, false, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('custom-repo-role-create');
+      expect(result.subResults[0].status).toBe('warning');
+      expect(result.failed).toBe(true);
+    });
+
+    test('should mark update API errors as warning and set failed', async () => {
+      mockPaginate.mockResolvedValueOnce([
+        { id: 5, name: 'Contractor', description: 'Old', base_role: 'write', permissions: ['x'] }
+      ]);
+      mockRequest.mockRejectedValueOnce(new Error('Forbidden'));
+
+      const desiredRoles = [{ name: 'Contractor', description: 'New', base_role: 'write', permissions: ['x'] }];
+      const result = await syncCustomRepoRoles(mockOctokit, 'test-org', desiredRoles, false, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('custom-repo-role-update');
+      expect(result.subResults[0].status).toBe('warning');
+      expect(result.failed).toBe(true);
+    });
+
+    test('should mark delete API errors as warning and set failed', async () => {
+      mockPaginate.mockResolvedValueOnce([
+        { id: 5, name: 'Old Role', description: null, base_role: 'read', permissions: ['x'] }
+      ]);
+      mockRequest.mockRejectedValueOnce(new Error('Forbidden'));
+
+      const result = await syncCustomRepoRoles(mockOctokit, 'test-org', [], true, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('custom-repo-role-delete');
+      expect(result.subResults[0].status).toBe('warning');
+      expect(result.failed).toBe(true);
+    });
+  });
+
+  describe('mergeCustomRoles', () => {
+    test('should merge base and per-org roles by name', () => {
+      const base = [
+        { name: 'Auditor', description: 'Base', permissions: ['a'] },
+        { name: 'Manager', description: 'Base', permissions: ['b'] }
+      ];
+      const org = [{ name: 'Auditor', description: 'Override', permissions: ['c'] }];
+
+      const result = mergeCustomRoles(base, org);
+
+      expect(result).toHaveLength(2);
+      expect(result.find(r => r.name === 'Auditor').description).toBe('Override');
+      expect(result.find(r => r.name === 'Manager').description).toBe('Base');
+    });
+  });
+
+  describe('parseCustomOrgRolesFile', () => {
+    test('should parse a valid custom org roles file', () => {
+      const yamlContent = `- name: Security Auditor
+  description: 'Can view security alerts'
+  permissions:
+    - read_audit_log
+`;
+      setMockFileContent(yamlContent, '/mock/custom-org-roles.yml');
+
+      const result = parseCustomOrgRolesFile('/mock/custom-org-roles.yml');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].name).toBe('Security Auditor');
+      expect(result[0].permissions).toEqual(['read_audit_log']);
+    });
+
+    test('should throw if file not found', () => {
+      expect(() => parseCustomOrgRolesFile('/nonexistent.yml')).toThrow('not found');
+    });
+  });
+
+  describe('parseCustomRepoRolesFile', () => {
+    test('should parse a valid custom repo roles file', () => {
+      const yamlContent = `- name: Contractor
+  description: 'Limited write'
+  base-role: write
+  permissions:
+    - delete_alerts_code_scanning
+`;
+      setMockFileContent(yamlContent, '/mock/custom-repo-roles.yml');
+
+      const result = parseCustomRepoRolesFile('/mock/custom-repo-roles.yml');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].name).toBe('Contractor');
+      expect(result[0].base_role).toBe('write');
+    });
+
+    test('should throw if file not found', () => {
+      expect(() => parseCustomRepoRolesFile('/nonexistent.yml')).toThrow('not found');
+    });
+  });
+
   // ─── parseOrganizations with code security configurations ─────────────
 
   describe('parseOrganizations with code security configurations', () => {
@@ -4592,6 +5160,8 @@ orgs:
         [],
         false,
         '',
+        null,
+        null,
         null,
         null,
         '/mock/code-security-configs.yml'
@@ -4626,6 +5196,8 @@ orgs:
         [],
         false,
         '',
+        null,
+        null,
         null,
         null,
         '/mock/code-security-configs.yml'
@@ -4665,6 +5237,8 @@ orgs:
         [],
         false,
         '',
+        null,
+        null,
         null,
         null,
         '/mock/code-security-configs.yml'
@@ -4939,7 +5513,7 @@ orgs:
         default_workflow_permissions: 'read'
       };
 
-      const result = parseOrganizations('org1', '', '', [], false, '', null, null, '', inputPolicy, '');
+      const result = parseOrganizations('org1', '', '', [], false, '', null, null, null, null, '', inputPolicy, '');
 
       expect(result).toHaveLength(1);
       expect(result[0].actionsPolicy).toEqual({
@@ -4962,7 +5536,21 @@ orgs:
 `;
       setMockFileContent(orgsYaml, '/mock/orgs.yml');
 
-      const result = parseOrganizations('', '/mock/orgs.yml', '', [], false, '', null, null, '', inputPolicy, '');
+      const result = parseOrganizations(
+        '',
+        '/mock/orgs.yml',
+        '',
+        [],
+        false,
+        '',
+        null,
+        null,
+        null,
+        null,
+        '',
+        inputPolicy,
+        ''
+      );
 
       expect(result).toHaveLength(2);
       expect(result[0].actionsPolicy).toEqual({
@@ -4982,7 +5570,21 @@ orgs:
 `;
       setMockFileContent(allowListContent, '/mock/allow-list.yml');
 
-      const result = parseOrganizations('org1', '', '', [], false, '', null, null, '', null, '/mock/allow-list.yml');
+      const result = parseOrganizations(
+        'org1',
+        '',
+        '',
+        [],
+        false,
+        '',
+        null,
+        null,
+        null,
+        null,
+        '',
+        null,
+        '/mock/allow-list.yml'
+      );
 
       expect(result).toHaveLength(1);
       expect(result[0].actionsAllowList).toEqual(['actions/cache@*', 'myorg/*']);
@@ -5012,6 +5614,8 @@ orgs:
         [],
         false,
         '',
+        null,
+        null,
         null,
         null,
         '',

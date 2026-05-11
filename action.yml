@@ -126,6 +126,22 @@ inputs:
     description: 'Whether to display commenter full name in issues and PRs'
     required: false
 
+  # === Custom Roles (GHEC only) ===
+  custom-org-roles-file:
+    description: 'Path to a YAML file defining custom organization role definitions to sync (requires GitHub Enterprise Cloud)'
+    required: false
+  delete-unmanaged-org-roles:
+    description: 'Delete custom organization roles not defined in the configuration file'
+    required: false
+    default: 'false'
+  custom-repo-roles-file:
+    description: 'Path to a YAML file defining custom repository role definitions to sync (requires GitHub Enterprise Cloud)'
+    required: false
+  delete-unmanaged-repo-roles:
+    description: 'Delete custom repository roles not defined in the configuration file'
+    required: false
+    default: 'false'
+
   # === Rulesets ===
   rulesets-file:
     description: 'Comma-separated paths to JSON files, each containing a single organization ruleset configuration to sync'
