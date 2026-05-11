@@ -95,6 +95,9 @@ orgs:
       verified-allowed: true
       default-workflow-permissions: read
       actions-can-approve-pull-request-reviews: false
+    # Per-org .github repo source directory override
+    # dot-github-source-dir: './config/dot-github/other-org'
+    # dot-github-private-source-dir: './config/dot-github-private/other-org'
 
 # ---
 # Alternative: fully self-contained (no base custom-properties-file needed)
