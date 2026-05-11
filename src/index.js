@@ -237,6 +237,12 @@ const ORG_CONFIG_TOP_LEVEL_KEYS = new Set([
   'code-security-configurations-file',
   'code-security-configurations',
   'delete-unmanaged-code-security-configurations',
+  'custom-org-roles',
+  'custom-org-roles-file',
+  'delete-unmanaged-org-roles',
+  'custom-repo-roles',
+  'custom-repo-roles-file',
+  'delete-unmanaged-repo-roles',
   'actions-policy',
   'actions-allow-list-file'
 ]);
@@ -585,12 +591,11 @@ function formatSubResultSummary(subResult) {
  * @param {Object|null} [memberPrivilegesFromInputs] - Member privileges parsed from action inputs (base for all orgs)
  * @param {string} [customOrgRolesFile] - Path to custom org roles YAML file (base for all orgs)
  * @param {string} [customRepoRolesFile] - Path to custom repo roles YAML file (base for all orgs)
- * @returns {Array<{ org: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, issueTypes?: Array, memberPrivileges?: Object, customOrgRoles?: Array, customRepoRoles?: Array }>} Parsed org configs
  * @param {Object|null} [orgProfileFromInputs] - Org profile parsed from action inputs (base for all orgs)
  * @param {string} [codeSecurityConfigurationsFile] - Path to code security configurations YAML file (base for all orgs)
  * @param {Object|null} [actionsPolicyFromInputs] - Actions policy parsed from action inputs (base for all orgs)
  * @param {string} [actionsAllowListFile] - Path to actions allow list YAML file (base for all orgs)
- * @returns {Array<{ org: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, issueTypes?: Array, memberPrivileges?: Object, orgProfile?: Object, codeSecurityConfigurations?: Array, deleteUnmanagedCodeSecurityConfigurations?: boolean, actionsPolicy?: Object, actionsAllowList?: string[] }>} Parsed org configs
+ * @returns {Array<{ org: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, issueTypes?: Array, memberPrivileges?: Object, customOrgRoles?: Array, customRepoRoles?: Array, orgProfile?: Object, codeSecurityConfigurations?: Array, deleteUnmanagedCodeSecurityConfigurations?: boolean, actionsPolicy?: Object, actionsAllowList?: string[] }>} Parsed org configs
  */
 export function parseOrganizations(
   organizationsInput,

@@ -584,12 +584,6 @@ Create a YAML file defining your custom organization roles:
 
 Then reference it in your workflow:
 
-## Syncing Organization Profile
-
-Sync organization profile/branding fields across organizations. These control the public-facing identity of the organization.
-
-Set organization profile fields directly as action inputs:
-
 ```yml
 - name: Sync Organization Settings
   uses: joshjohanning/bulk-github-org-settings-sync-action@v1
@@ -598,14 +592,6 @@ Set organization profile fields directly as action inputs:
     organizations: 'my-org,my-other-org'
     custom-org-roles-file: './custom-org-roles.yml'
     delete-unmanaged-org-roles: false
-    organizations: 'my-org'
-    org-name: 'My Organization'
-    org-description: 'Building great things'
-    org-company: 'My Company Inc.'
-    org-location: 'San Francisco, CA'
-    org-email: 'contact@myorg.com'
-    org-twitter-username: 'myorg'
-    org-blog: 'https://myorg.com'
 ```
 
 **Behavior:**
@@ -622,6 +608,29 @@ When `delete-unmanaged-org-roles: true`:
 - Creates and updates roles from the config
 - **Deletes all other custom org roles not defined in the config**
 - In dry-run mode, shows which roles would be deleted without actually deleting them
+
+---
+
+## Syncing Organization Profile
+
+Sync organization profile/branding fields across organizations. These control the public-facing identity of the organization.
+
+Set organization profile fields directly as action inputs:
+
+```yml
+- name: Sync Organization Settings
+  uses: joshjohanning/bulk-github-org-settings-sync-action@v1
+  with:
+    github-token: ${{ secrets.ORG_ADMIN_TOKEN }}
+    organizations: 'my-org'
+    org-name: 'My Organization'
+    org-description: 'Building great things'
+    org-company: 'My Company Inc.'
+    org-location: 'San Francisco, CA'
+    org-email: 'contact@myorg.com'
+    org-twitter-username: 'myorg'
+    org-blog: 'https://myorg.com'
+```
 
 ---
 
