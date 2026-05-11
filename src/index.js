@@ -56,7 +56,7 @@ function getKnownOrgConfigKeys() {
     'issue-types',
     'member-privileges',
     'custom-org-roles',
-    'custom-repo-roles'
+    'custom-repo-roles',
     'org-profile',
     'code-security-configurations',
     'actions-policy'
@@ -371,6 +371,11 @@ export function validateOrgConfig(orgConfig, orgName) {
     if (typeof val !== 'boolean') {
       core.warning(
         `⚠️  Invalid "delete-unmanaged-repo-roles" value for organization "${orgName}": ` +
+          `expected true or false, got "${val}". This setting will be ignored.`
+      );
+    }
+  }
+
   // Validate delete-unmanaged-code-security-configurations value if present
   if (Object.prototype.hasOwnProperty.call(orgConfig, 'delete-unmanaged-code-security-configurations')) {
     const val = orgConfig['delete-unmanaged-code-security-configurations'];
@@ -398,7 +403,7 @@ const FILE_PATH_CONFIG_KEYS = [
   'issue-types-file',
   'rulesets-file',
   'custom-org-roles-file',
-  'custom-repo-roles-file'
+  'custom-repo-roles-file',
   'code-security-configurations-file',
   'actions-allow-list-file'
 ];
@@ -491,7 +496,7 @@ const SYNC_KIND_LABELS = Object.freeze({
   'custom-org-role-delete': 'custom org role (deleted)',
   'custom-repo-role-create': 'custom repo role (created)',
   'custom-repo-role-update': 'custom repo role (updated)',
-  'custom-repo-role-delete': 'custom repo role (deleted)'
+  'custom-repo-role-delete': 'custom repo role (deleted)',
   'code-security-config-create': 'code security configuration (created)',
   'code-security-config-update': 'code security configuration (updated)',
   'code-security-config-delete': 'code security configuration (deleted)',
@@ -596,7 +601,7 @@ export function parseOrganizations(
   issueTypesFile,
   memberPrivilegesFromInputs,
   customOrgRolesFile,
-  customRepoRolesFile
+  customRepoRolesFile,
   orgProfileFromInputs,
   codeSecurityConfigurationsFile,
   actionsPolicyFromInputs,
@@ -647,6 +652,8 @@ export function parseOrganizations(
   let baseCustomRepoRoles = null;
   if (customRepoRolesFile) {
     baseCustomRepoRoles = parseCustomRepoRolesFile(customRepoRolesFile);
+  }
+
   // Load base org profile from direct action inputs.
   let baseOrgProfile = null;
   if (orgProfileFromInputs) {
@@ -743,6 +750,11 @@ export function parseOrganizations(
         } catch (error) {
           throw new Error(
             `Failed to parse custom org roles file "${orgConfig.customOrgRolesFile}" for organization "${orgConfig.org}": ${error.message}`,
+            { cause: error }
+          );
+        }
+      }
+
       // Per-org org-profile layer on top of base org profile
       if (baseOrgProfile || orgConfig.orgProfile) {
         orgConfig.orgProfile = mergeOrgProfile(baseOrgProfile || {}, orgConfig.orgProfile || {});
@@ -843,7 +855,7 @@ export function parseOrganizations(
     ...(deleteUnmanagedRulesets !== undefined ? { deleteUnmanagedRulesets } : {}),
     ...(baseMemberPrivileges ? { memberPrivileges: baseMemberPrivileges } : {}),
     ...(baseCustomOrgRoles ? { customOrgRoles: baseCustomOrgRoles } : {}),
-    ...(baseCustomRepoRoles ? { customRepoRoles: baseCustomRepoRoles } : {})
+    ...(baseCustomRepoRoles ? { customRepoRoles: baseCustomRepoRoles } : {}),
     ...(baseOrgProfile ? { orgProfile: baseOrgProfile } : {}),
     ...(baseCodeSecurityConfigurations ? { codeSecurityConfigurations: baseCodeSecurityConfigurations } : {}),
     ...(baseActionsPolicy ? { actionsPolicy: baseActionsPolicy } : {}),
@@ -1205,6 +1217,8 @@ export function parseOrganizationsFile(filePath) {
       if (typeof val === 'boolean') {
         result.deleteUnmanagedRepoRoles = val;
       }
+    }
+
     const topLevelOrgProfile = {};
     for (const key of ORG_PROFILE_SETTINGS.keys()) {
       if (Object.prototype.hasOwnProperty.call(orgConfig, key)) {
@@ -4237,7 +4251,7 @@ export async function run() {
       issueTypesFile,
       memberPrivilegesFromInputs,
       customOrgRolesFile,
-      customRepoRolesFile
+      customRepoRolesFile,
       orgProfileFromInputs,
       codeSecurityConfigurationsFile,
       actionsPolicyFromInputs,
@@ -4255,6 +4269,7 @@ export async function run() {
     const hasCustomRepoRoles = orgList.some(
       o =>
         o.customRepoRoles && (o.customRepoRoles.length > 0 || (o.deleteUnmanagedRepoRoles ?? deleteUnmanagedRepoRoles))
+    );
     const hasOrgProfileSettings = orgList.some(o => o.orgProfile && Object.keys(o.orgProfile).length > 0);
     const hasCodeSecurityConfigurations = orgList.some(
       o => o.codeSecurityConfigurations && o.codeSecurityConfigurations.length > 0
@@ -4270,7 +4285,7 @@ export async function run() {
       !hasIssueTypes &&
       !hasMemberPrivileges &&
       !hasCustomOrgRoles &&
-      !hasCustomRepoRoles
+      !hasCustomRepoRoles &&
       !hasOrgProfileSettings &&
       !hasCodeSecurityConfigurations &&
       !hasActionsPolicy
@@ -4280,9 +4295,7 @@ export async function run() {
           '"organizations-file" or via "organizations" + "custom-properties-file" inputs, ' +
           'provide issue types via "issue-types-file", rulesets via "rulesets-file", ' +
           'custom org roles via "custom-org-roles-file", custom repo roles via "custom-repo-roles-file", ' +
-          'or member privileges via individual inputs (e.g., "default-repository-permission").'
-          'provide issue types via "issue-types-file", rulesets via "rulesets-file", member privileges via ' +
-          'individual inputs (e.g., "default-repository-permission"), org profile via ' +
+          'member privileges via individual inputs (e.g., "default-repository-permission"), org profile via ' +
           'individual inputs (e.g., "org-name", "org-description"), ' +
           'code security configurations via "code-security-configurations-file", or actions policy via ' +
           'individual inputs (e.g., "actions-policy-allowed-actions").'
@@ -4315,6 +4328,8 @@ export async function run() {
 
     if (deleteUnmanagedRepoRoles) {
       core.info('⚠️  delete-unmanaged-repo-roles is enabled: custom repo roles not in config will be deleted');
+    }
+
     if (deleteUnmanagedCodeSecurityConfigurations) {
       core.info(
         '⚠️  delete-unmanaged-code-security-configurations is enabled: code security configurations not in config will be deleted'
@@ -4460,6 +4475,9 @@ export async function run() {
             result.error = result.error
               ? `${result.error}; Custom repo roles sync failed`
               : 'Custom repo roles sync failed';
+          }
+        }
+
         // Sync organization profile
         if (orgConfig.orgProfile && Object.keys(orgConfig.orgProfile).length > 0) {
           const fieldCount = Object.keys(orgConfig.orgProfile).length;

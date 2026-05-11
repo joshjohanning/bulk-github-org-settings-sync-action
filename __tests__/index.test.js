@@ -3330,6 +3330,9 @@ orgs:
       expect(result.subResults).toHaveLength(1);
       expect(result.subResults[0].message).toContain('Would');
       expect(mockPaginate).toHaveBeenCalledTimes(1);
+    });
+  });
+
   // ─── Organization Profile ──────────────────────────────────────────────
 
   describe('ORG_PROFILE_SETTINGS', () => {
@@ -3523,7 +3526,7 @@ orgs:
     test('should use org profile from inputs', () => {
       const inputProfile = { name: 'My Org', blog: 'https://example.com' };
 
-      const result = parseOrganizations('org1', '', '', [], false, '', null, inputProfile);
+      const result = parseOrganizations('org1', '', '', [], false, '', null, null, null, inputProfile);
 
       expect(result).toHaveLength(1);
       expect(result[0].orgProfile).toEqual({
@@ -3543,7 +3546,7 @@ orgs:
 `;
       setMockFileContent(orgsYaml, '/mock/orgs.yml');
 
-      const result = parseOrganizations('', '/mock/orgs.yml', '', [], false, '', null, inputProfile);
+      const result = parseOrganizations('', '/mock/orgs.yml', '', [], false, '', null, null, null, inputProfile);
 
       expect(result).toHaveLength(2);
       expect(result[0].orgProfile).toEqual({
@@ -4987,6 +4990,9 @@ orgs:
 
     test('should throw if file not found', () => {
       expect(() => parseCustomRepoRolesFile('/nonexistent.yml')).toThrow('not found');
+    });
+  });
+
   // ─── parseOrganizations with code security configurations ─────────────
 
   describe('parseOrganizations with code security configurations', () => {
@@ -5004,6 +5010,8 @@ orgs:
         [],
         false,
         '',
+        null,
+        null,
         null,
         null,
         '/mock/code-security-configs.yml'
@@ -5038,6 +5046,8 @@ orgs:
         [],
         false,
         '',
+        null,
+        null,
         null,
         null,
         '/mock/code-security-configs.yml'
@@ -5077,6 +5087,8 @@ orgs:
         [],
         false,
         '',
+        null,
+        null,
         null,
         null,
         '/mock/code-security-configs.yml'
@@ -5351,7 +5363,7 @@ orgs:
         default_workflow_permissions: 'read'
       };
 
-      const result = parseOrganizations('org1', '', '', [], false, '', null, null, '', inputPolicy, '');
+      const result = parseOrganizations('org1', '', '', [], false, '', null, null, null, null, '', inputPolicy, '');
 
       expect(result).toHaveLength(1);
       expect(result[0].actionsPolicy).toEqual({
@@ -5374,7 +5386,21 @@ orgs:
 `;
       setMockFileContent(orgsYaml, '/mock/orgs.yml');
 
-      const result = parseOrganizations('', '/mock/orgs.yml', '', [], false, '', null, null, '', inputPolicy, '');
+      const result = parseOrganizations(
+        '',
+        '/mock/orgs.yml',
+        '',
+        [],
+        false,
+        '',
+        null,
+        null,
+        null,
+        null,
+        '',
+        inputPolicy,
+        ''
+      );
 
       expect(result).toHaveLength(2);
       expect(result[0].actionsPolicy).toEqual({
@@ -5394,7 +5420,21 @@ orgs:
 `;
       setMockFileContent(allowListContent, '/mock/allow-list.yml');
 
-      const result = parseOrganizations('org1', '', '', [], false, '', null, null, '', null, '/mock/allow-list.yml');
+      const result = parseOrganizations(
+        'org1',
+        '',
+        '',
+        [],
+        false,
+        '',
+        null,
+        null,
+        null,
+        null,
+        '',
+        null,
+        '/mock/allow-list.yml'
+      );
 
       expect(result).toHaveLength(1);
       expect(result[0].actionsAllowList).toEqual(['actions/cache@*', 'myorg/*']);
@@ -5424,6 +5464,8 @@ orgs:
         [],
         false,
         '',
+        null,
+        null,
         null,
         null,
         '',

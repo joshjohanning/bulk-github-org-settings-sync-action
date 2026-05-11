@@ -583,6 +583,7 @@ Create a YAML file defining your custom organization roles:
 ```
 
 Then reference it in your workflow:
+
 ## Syncing Organization Profile
 
 Sync organization profile/branding fields across organizations. These control the public-facing identity of the organization.
@@ -683,6 +684,7 @@ When `delete-unmanaged-repo-roles: true`:
 ### Per-Org Custom Role Overrides
 
 In `orgs.yml`, you can override custom roles per organization using inline definitions or per-org files:
+
 - Only fields included in the config are managed — omitted fields remain unchanged
 - If all managed fields already match the config, no update/PATCH call is made
 - Fields are applied via a single `PATCH /orgs/{org}` call per organization
@@ -832,7 +834,7 @@ orgs:
 
 > [!NOTE]
 > You must provide either `organizations` or `organizations-file`. The `custom-properties-file`, `issue-types-file`, `rulesets-file`, `custom-org-roles-file`, and `custom-repo-roles-file` inputs provide base settings for all orgs and can be combined with either approach. Member privilege settings can be provided as individual inputs (e.g., `default-repository-permission`). Per-org overrides in `organizations-file` layer on top of the base.
-Sync named code security configurations across organizations. These configurations define security feature enablement policies (e.g., Dependabot, secret scanning, code scanning) that can be applied to repositories.
+> Sync named code security configurations across organizations. These configurations define security feature enablement policies (e.g., Dependabot, secret scanning, code scanning) that can be applied to repositories.
 
 ### Basic Usage
 
