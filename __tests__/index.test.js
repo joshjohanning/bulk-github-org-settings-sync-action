@@ -3368,6 +3368,63 @@ orgs:
         role_id: 3
       });
     });
+
+    test('should handle 404 on GET as empty org roles list', async () => {
+      const error404 = new Error('Not Found');
+      error404.status = 404;
+      mockPaginate.mockRejectedValueOnce(error404);
+      mockRequest.mockResolvedValueOnce({ data: {} });
+
+      const desiredRoles = [{ name: 'Auditor', description: null, permissions: ['read_audit_log'] }];
+      const result = await syncCustomOrgRoles(mockOctokit, 'test-org', desiredRoles, false, false);
+
+      // 404 treated as empty: should attempt to create
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('custom-org-role-create');
+      expect(result.failed).toBe(false);
+    });
+
+    test('should mark create API errors as warning and set failed', async () => {
+      mockPaginate.mockResolvedValueOnce([]);
+      mockRequest.mockRejectedValueOnce(new Error('Forbidden'));
+
+      const desiredRoles = [{ name: 'Auditor', description: null, permissions: ['read_audit_log'] }];
+      const result = await syncCustomOrgRoles(mockOctokit, 'test-org', desiredRoles, false, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('custom-org-role-create');
+      expect(result.subResults[0].status).toBe('warning');
+      expect(result.failed).toBe(true);
+    });
+
+    test('should mark update API errors as warning and set failed', async () => {
+      mockPaginate.mockResolvedValueOnce([
+        { id: 1, name: 'Auditor', description: 'Old', permissions: ['read_audit_log'], source: 'Organization' }
+      ]);
+      mockRequest.mockRejectedValueOnce(new Error('Forbidden'));
+
+      const desiredRoles = [{ name: 'Auditor', description: 'New', permissions: ['read_audit_log'] }];
+      const result = await syncCustomOrgRoles(mockOctokit, 'test-org', desiredRoles, false, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('custom-org-role-update');
+      expect(result.subResults[0].status).toBe('warning');
+      expect(result.failed).toBe(true);
+    });
+
+    test('should mark delete API errors as warning and set failed', async () => {
+      mockPaginate.mockResolvedValueOnce([
+        { id: 1, name: 'Unmanaged', description: null, permissions: ['x'], source: 'Organization' }
+      ]);
+      mockRequest.mockRejectedValueOnce(new Error('Forbidden'));
+
+      const result = await syncCustomOrgRoles(mockOctokit, 'test-org', [], true, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('custom-org-role-delete');
+      expect(result.subResults[0].status).toBe('warning');
+      expect(result.failed).toBe(true);
+    });
   });
 
   // ─── Organization Profile ──────────────────────────────────────────────
@@ -4968,6 +5025,62 @@ orgs:
 
       expect(result.subResults).toHaveLength(1);
       expect(result.subResults[0].kind).toBe('custom-repo-role-delete');
+    });
+
+    test('should handle 404 on GET as empty repo roles list', async () => {
+      const error404 = new Error('Not Found');
+      error404.status = 404;
+      mockPaginate.mockRejectedValueOnce(error404);
+      mockRequest.mockResolvedValueOnce({ data: {} });
+
+      const desiredRoles = [{ name: 'Contractor', description: null, base_role: 'write', permissions: ['x'] }];
+      const result = await syncCustomRepoRoles(mockOctokit, 'test-org', desiredRoles, false, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('custom-repo-role-create');
+      expect(result.failed).toBe(false);
+    });
+
+    test('should mark create API errors as warning and set failed', async () => {
+      mockPaginate.mockResolvedValueOnce([]);
+      mockRequest.mockRejectedValueOnce(new Error('Forbidden'));
+
+      const desiredRoles = [{ name: 'Contractor', description: null, base_role: 'write', permissions: ['x'] }];
+      const result = await syncCustomRepoRoles(mockOctokit, 'test-org', desiredRoles, false, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('custom-repo-role-create');
+      expect(result.subResults[0].status).toBe('warning');
+      expect(result.failed).toBe(true);
+    });
+
+    test('should mark update API errors as warning and set failed', async () => {
+      mockPaginate.mockResolvedValueOnce([
+        { id: 5, name: 'Contractor', description: 'Old', base_role: 'write', permissions: ['x'] }
+      ]);
+      mockRequest.mockRejectedValueOnce(new Error('Forbidden'));
+
+      const desiredRoles = [{ name: 'Contractor', description: 'New', base_role: 'write', permissions: ['x'] }];
+      const result = await syncCustomRepoRoles(mockOctokit, 'test-org', desiredRoles, false, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('custom-repo-role-update');
+      expect(result.subResults[0].status).toBe('warning');
+      expect(result.failed).toBe(true);
+    });
+
+    test('should mark delete API errors as warning and set failed', async () => {
+      mockPaginate.mockResolvedValueOnce([
+        { id: 5, name: 'Old Role', description: null, base_role: 'read', permissions: ['x'] }
+      ]);
+      mockRequest.mockRejectedValueOnce(new Error('Forbidden'));
+
+      const result = await syncCustomRepoRoles(mockOctokit, 'test-org', [], true, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('custom-repo-role-delete');
+      expect(result.subResults[0].status).toBe('warning');
+      expect(result.failed).toBe(true);
     });
   });
 
