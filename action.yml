@@ -41,6 +41,29 @@ inputs:
     required: false
     default: 'false'
 
+  # === Organization Profile ===
+  org-name:
+    description: 'Organization display name'
+    required: false
+  org-description:
+    description: 'Organization description (max 160 chars)'
+    required: false
+  org-company:
+    description: 'Company name'
+    required: false
+  org-location:
+    description: 'Location'
+    required: false
+  org-email:
+    description: 'Publicly visible email'
+    required: false
+  org-twitter-username:
+    description: 'Twitter/X username'
+    required: false
+  org-blog:
+    description: 'Blog/website URL'
+    required: false
+
   # === Member Privileges ===
   default-repository-permission:
     description: 'Default permission level for org members on new repositories: read, write, admin, or none'
@@ -103,6 +126,22 @@ inputs:
     description: 'Whether to display commenter full name in issues and PRs'
     required: false
 
+  # === Custom Roles (GHEC only) ===
+  custom-org-roles-file:
+    description: 'Path to a YAML file defining custom organization role definitions to sync (requires GitHub Enterprise Cloud)'
+    required: false
+  delete-unmanaged-org-roles:
+    description: 'Delete custom organization roles not defined in the configuration file'
+    required: false
+    default: 'false'
+  custom-repo-roles-file:
+    description: 'Path to a YAML file defining custom repository role definitions to sync (requires GitHub Enterprise Cloud)'
+    required: false
+  delete-unmanaged-repo-roles:
+    description: 'Delete custom repository roles not defined in the configuration file'
+    required: false
+    default: 'false'
+
   # === .github / .github-private Repository Sync ===
   dot-github-source-dir:
     description: 'Path to a local directory whose contents should be synced to the .github repository in each target organization (creates a PR with changes)'
@@ -119,6 +158,35 @@ inputs:
     description: 'Delete all other rulesets besides those being synced'
     required: false
     default: 'false'
+
+  # === Code Security Configurations ===
+  code-security-configurations-file:
+    description: 'Path to a YAML file defining code security configurations to sync to target organizations'
+    required: false
+  delete-unmanaged-code-security-configurations:
+    description: 'Delete code security configurations not defined in the configuration file'
+    required: false
+    default: 'false'
+
+  # === Actions Policy ===
+  actions-policy-allowed-actions:
+    description: 'Allowed GitHub Actions policy: all, local_only, or selected'
+    required: false
+  actions-policy-github-owned-allowed:
+    description: 'Whether GitHub-owned actions are allowed (only when allowed-actions is selected)'
+    required: false
+  actions-policy-verified-allowed:
+    description: 'Whether actions from GitHub Marketplace verified creators are allowed (only when allowed-actions is selected)'
+    required: false
+  actions-allow-list-file:
+    description: 'Path to a YAML file defining allowed actions/reusable workflow patterns (only when allowed-actions is selected)'
+    required: false
+  actions-policy-default-workflow-permissions:
+    description: 'Default GITHUB_TOKEN permissions for workflows: read or write'
+    required: false
+  actions-policy-actions-can-approve-pull-request-reviews:
+    description: 'Whether GitHub Actions can approve pull request reviews'
+    required: false
 
   # === Execution Options ===
   dry-run:
