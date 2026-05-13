@@ -5028,9 +5028,9 @@ export async function run() {
         { data: 'Status', header: true },
         { data: 'Details', header: true }
       ],
-      ...results.map(r => {
+      ...results.flatMap(r => {
         if (!r.success) {
-          return [r.organization, '❌ Failed', r.error];
+          return [[r.organization, '❌ Failed', r.error]];
         }
 
         const hasChanges = hasOrgChanges(r);
@@ -5043,17 +5043,19 @@ export async function run() {
           status = '➖ No changes';
         }
 
-        let details;
-        if (r.subResults && r.subResults.length > 0) {
-          const messages = r.subResults
-            .filter(s => s.status === SubResultStatus.WARNING || s.status === SubResultStatus.CHANGED)
-            .map(s => formatSubResultSummary(s));
-          details = messages.length > 0 ? messages.join('; ') : 'No changes needed';
-        } else {
-          details = 'No changes needed';
+        const actionableResults = r.subResults
+          ? r.subResults.filter(s => s.status === SubResultStatus.WARNING || s.status === SubResultStatus.CHANGED)
+          : [];
+
+        if (actionableResults.length === 0) {
+          return [[r.organization, status, 'No changes needed']];
         }
 
-        return [r.organization, status, details];
+        return actionableResults.map((s, i) => [
+          i === 0 ? r.organization : '',
+          i === 0 ? status : '',
+          formatSubResultSummary(s)
+        ]);
       })
     ];
 

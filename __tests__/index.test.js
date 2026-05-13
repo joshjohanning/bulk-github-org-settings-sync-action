@@ -2041,6 +2041,54 @@ orgs:
       expect(mockCore.setOutput).toHaveBeenCalledWith('failed-organizations', '0');
     });
 
+    test('should render each changed sub-result as a separate summary table row', async () => {
+      const cpYaml = `- name: team
+  value-type: string
+  required: false
+  description: 'Owning team'
+  values-editable-by: org_actors
+- name: environment
+  value-type: string
+  required: false
+  description: 'Deployment environment'
+  values-editable-by: org_actors
+`;
+      setMockFileContent(cpYaml, '/mock/custom-properties.yml');
+
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          'github-api-url': 'https://api.github.com',
+          organizations: 'my-org',
+          'organizations-file': '',
+          'custom-properties-file': '/mock/custom-properties.yml',
+          'delete-unmanaged-properties': 'false',
+          'dry-run': 'true'
+        };
+        return inputs[name] ?? '';
+      });
+      mockCore.getBooleanInput.mockImplementation(name => {
+        if (name === 'dry-run') return true;
+        if (name === 'delete-unmanaged-properties') return false;
+        return false;
+      });
+
+      mockRequest.mockResolvedValueOnce({ data: [] });
+
+      await run();
+
+      expect(mockCore.setFailed).not.toHaveBeenCalled();
+      expect(mockCore.summary.addTable).toHaveBeenCalledWith([
+        [
+          { data: 'Organization', header: true },
+          { data: 'Status', header: true },
+          { data: 'Details', header: true }
+        ],
+        ['my-org', '✅ Changed', 'custom property (created): Would create "team" (string)'],
+        ['', '', 'custom property (created): Would create "environment" (string)']
+      ]);
+    });
+
     test('should handle org processing failure gracefully', async () => {
       const cpYaml = `- name: team
   value-type: single_select
