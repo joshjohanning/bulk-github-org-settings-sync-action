@@ -69,13 +69,18 @@ This sync is intentionally non-destructive: it creates or updates files present 
 For stronger security and higher rate limits, use a GitHub App:
 
 1. Create a GitHub App with the following permissions:
-   - **Organization Custom Properties**: Admin (required for managing custom property definitions)
-   - **Organization Administration**: Read and write (required for managing organization settings and rulesets)
-   - **Organization Issue Types**: Write (required for managing issue type definitions)
-   - **Organization Custom Roles**: Write (required for managing custom organization roles)
-   - **Custom Repository Roles**: Write (required for managing custom repository roles)
-   - **Contents**: Read and write (required for `.github`/`.github-private` repo sync)
-   - **Pull Requests**: Read and write (required for `.github`/`.github-private` repo sync)
+
+   **Organization permissions:**
+   - **Administration**: Read and write (required for managing organization settings and rulesets)
+   - **Custom properties**: Admin (required for managing custom property definitions)
+   - **Custom organization roles**: Write (required for managing custom organization roles)
+   - **Custom repository roles**: Write (required for managing custom repository roles)
+   - **Issue types**: Write (required for managing issue type definitions)
+
+   **Repository permissions** _(only required for `.github`/`.github-private` repo sync)_:
+   - **Contents**: Read and write
+   - **Workflows**: Read and write (required if syncing workflow files)
+   - **Pull requests**: Write
 2. Install it to your organization(s)
 3. Add `APP_ID` and `APP_PRIVATE_KEY` as repository secrets
 
