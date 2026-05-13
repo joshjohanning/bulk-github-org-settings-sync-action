@@ -5022,17 +5022,17 @@ export async function run() {
     core.setOutput('results', JSON.stringify(results));
 
     // Create summary
-    const summaryTable = [
-      [
-        { data: 'Organization', header: true },
-        { data: 'Status', header: true },
-        { data: 'Details', header: true }
-      ],
-      ...results.flatMap(r => {
-        if (!r.success) {
-          return [[r.organization, '❌ Failed', r.error]];
-        }
+    const summaryTables = results.map(r => {
+      const tableRows = [
+        [
+          { data: 'Status', header: true },
+          { data: 'Details', header: true }
+        ]
+      ];
 
+      if (!r.success) {
+        tableRows.push(['❌ Failed', r.error]);
+      } else {
         const hasChanges = hasOrgChanges(r);
         let status;
         if (r.hasWarnings) {
@@ -5048,16 +5048,14 @@ export async function run() {
           : [];
 
         if (actionableResults.length === 0) {
-          return [[r.organization, status, 'No changes needed']];
+          tableRows.push([status, 'No changes needed']);
+        } else {
+          tableRows.push(...actionableResults.map((s, i) => [i === 0 ? status : '', formatSubResultSummary(s)]));
         }
+      }
 
-        return actionableResults.map((s, i) => [
-          i === 0 ? r.organization : '',
-          i === 0 ? status : '',
-          formatSubResultSummary(s)
-        ]);
-      })
-    ];
+      return { organization: r.organization, tableRows };
+    });
 
     try {
       const heading = dryRun
@@ -5075,9 +5073,13 @@ export async function run() {
         .addRaw(`\n**Changed:** ${changedCount}`)
         .addRaw(`\n**Unchanged:** ${unchangedCount}`)
         .addRaw(`\n**Warnings:** ${warningCount}`)
-        .addRaw(`\n**Failed:** ${failureCount}\n\n`)
-        .addTable(summaryTable)
-        .write();
+        .addRaw(`\n**Failed:** ${failureCount}\n\n`);
+
+      for (const { organization, tableRows } of summaryTables) {
+        summaryBuilder = summaryBuilder.addHeading(organization, 3).addTable(tableRows).addRaw('\n');
+      }
+
+      await summaryBuilder.write();
     } catch {
       // Fallback for local development
       const heading = dryRun

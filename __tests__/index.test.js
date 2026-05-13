@@ -2041,7 +2041,7 @@ orgs:
       expect(mockCore.setOutput).toHaveBeenCalledWith('failed-organizations', '0');
     });
 
-    test('should render each changed sub-result as a separate summary table row', async () => {
+    test('should render an org-specific summary table with one row per changed sub-result', async () => {
       const cpYaml = `- name: team
   value-type: string
   required: false
@@ -2078,14 +2078,14 @@ orgs:
       await run();
 
       expect(mockCore.setFailed).not.toHaveBeenCalled();
-      expect(mockCore.summary.addTable).toHaveBeenCalledWith([
+      expect(mockCore.summary.addHeading).toHaveBeenCalledWith('my-org', 3);
+      expect(mockCore.summary.addTable).toHaveBeenLastCalledWith([
         [
-          { data: 'Organization', header: true },
           { data: 'Status', header: true },
           { data: 'Details', header: true }
         ],
-        ['my-org', '✅ Changed', 'custom property (created): Would create "team" (string)'],
-        ['', '', 'custom property (created): Would create "environment" (string)']
+        ['✅ Changed', 'custom property (created): Would create "team" (string)'],
+        ['', 'custom property (created): Would create "environment" (string)']
       ]);
     });
 
