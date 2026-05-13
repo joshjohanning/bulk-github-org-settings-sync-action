@@ -505,9 +505,11 @@ const SYNC_KIND_LABELS = Object.freeze({
   'custom-org-role-create': 'custom org role (created)',
   'custom-org-role-update': 'custom org role (updated)',
   'custom-org-role-delete': 'custom org role (deleted)',
+  'custom-org-role-fetch': 'custom org role (fetch failed)',
   'custom-repo-role-create': 'custom repo role (created)',
   'custom-repo-role-update': 'custom repo role (updated)',
   'custom-repo-role-delete': 'custom repo role (deleted)',
+  'custom-repo-role-fetch': 'custom repo role (fetch failed)',
   'code-security-config-create': 'code security configuration (created)',
   'code-security-config-update': 'code security configuration (updated)',
   'code-security-config-delete': 'code security configuration (deleted)',
@@ -1798,11 +1800,16 @@ export async function syncCustomOrgRoles(octokit, org, desiredRoles, deleteUnman
     const { data } = await octokit.request('GET /orgs/{org}/organization-roles', { org, per_page: 100 });
     existingRoles = data.roles || [];
   } catch (error) {
-    if (error.status === 404) {
-      existingRoles = [];
-    } else {
-      throw error;
+    if (error.status === 403 || error.status === 404) {
+      const message =
+        `Could not fetch existing custom org roles for "${org}" (status ${error.status}). ` +
+        `If using a GitHub App, verify it has "Custom organization roles: Write" and the installation has been re-approved.`;
+      core.warning(`  ⚠️  ${message}`);
+      subResults.push(createSubResult('custom-org-role-fetch', SubResultStatus.WARNING, message));
+      return { subResults, failed: true };
     }
+
+    throw error;
   }
 
   // Filter to only manageable (organization-created) roles; skip predefined/enterprise roles
@@ -2027,11 +2034,16 @@ export async function syncCustomRepoRoles(octokit, org, desiredRoles, deleteUnma
     const { data } = await octokit.request('GET /orgs/{org}/custom-repository-roles', { org, per_page: 100 });
     existingRoles = data.custom_roles || [];
   } catch (error) {
-    if (error.status === 404) {
-      existingRoles = [];
-    } else {
-      throw error;
+    if (error.status === 403 || error.status === 404) {
+      const message =
+        `Could not fetch existing custom repo roles for "${org}" (status ${error.status}). ` +
+        `If using a GitHub App, verify it has "Custom repository roles: Write" and the installation has been re-approved.`;
+      core.warning(`  ⚠️  ${message}`);
+      subResults.push(createSubResult('custom-repo-role-fetch', SubResultStatus.WARNING, message));
+      return { subResults, failed: true };
     }
+
+    throw error;
   }
 
   const existingMap = new Map(existingRoles.map(r => [r.name, r]));

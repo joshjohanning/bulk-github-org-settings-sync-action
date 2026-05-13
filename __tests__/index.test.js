@@ -3801,19 +3801,23 @@ orgs:
       });
     });
 
-    test('should handle 404 on GET as empty org roles list', async () => {
+    test('should warn and skip org role sync when listing roles returns 404', async () => {
       const error404 = new Error('Not Found');
       error404.status = 404;
       mockRequest.mockRejectedValueOnce(error404);
-      mockRequest.mockResolvedValueOnce({ data: {} });
 
       const desiredRoles = [{ name: 'Auditor', description: null, permissions: ['read_audit_log'] }];
       const result = await syncCustomOrgRoles(mockOctokit, 'test-org', desiredRoles, false, false);
 
-      // 404 treated as empty: should attempt to create
       expect(result.subResults).toHaveLength(1);
-      expect(result.subResults[0].kind).toBe('custom-org-role-create');
-      expect(result.failed).toBe(false);
+      expect(result.subResults[0].kind).toBe('custom-org-role-fetch');
+      expect(result.subResults[0].status).toBe('warning');
+      expect(result.subResults[0].message).toContain('Custom organization roles: Write');
+      expect(result.failed).toBe(true);
+      expect(mockRequest).toHaveBeenCalledTimes(1);
+      expect(mockCore.warning).toHaveBeenCalledWith(
+        expect.stringContaining('Could not fetch existing custom org roles')
+      );
     });
 
     test('should mark create API errors as warning and set failed', async () => {
@@ -5481,18 +5485,23 @@ orgs:
       expect(result.subResults[0].kind).toBe('custom-repo-role-delete');
     });
 
-    test('should handle 404 on GET as empty repo roles list', async () => {
+    test('should warn and skip repo role sync when listing roles returns 404', async () => {
       const error404 = new Error('Not Found');
       error404.status = 404;
       mockRequest.mockRejectedValueOnce(error404);
-      mockRequest.mockResolvedValueOnce({ data: {} });
 
       const desiredRoles = [{ name: 'Contractor', description: null, base_role: 'write', permissions: ['x'] }];
       const result = await syncCustomRepoRoles(mockOctokit, 'test-org', desiredRoles, false, false);
 
       expect(result.subResults).toHaveLength(1);
-      expect(result.subResults[0].kind).toBe('custom-repo-role-create');
-      expect(result.failed).toBe(false);
+      expect(result.subResults[0].kind).toBe('custom-repo-role-fetch');
+      expect(result.subResults[0].status).toBe('warning');
+      expect(result.subResults[0].message).toContain('Custom repository roles: Write');
+      expect(result.failed).toBe(true);
+      expect(mockRequest).toHaveBeenCalledTimes(1);
+      expect(mockCore.warning).toHaveBeenCalledWith(
+        expect.stringContaining('Could not fetch existing custom repo roles')
+      );
     });
 
     test('should mark create API errors as warning and set failed', async () => {
