@@ -69,20 +69,28 @@ This sync is intentionally non-destructive: it creates or updates files present 
 For stronger security and higher rate limits, use a GitHub App:
 
 1. Create a GitHub App with the following permissions:
-   - **Organization Custom Properties**: Admin (required for managing custom property definitions)
-   - **Organization Administration**: Read and write (required for managing organization settings and rulesets)
-   - **Organization Issue Types**: Write (required for managing issue type definitions)
-   - **Contents**: Read and write (required for `.github`/`.github-private` repo sync)
-   - **Pull Requests**: Read and write (required for `.github`/`.github-private` repo sync)
+
+   **Organization permissions:**
+   - **Administration**: Read and write (required for managing organization settings and rulesets)
+   - **Custom properties**: Admin (required for managing custom property definitions)
+   - **Custom organization roles**: Write (required for managing custom organization roles)
+   - **Custom repository roles**: Write (required for managing custom repository roles)
+   - **Issue types**: Write (required for managing issue type definitions)
+
+   **Repository permissions** _(only required for `.github`/`.github-private` repo sync)_:
+   - **Contents**: Read and write
+   - **Workflows**: Read and write (required if syncing workflow files)
+   - **Pull requests**: Read and write
+
 2. Install it to your organization(s)
-3. Add `APP_ID` and `APP_PRIVATE_KEY` as repository secrets
+3. Add `APP_CLIENT_ID` as a repository variable and `APP_PRIVATE_KEY` as a repository secret
 
 ```yml
 - name: Generate GitHub App Token
   id: app-token
   uses: actions/create-github-app-token@v3
   with:
-    app-id: ${{ secrets.APP_ID }}
+    client-id: ${{ vars.APP_CLIENT_ID }}
     private-key: ${{ secrets.APP_PRIVATE_KEY }}
     owner: ${{ github.repository_owner }}
 
@@ -1218,7 +1226,7 @@ jobs:
       - uses: actions/create-github-app-token@v3
         id: app-token
         with:
-          app-id: ${{ vars.APP_ID }}
+          client-id: ${{ vars.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
 
