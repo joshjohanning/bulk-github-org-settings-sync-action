@@ -573,6 +573,15 @@ function formatSubResultSummary(subResult) {
   return label ? `${label}: ${subResult.message}` : subResult.message;
 }
 
+/**
+ * Format a sub-result status for summary table rows.
+ * @param {string} status - One of SubResultStatus values
+ * @returns {string} Human-readable status
+ */
+function formatSubResultStatus(status) {
+  return status === SubResultStatus.WARNING ? '⚠️ Warning' : '✅ Changed';
+}
+
 // ─── Organization parsing ───────────────────────────────────────────────────────
 
 /**
@@ -5050,7 +5059,7 @@ export async function run() {
         if (actionableResults.length === 0) {
           tableRows.push([status, 'No changes needed']);
         } else {
-          tableRows.push(...actionableResults.map((s, i) => [i === 0 ? status : '', formatSubResultSummary(s)]));
+          tableRows.push(...actionableResults.map(s => [formatSubResultStatus(s.status), formatSubResultSummary(s)]));
         }
       }
 

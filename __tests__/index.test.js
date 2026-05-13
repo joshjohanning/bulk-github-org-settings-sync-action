@@ -2085,7 +2085,59 @@ orgs:
           { data: 'Details', header: true }
         ],
         ['✅ Changed', 'custom property (created): Would create "team" (string)'],
-        ['', 'custom property (created): Would create "environment" (string)']
+        ['✅ Changed', 'custom property (created): Would create "environment" (string)']
+      ]);
+    });
+
+    test('should render each summary detail row with its own status', async () => {
+      const repoRolesYaml = `- name: Contractor
+  description: 'Limited role'
+  base-role: write
+  permissions:
+    - delete_alerts_code_scanning
+`;
+      setMockFileContent(repoRolesYaml, '/mock/custom-repo-roles.yml');
+
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          'github-api-url': 'https://api.github.com',
+          organizations: 'my-org',
+          'organizations-file': '',
+          'custom-repo-roles-file': '/mock/custom-repo-roles.yml',
+          'org-description': 'New description',
+          'dry-run': 'true'
+        };
+        return inputs[name] ?? '';
+      });
+      mockCore.getBooleanInput.mockImplementation(name => {
+        if (name === 'dry-run') return true;
+        return false;
+      });
+
+      const error404 = new Error('Not Found');
+      error404.status = 404;
+      mockRequest.mockRejectedValueOnce(error404);
+      mockRequest.mockResolvedValueOnce({ data: { description: 'Old description' } });
+
+      await run();
+
+      expect(mockCore.setFailed).not.toHaveBeenCalled();
+      expect(mockCore.summary.addTable).toHaveBeenLastCalledWith([
+        [
+          { data: 'Status', header: true },
+          { data: 'Details', header: true }
+        ],
+        [
+          '⚠️ Warning',
+          expect.stringContaining(
+            'custom repo role (fetch failed): Could not fetch existing custom repo roles for "my-org"'
+          )
+        ],
+        [
+          '✅ Changed',
+          'organization profile (updated): Would update 1 profile field(s): org-description: Old description → New description'
+        ]
       ]);
     });
 
