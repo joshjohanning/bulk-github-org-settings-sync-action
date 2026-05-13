@@ -72,6 +72,8 @@ For stronger security and higher rate limits, use a GitHub App:
    - **Organization Custom Properties**: Admin (required for managing custom property definitions)
    - **Organization Administration**: Read and write (required for managing organization settings and rulesets)
    - **Organization Issue Types**: Write (required for managing issue type definitions)
+   - **Organization Custom Roles**: Write (required for managing custom organization roles)
+   - **Custom Repository Roles**: Write (required for managing custom repository roles)
    - **Contents**: Read and write (required for `.github`/`.github-private` repo sync)
    - **Pull Requests**: Read and write (required for `.github`/`.github-private` repo sync)
 2. Install it to your organization(s)
