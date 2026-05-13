@@ -80,7 +80,7 @@ For stronger security and higher rate limits, use a GitHub App:
    **Repository permissions** _(only required for `.github`/`.github-private` repo sync)_:
    - **Contents**: Read and write
    - **Workflows**: Read and write (required if syncing workflow files)
-   - **Pull requests**: Write
+   - **Pull requests**: Read and write
 
 2. Install it to your organization(s)
 3. Add `APP_CLIENT_ID` as a repository variable and `APP_PRIVATE_KEY` as a repository secret
