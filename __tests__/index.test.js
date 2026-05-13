@@ -2041,7 +2041,7 @@ orgs:
       expect(mockCore.setOutput).toHaveBeenCalledWith('failed-organizations', '0');
     });
 
-    test('should render each changed sub-result as a separate summary table row', async () => {
+    test('should render an org-specific summary table with one row per changed sub-result', async () => {
       const cpYaml = `- name: team
   value-type: string
   required: false
@@ -2078,14 +2078,85 @@ orgs:
       await run();
 
       expect(mockCore.setFailed).not.toHaveBeenCalled();
-      expect(mockCore.summary.addTable).toHaveBeenCalledWith([
+      expect(mockCore.summary.addHeading).toHaveBeenCalledWith('my-org', 3);
+      expect(mockCore.summary.addTable).toHaveBeenLastCalledWith([
         [
-          { data: 'Organization', header: true },
           { data: 'Status', header: true },
           { data: 'Details', header: true }
         ],
-        ['my-org', '✅ Changed', 'custom property (created): Would create "team" (string)'],
-        ['', '', 'custom property (created): Would create "environment" (string)']
+        ['✅ Changed', 'custom property (created): Would create "team" (string)'],
+        ['', 'custom property (created): Would create "environment" (string)']
+      ]);
+    });
+
+    test('should render org-specific summary tables for each organization in order', async () => {
+      const orgsYaml = `orgs:
+  - org: my-org
+  - org: my-other-org
+`;
+      const cpYaml = `- name: team
+  value-type: string
+  required: false
+  description: 'Owning team'
+  values-editable-by: org_actors
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+      setMockFileContent(cpYaml, '/mock/custom-properties.yml');
+
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          'github-api-url': 'https://api.github.com',
+          organizations: '',
+          'organizations-file': '/mock/orgs.yml',
+          'custom-properties-file': '/mock/custom-properties.yml',
+          'delete-unmanaged-properties': 'false',
+          'dry-run': 'true'
+        };
+        return inputs[name] ?? '';
+      });
+      mockCore.getBooleanInput.mockImplementation(name => {
+        if (name === 'dry-run') return true;
+        if (name === 'delete-unmanaged-properties') return false;
+        return false;
+      });
+
+      mockRequest.mockResolvedValueOnce({ data: [] });
+      mockRequest.mockResolvedValueOnce({
+        data: [
+          {
+            property_name: 'team',
+            value_type: 'string',
+            required: false,
+            description: 'Owning team',
+            default_value: null,
+            values_editable_by: 'org_actors'
+          }
+        ]
+      });
+
+      await run();
+
+      expect(mockCore.setFailed).not.toHaveBeenCalled();
+      expect(mockCore.summary.addHeading).toHaveBeenNthCalledWith(
+        1,
+        'Bulk Organization Settings Sync Results (DRY-RUN)'
+      );
+      expect(mockCore.summary.addHeading).toHaveBeenNthCalledWith(2, 'my-org', 3);
+      expect(mockCore.summary.addHeading).toHaveBeenNthCalledWith(3, 'my-other-org', 3);
+      expect(mockCore.summary.addTable).toHaveBeenNthCalledWith(1, [
+        [
+          { data: 'Status', header: true },
+          { data: 'Details', header: true }
+        ],
+        ['✅ Changed', 'custom property (created): Would create "team" (string)']
+      ]);
+      expect(mockCore.summary.addTable).toHaveBeenNthCalledWith(2, [
+        [
+          { data: 'Status', header: true },
+          { data: 'Details', header: true }
+        ],
+        ['➖ No changes', 'No changes needed']
       ]);
     });
 
