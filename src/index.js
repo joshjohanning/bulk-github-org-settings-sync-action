@@ -1795,11 +1795,8 @@ export async function syncCustomOrgRoles(octokit, org, desiredRoles, deleteUnman
   // Fetch current custom org roles
   let existingRoles;
   try {
-    existingRoles = await octokit.paginate(
-      'GET /orgs/{org}/organization-roles',
-      { org, per_page: 100 },
-      response => response.data.roles || []
-    );
+    const { data } = await octokit.request('GET /orgs/{org}/organization-roles', { org, per_page: 100 });
+    existingRoles = data.roles || [];
   } catch (error) {
     if (error.status === 404) {
       existingRoles = [];
@@ -2027,11 +2024,8 @@ export async function syncCustomRepoRoles(octokit, org, desiredRoles, deleteUnma
   // Fetch current custom repo roles
   let existingRoles;
   try {
-    existingRoles = await octokit.paginate(
-      'GET /orgs/{org}/custom-repository-roles',
-      { org, per_page: 100 },
-      response => response.data.custom_roles || []
-    );
+    const { data } = await octokit.request('GET /orgs/{org}/custom-repository-roles', { org, per_page: 100 });
+    existingRoles = data.custom_roles || [];
   } catch (error) {
     if (error.status === 404) {
       existingRoles = [];
