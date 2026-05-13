@@ -1806,7 +1806,7 @@ export async function syncCustomOrgRoles(octokit, org, desiredRoles, deleteUnman
         `If using a GitHub App, verify it has "Custom organization roles: Write" and the installation has been re-approved.`;
       core.warning(`  ⚠️  ${message}`);
       subResults.push(createSubResult('custom-org-role-fetch', SubResultStatus.WARNING, message));
-      return { subResults, failed: true };
+      return { subResults, failed: false };
     }
 
     throw error;
@@ -2040,7 +2040,7 @@ export async function syncCustomRepoRoles(octokit, org, desiredRoles, deleteUnma
         `If using a GitHub App, verify it has "Custom repository roles: Write" and the installation has been re-approved.`;
       core.warning(`  ⚠️  ${message}`);
       subResults.push(createSubResult('custom-repo-role-fetch', SubResultStatus.WARNING, message));
-      return { subResults, failed: true };
+      return { subResults, failed: false };
     }
 
     throw error;

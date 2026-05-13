@@ -3813,7 +3813,7 @@ orgs:
       expect(result.subResults[0].kind).toBe('custom-org-role-fetch');
       expect(result.subResults[0].status).toBe('warning');
       expect(result.subResults[0].message).toContain('Custom organization roles: Write');
-      expect(result.failed).toBe(true);
+      expect(result.failed).toBe(false);
       expect(mockRequest).toHaveBeenCalledTimes(1);
       expect(mockCore.warning).toHaveBeenCalledWith(
         expect.stringContaining('Could not fetch existing custom org roles')
@@ -5497,7 +5497,7 @@ orgs:
       expect(result.subResults[0].kind).toBe('custom-repo-role-fetch');
       expect(result.subResults[0].status).toBe('warning');
       expect(result.subResults[0].message).toContain('Custom repository roles: Write');
-      expect(result.failed).toBe(true);
+      expect(result.failed).toBe(false);
       expect(mockRequest).toHaveBeenCalledTimes(1);
       expect(mockCore.warning).toHaveBeenCalledWith(
         expect.stringContaining('Could not fetch existing custom repo roles')
