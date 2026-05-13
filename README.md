@@ -81,15 +81,16 @@ For stronger security and higher rate limits, use a GitHub App:
    - **Contents**: Read and write
    - **Workflows**: Read and write (required if syncing workflow files)
    - **Pull requests**: Write
+
 2. Install it to your organization(s)
-3. Add `APP_ID` and `APP_PRIVATE_KEY` as repository secrets
+3. Add `APP_CLIENT_ID` as a repository variable and `APP_PRIVATE_KEY` as a repository secret
 
 ```yml
 - name: Generate GitHub App Token
   id: app-token
   uses: actions/create-github-app-token@v3
   with:
-    app-id: ${{ secrets.APP_ID }}
+    client-id: ${{ vars.APP_CLIENT_ID }}
     private-key: ${{ secrets.APP_PRIVATE_KEY }}
     owner: ${{ github.repository_owner }}
 
@@ -1225,7 +1226,7 @@ jobs:
       - uses: actions/create-github-app-token@v3
         id: app-token
         with:
-          app-id: ${{ vars.APP_ID }}
+          client-id: ${{ vars.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
 
