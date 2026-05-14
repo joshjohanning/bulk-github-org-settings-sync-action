@@ -1122,8 +1122,7 @@ export async function syncSecurityManagerTeams(octokit, org, desiredTeamSlugs, d
 
   let existingTeams;
   try {
-    const { data } = await octokit.request('GET /orgs/{org}/security-managers', { org });
-    existingTeams = data;
+    existingTeams = await octokit.paginate('GET /orgs/{org}/security-managers', { org, per_page: 100 });
   } catch (error) {
     if (isPermissionLikeFetchError(error)) {
       const message = formatPermissionFetchWarning('security manager teams', org, error);

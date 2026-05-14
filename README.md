@@ -776,7 +776,7 @@ orgs:
 Assign organization security manager access to teams by slug.
 
 > [!WARNING]
-> GitHub's security manager REST endpoints are scheduled for removal starting January 1, 2026. This action supports the current endpoints for now; GitHub recommends organization roles as the long-term replacement.
+> GitHub's security manager REST endpoints are deprecated and may be unavailable on some GitHub products/versions. This feature only works where those endpoints are still available; GitHub recommends organization roles as the long-term replacement.
 
 ```yml
 - name: Sync Organization Settings

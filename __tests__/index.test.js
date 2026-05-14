@@ -83,6 +83,10 @@ inputs:
     description: 'Members can view dependency insights'
   display-commenter-full-name-setting-enabled:
     description: 'Display commenter full name'
+  security-manager-teams:
+    description: 'Security manager team slugs'
+  delete-unmanaged-security-manager-teams:
+    description: 'Delete unmanaged security manager teams'
   rulesets-file:
     description: 'Rulesets file'
   delete-unmanaged-rulesets:
@@ -2134,6 +2138,41 @@ orgs:
       expect(mockCore.setOutput).toHaveBeenCalledWith('failed-organizations', '0');
     });
 
+    test('should process security manager teams from action inputs', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          'github-api-url': 'https://api.github.com',
+          organizations: 'my-org',
+          'security-manager-teams': 'security-team',
+          'dry-run': 'true'
+        };
+        return inputs[name] ?? '';
+      });
+      mockCore.getBooleanInput.mockImplementation(name => {
+        if (name === 'dry-run') return true;
+        return false;
+      });
+      mockPaginate.mockResolvedValueOnce([]);
+
+      await run();
+
+      expect(mockCore.setFailed).not.toHaveBeenCalled();
+      expect(mockPaginate).toHaveBeenCalledWith('GET /orgs/{org}/security-managers', {
+        org: 'my-org',
+        per_page: 100
+      });
+      expect(mockCore.setOutput).toHaveBeenCalledWith('updated-organizations', '1');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-organizations', '1');
+      expect(mockCore.summary.addTable).toHaveBeenLastCalledWith([
+        [
+          { data: 'Status', header: true },
+          { data: 'Details', header: true }
+        ],
+        ['✅ Changed', 'security manager team (added): Would add "security-team"']
+      ]);
+    });
+
     test('should render an org-specific summary table with one row per changed sub-result', async () => {
       const cpYaml = `- name: team
   value-type: string
@@ -3338,11 +3377,25 @@ orgs:
       expect(result[0].securityManagerTeams).toEqual([]);
       expect(result[0].deleteUnmanagedSecurityManagerTeams).toBe(true);
     });
+
+    test('should not warn for valid per-org security manager teams config', () => {
+      const orgsYaml = `orgs:
+  - org: my-org
+    security-manager-teams:
+      - security-team
+    delete-unmanaged-security-manager-teams: true
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+
+      parseOrganizationsFile('/mock/orgs.yml');
+
+      expect(mockCore.warning).not.toHaveBeenCalled();
+    });
   });
 
   describe('syncSecurityManagerTeams', () => {
     test('should add missing security manager teams', async () => {
-      mockRequest.mockResolvedValueOnce({ data: [{ slug: 'existing-security' }] });
+      mockPaginate.mockResolvedValueOnce([{ slug: 'existing-security' }]);
       mockRequest.mockResolvedValueOnce({ status: 204 });
 
       const result = await syncSecurityManagerTeams(
@@ -3368,7 +3421,7 @@ orgs:
     });
 
     test('should remove unmanaged security manager teams when enabled', async () => {
-      mockRequest.mockResolvedValueOnce({ data: [{ slug: 'keep-security' }, { slug: 'old-security' }] });
+      mockPaginate.mockResolvedValueOnce([{ slug: 'keep-security' }, { slug: 'old-security' }]);
       mockRequest.mockResolvedValueOnce({ status: 204 });
 
       const result = await syncSecurityManagerTeams(mockOctokit, 'my-org', ['keep-security'], true, false);
@@ -3388,7 +3441,7 @@ orgs:
     });
 
     test('should dry-run add and remove security manager teams without API changes', async () => {
-      mockRequest.mockResolvedValueOnce({ data: [{ slug: 'old-security' }] });
+      mockPaginate.mockResolvedValueOnce([{ slug: 'old-security' }]);
 
       const result = await syncSecurityManagerTeams(mockOctokit, 'my-org', ['new-security'], true, true);
 
@@ -3405,13 +3458,13 @@ orgs:
           message: 'Would remove "old-security"'
         }
       ]);
-      expect(mockRequest).toHaveBeenCalledTimes(1);
+      expect(mockRequest).not.toHaveBeenCalled();
     });
 
     test('should skip with permission warning on 404 fetch', async () => {
       const error404 = new Error('Not Found');
       error404.status = 404;
-      mockRequest.mockRejectedValueOnce(error404);
+      mockPaginate.mockRejectedValueOnce(error404);
 
       const result = await syncSecurityManagerTeams(mockOctokit, 'my-org', ['security'], false, false);
 
@@ -3423,7 +3476,7 @@ orgs:
     });
 
     test('should mark add failures as failed warnings', async () => {
-      mockRequest.mockResolvedValueOnce({ data: [] });
+      mockPaginate.mockResolvedValueOnce([]);
       mockRequest.mockRejectedValueOnce(new Error('Team not found'));
 
       const result = await syncSecurityManagerTeams(mockOctokit, 'my-org', ['missing-team'], false, false);
