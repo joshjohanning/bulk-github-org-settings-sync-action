@@ -565,13 +565,12 @@ function isPermissionLikeFetchError(error) {
  * @param {string} resource - Resource being fetched
  * @param {string} org - Organization name
  * @param {Error & { status?: number }} error - API error
- * @param {string} permissionHint - GitHub App permission hint
  * @returns {string}
  */
-function formatPermissionFetchWarning(resource, org, error, permissionHint) {
+function formatPermissionFetchWarning(resource, org, error) {
   return (
     `Could not fetch existing ${resource} for "${org}" (status ${error.status}). ` +
-    `If using a GitHub App, verify it has "${permissionHint}" and the installation has been re-approved.`
+    `If using a GitHub App, verify it has the proper permissions and has been installed or re-approved if permissions were recently modified.`
   );
 }
 
@@ -1671,7 +1670,7 @@ export async function syncIssueTypes(octokit, org, desiredIssueTypes, deleteUnma
     existingIssueTypes = data;
   } catch (error) {
     if (isPermissionLikeFetchError(error)) {
-      const message = formatPermissionFetchWarning('issue types', org, error, 'Issue types: Write');
+      const message = formatPermissionFetchWarning('issue types', org, error);
       core.warning(`  ⚠️  ${message}`);
       subResults.push(createSubResult('issue-type-fetch', SubResultStatus.WARNING, message));
       return { subResults, failed: false };
@@ -1888,7 +1887,7 @@ export async function syncCustomOrgRoles(octokit, org, desiredRoles, deleteUnman
     if (error.status === 403 || error.status === 404) {
       const message =
         `Could not fetch existing custom org roles for "${org}" (status ${error.status}). ` +
-        `If using a GitHub App, verify it has "Custom organization roles: Write" and the installation has been re-approved.`;
+        `If using a GitHub App, verify it has the proper permissions and has been installed or re-approved if permissions were recently modified.`;
       core.warning(`  ⚠️  ${message}`);
       subResults.push(createSubResult('custom-org-role-fetch', SubResultStatus.WARNING, message));
       return { subResults, failed: false };
@@ -2124,7 +2123,7 @@ export async function syncCustomRepoRoles(octokit, org, desiredRoles, deleteUnma
     if (error.status === 403 || error.status === 404) {
       const message =
         `Could not fetch existing custom repo roles for "${org}" (status ${error.status}). ` +
-        `If using a GitHub App, verify it has "Custom repository roles: Write" and the installation has been re-approved.`;
+        `If using a GitHub App, verify it has the proper permissions and has been installed or re-approved if permissions were recently modified.`;
       core.warning(`  ⚠️  ${message}`);
       subResults.push(createSubResult('custom-repo-role-fetch', SubResultStatus.WARNING, message));
       return { subResults, failed: false };
@@ -2442,7 +2441,7 @@ export async function syncCustomProperties(octokit, org, desiredProperties, dele
     existingProperties = data;
   } catch (error) {
     if (isPermissionLikeFetchError(error)) {
-      const message = formatPermissionFetchWarning('custom properties', org, error, 'Custom properties: Admin');
+      const message = formatPermissionFetchWarning('custom properties', org, error);
       core.warning(`  ⚠️  ${message}`);
       subResults.push(createSubResult('custom-property-fetch', SubResultStatus.WARNING, message));
       return { subResults, failed: false };
@@ -2843,7 +2842,7 @@ export async function syncActionsPolicy(octokit, org, desiredSettings, allowList
         }
       } catch (error) {
         const message = isPermissionLikeFetchError(error)
-          ? formatPermissionFetchWarning('actions permissions', org, error, 'Administration: Write')
+          ? formatPermissionFetchWarning('actions permissions', org, error)
           : `Failed to verify actions permissions before syncing selected actions settings: ${error.message}`;
         core.warning(`  ⚠️  ${message}`);
         if (Object.keys(selectedActionsSettings).length > 0) {
@@ -2906,7 +2905,7 @@ async function syncActionsPermissions(octokit, org, desiredSettings, dryRun, wou
     current = data;
   } catch (error) {
     const message = isPermissionLikeFetchError(error)
-      ? formatPermissionFetchWarning('actions permissions', org, error, 'Administration: Write')
+      ? formatPermissionFetchWarning('actions permissions', org, error)
       : `Failed to fetch actions permissions: ${error.message}`;
     core.warning(`  ⚠️  ${message}`);
     subResults.push(createSubResult('actions-policy-permissions-update', SubResultStatus.WARNING, message));
@@ -2981,7 +2980,7 @@ async function syncActionsWorkflowPermissions(octokit, org, desiredSettings, dry
     current = data;
   } catch (error) {
     const message = isPermissionLikeFetchError(error)
-      ? formatPermissionFetchWarning('actions workflow permissions', org, error, 'Administration: Write')
+      ? formatPermissionFetchWarning('actions workflow permissions', org, error)
       : `Failed to fetch workflow permissions: ${error.message}`;
     core.warning(`  ⚠️  ${message}`);
     subResults.push(createSubResult('actions-policy-workflow-update', SubResultStatus.WARNING, message));
@@ -3056,7 +3055,7 @@ async function syncActionsSelectedActions(octokit, org, desiredSettings, allowLi
     current = data;
   } catch (error) {
     const message = isPermissionLikeFetchError(error)
-      ? formatPermissionFetchWarning('selected actions settings', org, error, 'Administration: Write')
+      ? formatPermissionFetchWarning('selected actions settings', org, error)
       : `Failed to fetch selected actions settings: ${error.message}`;
     core.warning(`  ⚠️  ${message}`);
     subResults.push(createSubResult('actions-policy-selected-actions-update', SubResultStatus.WARNING, message));
@@ -3273,7 +3272,7 @@ export async function syncOrgRulesets(octokit, org, rulesetFilePaths, deleteUnma
     existingRulesets = await octokit.paginate('GET /orgs/{org}/rulesets', { org, per_page: 100 });
   } catch (error) {
     if (isPermissionLikeFetchError(error)) {
-      const message = formatPermissionFetchWarning('rulesets', org, error, 'Administration: Write');
+      const message = formatPermissionFetchWarning('rulesets', org, error);
       core.warning(`  ⚠️  ${message}`);
       subResults.push(createSubResult('ruleset-fetch', SubResultStatus.WARNING, message));
       return { subResults, failed: false };
@@ -3549,7 +3548,7 @@ export async function syncDotGithubRepo(octokit, org, sourceDir, repoName, dryRu
     if (isPermissionLikeFetchError(error)) {
       const message =
         `Repository "${org}/${repoName}" not found or token lacks access (status ${error.status}). ` +
-        `If you expect this repository to exist, verify the GitHub App has "Contents: Read and write" and the installation has been re-approved.`;
+        `If you expect this repository to exist and are using a GitHub App, verify it has the proper permissions and has been installed or re-approved if permissions were recently modified.`;
       core.warning(`  ⚠️  ${message}`);
       subResults.push(createSubResult(kindLabel, SubResultStatus.WARNING, message));
       return { subResults, failed: false };
@@ -4353,12 +4352,7 @@ export async function syncCodeSecurityConfigurations(octokit, org, desiredConfig
     existingConfigs = await octokit.paginate('GET /orgs/{org}/code-security/configurations', { org, per_page: 100 });
   } catch (error) {
     if (isPermissionLikeFetchError(error)) {
-      const message = formatPermissionFetchWarning(
-        'code security configurations',
-        org,
-        error,
-        'Code security configurations: Write'
-      );
+      const message = formatPermissionFetchWarning('code security configurations', org, error);
       core.warning(`  ⚠️  ${message}`);
       subResults.push(createSubResult('code-security-config-fetch', SubResultStatus.WARNING, message));
       return { subResults, failed: false };

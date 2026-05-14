@@ -1818,7 +1818,7 @@ orgs:
       expect(result.subResults).toHaveLength(1);
       expect(result.subResults[0].kind).toBe('issue-type-fetch');
       expect(result.subResults[0].status).toBe('warning');
-      expect(result.subResults[0].message).toContain('Issue types: Write');
+      expect(result.subResults[0].message).toContain('proper permissions');
       expect(result.failed).toBe(false);
       expect(mockRequest).toHaveBeenCalledTimes(1);
     });
@@ -1833,7 +1833,7 @@ orgs:
       expect(result.subResults).toHaveLength(1);
       expect(result.subResults[0].kind).toBe('issue-type-fetch');
       expect(result.subResults[0].message).toContain('status 403');
-      expect(result.subResults[0].message).toContain('Issue types: Write');
+      expect(result.subResults[0].message).toContain('proper permissions');
       expect(result.failed).toBe(false);
       expect(mockRequest).toHaveBeenCalledTimes(1);
     });
@@ -2020,7 +2020,7 @@ orgs:
       expect(result.subResults).toHaveLength(1);
       expect(result.subResults[0].kind).toBe('custom-property-fetch');
       expect(result.subResults[0].status).toBe('warning');
-      expect(result.subResults[0].message).toContain('Custom properties: Admin');
+      expect(result.subResults[0].message).toContain('proper permissions');
       expect(result.failed).toBe(false);
       expect(mockRequest).toHaveBeenCalledTimes(1);
     });
@@ -2712,7 +2712,7 @@ orgs:
       expect(result.subResults).toHaveLength(1);
       expect(result.subResults[0].kind).toBe('ruleset-fetch');
       expect(result.subResults[0].status).toBe('warning');
-      expect(result.subResults[0].message).toContain('Administration: Write');
+      expect(result.subResults[0].message).toContain('proper permissions');
       expect(result.failed).toBe(false);
       expect(mockRequest).not.toHaveBeenCalled();
     });
@@ -3554,7 +3554,7 @@ orgs:
       expect(result.subResults).toHaveLength(1);
       expect(result.subResults[0].status).toBe('warning');
       expect(result.subResults[0].message).toContain('not found or token lacks access');
-      expect(result.subResults[0].message).toContain('Contents: Read and write');
+      expect(result.subResults[0].message).toContain('proper permissions');
       expect(result.failed).toBe(false);
     });
 
@@ -4083,7 +4083,7 @@ orgs:
       expect(result.subResults).toHaveLength(1);
       expect(result.subResults[0].kind).toBe('custom-org-role-fetch');
       expect(result.subResults[0].status).toBe('warning');
-      expect(result.subResults[0].message).toContain('Custom organization roles: Write');
+      expect(result.subResults[0].message).toContain('proper permissions');
       expect(result.failed).toBe(false);
       expect(mockRequest).toHaveBeenCalledTimes(1);
       expect(mockCore.warning).toHaveBeenCalledWith(
@@ -4933,7 +4933,7 @@ orgs:
       expect(result.subResults).toHaveLength(1);
       expect(result.subResults[0].kind).toBe('code-security-config-fetch');
       expect(result.subResults[0].status).toBe('warning');
-      expect(result.subResults[0].message).toContain('Code security configurations: Write');
+      expect(result.subResults[0].message).toContain('proper permissions');
       expect(result.failed).toBe(false);
       expect(mockRequest).not.toHaveBeenCalled();
     });
@@ -5770,7 +5770,7 @@ orgs:
       expect(result.subResults).toHaveLength(1);
       expect(result.subResults[0].kind).toBe('custom-repo-role-fetch');
       expect(result.subResults[0].status).toBe('warning');
-      expect(result.subResults[0].message).toContain('Custom repository roles: Write');
+      expect(result.subResults[0].message).toContain('proper permissions');
       expect(result.failed).toBe(false);
       expect(mockRequest).toHaveBeenCalledTimes(1);
       expect(mockCore.warning).toHaveBeenCalledWith(
@@ -6493,7 +6493,7 @@ orgs:
       expect(result.failed).toBe(true);
       expect(result.subResults[0].status).toBe('warning');
       expect(result.subResults[0].message).toContain('status 404');
-      expect(result.subResults[0].message).toContain('Administration: Write');
+      expect(result.subResults[0].message).toContain('proper permissions');
     });
 
     test('should include permission hint when selected actions fetch fails with 403', async () => {
@@ -6515,7 +6515,7 @@ orgs:
       expect(result.subResults).toHaveLength(1);
       expect(result.subResults[0].kind).toBe('actions-policy-selected-actions-update');
       expect(result.subResults[0].message).toContain('status 403');
-      expect(result.subResults[0].message).toContain('Administration: Write');
+      expect(result.subResults[0].message).toContain('proper permissions');
     });
 
     test('should sync allow list patterns', async () => {
