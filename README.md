@@ -828,6 +828,9 @@ orgs:
     organization-role-team-assignments-file: './config/my-org-role-team-assignments.yml'
 ```
 
+> [!NOTE]
+> If both inline `organization-role-team-assignments` and `organization-role-team-assignments-file` are specified for the same org, inline values take precedence and the file is ignored.
+
 ---
 
 ## Syncing Member Privileges
