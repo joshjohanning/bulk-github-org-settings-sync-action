@@ -690,7 +690,7 @@ function formatSubResultStatus(status) {
  * @param {string} [dotGithubSourceDir] - Path to source directory for .github repo sync
  * @param {string} [dotGithubPrivateSourceDir] - Path to source directory for .github-private repo sync
  * @param {string} [organizationRoleTeamAssignmentsFile] - Path to organization role team assignments YAML file (base for all orgs)
- * @returns {Array<{ org: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, issueTypes?: Array, memberPrivileges?: Object, customOrgRoles?: Array, customRepoRoles?: Array, orgProfile?: Object, codeSecurityConfigurations?: Array, deleteUnmanagedCodeSecurityConfigurations?: boolean, actionsPolicy?: Object, actionsAllowList?: string[], dotGithubSourceDir?: string, dotGithubPrivateSourceDir?: string }>} Parsed org configs
+ * @returns {Array<{ org: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, issueTypes?: Array, memberPrivileges?: Object, customOrgRoles?: Array, customRepoRoles?: Array, organizationRoleTeamAssignments?: Array, orgProfile?: Object, codeSecurityConfigurations?: Array, deleteUnmanagedCodeSecurityConfigurations?: boolean, actionsPolicy?: Object, actionsAllowList?: string[], dotGithubSourceDir?: string, dotGithubPrivateSourceDir?: string }>} Parsed org configs
  */
 export function parseOrganizations(
   organizationsInput,
@@ -1229,17 +1229,27 @@ function findOrganizationRoleByName(roles, desiredRoleName) {
  * @param {string} org - Organization name
  * @param {Array<Object>} assignments - Desired organization role team assignments
  * @param {boolean} dryRun - Preview mode
+ * @param {Array<Object>} [plannedCustomOrgRoles] - Custom organization roles configured earlier in the same run
  * @returns {Promise<Object>} Result object with subResults
  */
-export async function syncOrganizationRoleTeamAssignments(octokit, org, assignments, dryRun) {
+export async function syncOrganizationRoleTeamAssignments(
+  octokit,
+  org,
+  assignments,
+  dryRun,
+  plannedCustomOrgRoles = []
+) {
   const subResults = [];
   const wouldPrefix = dryRun ? 'Would ' : '';
   let hasFailed = false;
 
   let roles;
   try {
-    const { data } = await octokit.request('GET /orgs/{org}/organization-roles', { org, per_page: 100 });
-    roles = data.roles || [];
+    roles = await octokit.paginate(
+      'GET /orgs/{org}/organization-roles',
+      { org, per_page: 100 },
+      response => response.data.roles || []
+    );
   } catch (error) {
     if (isPermissionLikeFetchError(error)) {
       const message = formatPermissionFetchWarning('organization roles', org, error);
@@ -1254,6 +1264,16 @@ export async function syncOrganizationRoleTeamAssignments(octokit, org, assignme
   for (const assignment of assignments) {
     const role = findOrganizationRoleByName(roles, assignment.role);
     if (!role) {
+      const plannedRole = dryRun ? findOrganizationRoleByName(plannedCustomOrgRoles, assignment.role) : undefined;
+      if (plannedRole) {
+        for (const teamSlug of assignment.teams) {
+          const detail = `${wouldPrefix}add team "${teamSlug}" to role "${assignment.role}"`;
+          core.info(`  🆕 ${detail}`);
+          subResults.push(createSubResult('organization-role-team-add', SubResultStatus.CHANGED, detail));
+        }
+        continue;
+      }
+
       hasFailed = true;
       const message = `Could not find organization role "${assignment.role}" for "${org}".`;
       core.warning(`  ⚠️  ${message}`);
@@ -5330,7 +5350,8 @@ export async function run() {
             octokit,
             org,
             orgConfig.organizationRoleTeamAssignments,
-            dryRun
+            dryRun,
+            orgConfig.customOrgRoles || []
           );
           result.subResults.push(...ortaResult.subResults);
 
