@@ -85,6 +85,8 @@ For stronger security and higher rate limits, use a GitHub App:
 2. Install it to your organization(s)
 3. Add `APP_CLIENT_ID` as a repository variable and `APP_PRIVATE_KEY` as a repository secret
 
+If a sync step warns that it could not fetch existing settings with status `403` or `404`, re-check the matching GitHub App permission above and re-approve the app installation. GitHub can return `404` for inaccessible organization resources, not only missing resources.
+
 ```yml
 - name: Generate GitHub App Token
   id: app-token
