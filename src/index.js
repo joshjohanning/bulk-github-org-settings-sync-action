@@ -111,11 +111,15 @@ export function resetKnownOrgConfigKeysCache() {
 const KNOWN_CUSTOM_PROPERTY_KEYS = new Set([
   'name',
   'value-type',
+  'value_type',
   'required',
   'description',
   'default-value',
+  'default_value',
   'allowed-values',
-  'values-editable-by'
+  'allowed_values',
+  'values-editable-by',
+  'values_editable_by'
 ]);
 
 /**
@@ -134,7 +138,16 @@ const KNOWN_CUSTOM_ORG_ROLE_KEYS = new Set(['name', 'description', 'permissions'
  * Known keys for custom repository role definitions in the YAML file.
  * Used to warn about typos or unknown keys.
  */
-const KNOWN_CUSTOM_REPO_ROLE_KEYS = new Set(['name', 'description', 'base-role', 'permissions']);
+const KNOWN_CUSTOM_REPO_ROLE_KEYS = new Set(['name', 'description', 'base-role', 'base_role', 'permissions']);
+
+// TODO(v2): remove legacy hyphenated aliases and require GitHub API-style underscore keys.
+const YAML_KEY_ALIASES = Object.freeze({
+  value_type: 'value-type',
+  default_value: 'default-value',
+  allowed_values: 'allowed-values',
+  values_editable_by: 'values-editable-by',
+  base_role: 'base-role'
+});
 
 /**
  * Supported member privilege settings.
@@ -532,6 +545,33 @@ const SYNC_KIND_LABELS = Object.freeze({
  */
 function createSubResult(kind, status, message) {
   return { kind, status, message };
+}
+
+/**
+ * Read a YAML value that supports canonical underscore keys and legacy hyphen aliases.
+ * Throws when both forms are present with different values to avoid silent ambiguity.
+ * @param {Object} config - Raw YAML object
+ * @param {string} canonicalKey - GitHub API-style underscore key
+ * @param {string} context - Human-readable context for errors
+ * @returns {*}
+ */
+function getAliasedYamlValue(config, canonicalKey, context) {
+  const legacyKey = YAML_KEY_ALIASES[canonicalKey];
+  const hasCanonical = Object.prototype.hasOwnProperty.call(config, canonicalKey);
+  const hasLegacy = Object.prototype.hasOwnProperty.call(config, legacyKey);
+
+  if (hasCanonical && hasLegacy && JSON.stringify(config[canonicalKey]) !== JSON.stringify(config[legacyKey])) {
+    throw new Error(
+      `${context} defines both "${canonicalKey}" and legacy "${legacyKey}" with different values. ` +
+        `Use "${canonicalKey}" only.`
+    );
+  }
+
+  if (hasCanonical) {
+    return config[canonicalKey];
+  }
+
+  return hasLegacy ? config[legacyKey] : undefined;
 }
 
 /**
@@ -1405,80 +1445,85 @@ export function normalizeCustomProperties(properties) {
     if (!prop.name) {
       throw new Error('Each custom property must have a "name" field');
     }
-    if (!prop['value-type']) {
-      throw new Error(`Custom property "${prop.name}" must have a "value-type" field`);
+    const context = `Custom property "${prop.name}"`;
+    const valueType = getAliasedYamlValue(prop, 'value_type', context);
+    const defaultValue = getAliasedYamlValue(prop, 'default_value', context);
+    const allowedValues = getAliasedYamlValue(prop, 'allowed_values', context);
+    const valuesEditableBy = getAliasedYamlValue(prop, 'values_editable_by', context);
+
+    if (!valueType) {
+      throw new Error(`Custom property "${prop.name}" must have a "value_type" field`);
     }
 
     const validTypes = ['string', 'single_select', 'multi_select', 'true_false', 'url'];
-    if (!validTypes.includes(prop['value-type'])) {
+    if (!validTypes.includes(valueType)) {
       throw new Error(
-        `Custom property "${prop.name}" has invalid value-type "${prop['value-type']}". ` +
-          `Valid types: ${validTypes.join(', ')}`
+        `Custom property "${prop.name}" has invalid value_type "${valueType}". Valid types: ${validTypes.join(', ')}`
       );
     }
 
     const validEditableBy = ['org_actors', 'org_and_repo_actors'];
-    if (prop['values-editable-by'] && !validEditableBy.includes(prop['values-editable-by'])) {
+    if (valuesEditableBy && !validEditableBy.includes(valuesEditableBy)) {
       throw new Error(
-        `Custom property "${prop.name}" has invalid values-editable-by "${prop['values-editable-by']}". ` +
+        `Custom property "${prop.name}" has invalid values_editable_by "${valuesEditableBy}". ` +
           `Valid values: ${validEditableBy.join(', ')}`
       );
     }
 
     // Require allowed-values for select types
-    if (['single_select', 'multi_select'].includes(prop['value-type'])) {
-      if (!prop['allowed-values'] || !Array.isArray(prop['allowed-values']) || prop['allowed-values'].length === 0) {
+    if (['single_select', 'multi_select'].includes(valueType)) {
+      if (!allowedValues || !Array.isArray(allowedValues) || allowedValues.length === 0) {
         throw new Error(
-          `Custom property "${prop.name}" with value-type "${prop['value-type']}" must have a non-empty "allowed-values" array`
+          `Custom property "${prop.name}" with value_type "${valueType}" must have a non-empty "allowed_values" array`
         );
       }
     }
 
     const normalized = {
       property_name: prop.name,
-      value_type: prop['value-type'],
+      value_type: valueType,
       required: prop.required === true,
       description: prop.description || null,
-      values_editable_by: prop['values-editable-by'] || 'org_actors'
+      values_editable_by: valuesEditableBy || 'org_actors'
     };
 
-    if (prop['default-value'] !== undefined && prop['default-value'] !== null) {
+    if (defaultValue !== undefined && defaultValue !== null) {
       // Validate default-value against select type constraints
-      if (prop['value-type'] === 'single_select' && prop.required !== true) {
+      if (valueType === 'single_select' && prop.required !== true) {
         throw new Error(
-          `Custom property "${prop.name}" with value-type "single_select" cannot have a "default-value" when "required" is false. ` +
-            `Set "required: true" or remove the "default-value".`
+          `Custom property "${prop.name}" with value_type "single_select" cannot have a "default_value" when "required" is false. ` +
+            `Set "required: true" or remove the "default_value".`
         );
       }
 
       // multi_select default values must be arrays; other types are strings
-      if (prop['value-type'] === 'multi_select') {
-        if (Array.isArray(prop['default-value'])) {
-          normalized.default_value = prop['default-value'].map(v => String(v));
+      if (valueType === 'multi_select') {
+        if (Array.isArray(defaultValue)) {
+          normalized.default_value = defaultValue.map(v => String(v));
         } else {
           throw new Error(
-            `Custom property "${prop.name}" with value-type "multi_select" must have an array for "default-value"`
+            `Custom property "${prop.name}" with value_type "multi_select" must have an array for "default_value"`
           );
         }
       } else {
-        normalized.default_value = String(prop['default-value']);
+        normalized.default_value = String(defaultValue);
       }
 
       // Validate default-value is in allowed-values for select types
-      if (['single_select', 'multi_select'].includes(prop['value-type']) && prop['allowed-values']) {
-        const allowedStr = prop['allowed-values'].map(v => String(v));
-        if (prop['value-type'] === 'single_select') {
+      if (['single_select', 'multi_select'].includes(valueType) && allowedValues) {
+        const allowedStr = allowedValues.map(v => String(v));
+        if (valueType === 'single_select') {
           if (!allowedStr.includes(normalized.default_value)) {
             throw new Error(
-              `Custom property "${prop.name}" has default-value "${normalized.default_value}" ` +
-                `which is not in allowed-values: ${allowedStr.join(', ')}`
+              `Custom property "${prop.name}" has default_value "${normalized.default_value}" ` +
+                `which is not in allowed_values: ${allowedStr.join(', ')}`
             );
           }
         } else if (Array.isArray(normalized.default_value)) {
           const invalid = normalized.default_value.filter(v => !allowedStr.includes(v));
           if (invalid.length > 0) {
             throw new Error(
-              `Custom property "${prop.name}" has default-value entries not in allowed-values: ${invalid.join(', ')}`
+              `Custom property "${prop.name}" has default_value entries not in allowed_values: ${invalid.join(', ')}`
             );
           }
         }
@@ -1487,8 +1532,8 @@ export function normalizeCustomProperties(properties) {
       normalized.default_value = null;
     }
 
-    if (prop['allowed-values'] && Array.isArray(prop['allowed-values'])) {
-      normalized.allowed_values = prop['allowed-values'].map(v => String(v));
+    if (allowedValues && Array.isArray(allowedValues)) {
+      normalized.allowed_values = allowedValues.map(v => String(v));
     }
 
     return normalized;
@@ -1963,12 +2008,14 @@ export function normalizeCustomRepoRoles(roles) {
     if (!role.name) {
       throw new Error('Each custom repository role must have a "name" field');
     }
-    if (!role['base-role']) {
-      throw new Error(`Custom repository role "${role.name}" must have a "base-role" field`);
+    const baseRole = getAliasedYamlValue(role, 'base_role', `Custom repository role "${role.name}"`);
+
+    if (!baseRole) {
+      throw new Error(`Custom repository role "${role.name}" must have a "base_role" field`);
     }
-    if (!validBaseRoles.includes(role['base-role'])) {
+    if (!validBaseRoles.includes(baseRole)) {
       throw new Error(
-        `Custom repository role "${role.name}" has invalid base-role "${role['base-role']}". ` +
+        `Custom repository role "${role.name}" has invalid base_role "${baseRole}". ` +
           `Valid values: ${validBaseRoles.join(', ')}`
       );
     }
@@ -1989,7 +2036,7 @@ export function normalizeCustomRepoRoles(roles) {
     return {
       name: role.name,
       description: role.description || null,
-      base_role: role['base-role'],
+      base_role: baseRole,
       permissions: role.permissions.map(p => String(p))
     };
   });
