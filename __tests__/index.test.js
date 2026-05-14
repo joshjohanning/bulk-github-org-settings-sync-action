@@ -2153,13 +2153,15 @@ orgs:
         if (name === 'dry-run') return true;
         return false;
       });
+      mockRequest.mockResolvedValueOnce({ data: { roles: [{ id: 138, name: 'security_manager' }] } });
       mockPaginate.mockResolvedValueOnce([]);
 
       await run();
 
       expect(mockCore.setFailed).not.toHaveBeenCalled();
-      expect(mockPaginate).toHaveBeenCalledWith('GET /orgs/{org}/security-managers', {
+      expect(mockPaginate).toHaveBeenCalledWith('GET /orgs/{org}/organization-roles/{role_id}/teams', {
         org: 'my-org',
+        role_id: 138,
         per_page: 100
       });
       expect(mockCore.setOutput).toHaveBeenCalledWith('updated-organizations', '1');
@@ -3395,6 +3397,7 @@ orgs:
 
   describe('syncSecurityManagerTeams', () => {
     test('should add missing security manager teams', async () => {
+      mockRequest.mockResolvedValueOnce({ data: { roles: [{ id: 138, name: 'security_manager' }] } });
       mockPaginate.mockResolvedValueOnce([{ slug: 'existing-security' }]);
       mockRequest.mockResolvedValueOnce({ status: 204 });
 
@@ -3414,13 +3417,15 @@ orgs:
           message: 'add "new-security"'
         }
       ]);
-      expect(mockRequest).toHaveBeenCalledWith('PUT /orgs/{org}/security-managers/teams/{team_slug}', {
+      expect(mockRequest).toHaveBeenCalledWith('PUT /orgs/{org}/organization-roles/teams/{team_slug}/{role_id}', {
         org: 'my-org',
-        team_slug: 'new-security'
+        team_slug: 'new-security',
+        role_id: 138
       });
     });
 
     test('should remove unmanaged security manager teams when enabled', async () => {
+      mockRequest.mockResolvedValueOnce({ data: { roles: [{ id: 138, name: 'security_manager' }] } });
       mockPaginate.mockResolvedValueOnce([{ slug: 'keep-security' }, { slug: 'old-security' }]);
       mockRequest.mockResolvedValueOnce({ status: 204 });
 
@@ -3434,13 +3439,15 @@ orgs:
           message: 'remove "old-security"'
         }
       ]);
-      expect(mockRequest).toHaveBeenCalledWith('DELETE /orgs/{org}/security-managers/teams/{team_slug}', {
+      expect(mockRequest).toHaveBeenCalledWith('DELETE /orgs/{org}/organization-roles/teams/{team_slug}/{role_id}', {
         org: 'my-org',
-        team_slug: 'old-security'
+        team_slug: 'old-security',
+        role_id: 138
       });
     });
 
     test('should dry-run add and remove security manager teams without API changes', async () => {
+      mockRequest.mockResolvedValueOnce({ data: { roles: [{ id: 138, name: 'security_manager' }] } });
       mockPaginate.mockResolvedValueOnce([{ slug: 'old-security' }]);
 
       const result = await syncSecurityManagerTeams(mockOctokit, 'my-org', ['new-security'], true, true);
@@ -3458,12 +3465,13 @@ orgs:
           message: 'Would remove "old-security"'
         }
       ]);
-      expect(mockRequest).not.toHaveBeenCalled();
+      expect(mockRequest).toHaveBeenCalledTimes(1);
     });
 
     test('should skip with permission warning on 404 fetch', async () => {
       const error404 = new Error('Not Found');
       error404.status = 404;
+      mockRequest.mockResolvedValueOnce({ data: { roles: [{ id: 138, name: 'security_manager' }] } });
       mockPaginate.mockRejectedValueOnce(error404);
 
       const result = await syncSecurityManagerTeams(mockOctokit, 'my-org', ['security'], false, false);
@@ -3476,6 +3484,7 @@ orgs:
     });
 
     test('should mark add failures as failed warnings', async () => {
+      mockRequest.mockResolvedValueOnce({ data: { roles: [{ id: 138, name: 'security_manager' }] } });
       mockPaginate.mockResolvedValueOnce([]);
       mockRequest.mockRejectedValueOnce(new Error('Team not found'));
 
@@ -3486,6 +3495,19 @@ orgs:
       expect(result.subResults[0].kind).toBe('security-manager-team-add');
       expect(result.subResults[0].status).toBe('warning');
       expect(result.subResults[0].message).toContain('Failed to add');
+    });
+
+    test('should skip when security_manager organization role is unavailable', async () => {
+      mockRequest.mockResolvedValueOnce({ data: { roles: [{ id: 1, name: 'auditor' }] } });
+
+      const result = await syncSecurityManagerTeams(mockOctokit, 'my-org', ['security'], false, false);
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('security-manager-team-fetch');
+      expect(result.subResults[0].status).toBe('warning');
+      expect(result.subResults[0].message).toContain('security_manager');
+      expect(mockPaginate).not.toHaveBeenCalled();
     });
   });
 

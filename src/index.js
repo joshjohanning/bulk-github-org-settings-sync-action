@@ -1120,9 +1120,35 @@ export async function syncSecurityManagerTeams(octokit, org, desiredTeamSlugs, d
   const wouldPrefix = dryRun ? 'Would ' : '';
   let hasFailed = false;
 
+  let securityManagerRole;
+  try {
+    const { data } = await octokit.request('GET /orgs/{org}/organization-roles', { org, per_page: 100 });
+    securityManagerRole = (data.roles || []).find(role => role.name === 'security_manager');
+  } catch (error) {
+    if (isPermissionLikeFetchError(error)) {
+      const message = formatPermissionFetchWarning('organization roles', org, error);
+      core.warning(`  ⚠️  ${message}`);
+      subResults.push(createSubResult('security-manager-team-fetch', SubResultStatus.WARNING, message));
+      return { subResults, failed: false };
+    }
+
+    throw error;
+  }
+
+  if (!securityManagerRole) {
+    const message = `Could not find the built-in "security_manager" organization role for "${org}".`;
+    core.warning(`  ⚠️  ${message}`);
+    subResults.push(createSubResult('security-manager-team-fetch', SubResultStatus.WARNING, message));
+    return { subResults, failed: false };
+  }
+
   let existingTeams;
   try {
-    existingTeams = await octokit.paginate('GET /orgs/{org}/security-managers', { org, per_page: 100 });
+    existingTeams = await octokit.paginate('GET /orgs/{org}/organization-roles/{role_id}/teams', {
+      org,
+      role_id: securityManagerRole.id,
+      per_page: 100
+    });
   } catch (error) {
     if (isPermissionLikeFetchError(error)) {
       const message = formatPermissionFetchWarning('security manager teams', org, error);
@@ -1150,9 +1176,10 @@ export async function syncSecurityManagerTeams(octokit, org, desiredTeamSlugs, d
 
     if (!dryRun) {
       try {
-        await octokit.request('PUT /orgs/{org}/security-managers/teams/{team_slug}', {
+        await octokit.request('PUT /orgs/{org}/organization-roles/teams/{team_slug}/{role_id}', {
           org,
-          team_slug: teamSlug
+          team_slug: teamSlug,
+          role_id: securityManagerRole.id
         });
       } catch (error) {
         hasFailed = true;
@@ -1180,9 +1207,10 @@ export async function syncSecurityManagerTeams(octokit, org, desiredTeamSlugs, d
 
       if (!dryRun) {
         try {
-          await octokit.request('DELETE /orgs/{org}/security-managers/teams/{team_slug}', {
+          await octokit.request('DELETE /orgs/{org}/organization-roles/teams/{team_slug}/{role_id}', {
             org,
-            team_slug: teamSlug
+            team_slug: teamSlug,
+            role_id: securityManagerRole.id
           });
         } catch (error) {
           hasFailed = true;

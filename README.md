@@ -775,8 +775,7 @@ orgs:
 
 Assign organization security manager access to teams by slug.
 
-> [!WARNING]
-> GitHub's security manager REST endpoints are deprecated and may be unavailable on some GitHub products/versions. This feature only works where those endpoints are still available; GitHub recommends organization roles as the long-term replacement.
+This uses GitHub's organization roles APIs to assign the built-in `security_manager` organization role to teams.
 
 ```yml
 - name: Sync Organization Settings
