@@ -60,7 +60,8 @@ function getKnownOrgConfigKeys() {
     'custom-repo-roles',
     'org-profile',
     'code-security-configurations',
-    'actions-policy'
+    'actions-policy',
+    'organization-role-team-assignments'
   ]);
 
   try {
@@ -244,6 +245,8 @@ const ORG_CONFIG_TOP_LEVEL_KEYS = new Set([
   'issue-types',
   'issue-types-file',
   'delete-unmanaged-issue-types',
+  'organization-role-team-assignments',
+  'organization-role-team-assignments-file',
   'rulesets-file',
   'delete-unmanaged-rulesets',
   'member-privileges',
@@ -427,6 +430,7 @@ const FILE_PATH_CONFIG_KEYS = [
   'custom-org-roles-file',
   'custom-repo-roles-file',
   'code-security-configurations-file',
+  'organization-role-team-assignments-file',
   'actions-allow-list-file',
   'dot-github-source-dir',
   'dot-github-private-source-dir'
@@ -513,6 +517,9 @@ const SYNC_KIND_LABELS = Object.freeze({
   'issue-type-delete': 'issue type (deleted)',
   'issue-type-fetch': 'issue type (fetch failed)',
   'member-privileges-update': 'member privileges (updated)',
+  'organization-role-team-add': 'organization role team assignment (added)',
+  'organization-role-team-remove': 'organization role team assignment (removed)',
+  'organization-role-team-fetch': 'organization role team assignment (fetch failed)',
   'org-profile-update': 'organization profile (updated)',
   'ruleset-create': 'ruleset (created)',
   'ruleset-update': 'ruleset (updated)',
@@ -682,7 +689,8 @@ function formatSubResultStatus(status) {
  * @param {string} [actionsAllowListFile] - Path to actions allow list YAML file (base for all orgs)
  * @param {string} [dotGithubSourceDir] - Path to source directory for .github repo sync
  * @param {string} [dotGithubPrivateSourceDir] - Path to source directory for .github-private repo sync
- * @returns {Array<{ org: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, issueTypes?: Array, memberPrivileges?: Object, customOrgRoles?: Array, customRepoRoles?: Array, orgProfile?: Object, codeSecurityConfigurations?: Array, deleteUnmanagedCodeSecurityConfigurations?: boolean, actionsPolicy?: Object, actionsAllowList?: string[], dotGithubSourceDir?: string, dotGithubPrivateSourceDir?: string }>} Parsed org configs
+ * @param {string} [organizationRoleTeamAssignmentsFile] - Path to organization role team assignments YAML file (base for all orgs)
+ * @returns {Array<{ org: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, issueTypes?: Array, memberPrivileges?: Object, customOrgRoles?: Array, customRepoRoles?: Array, organizationRoleTeamAssignments?: Array, orgProfile?: Object, codeSecurityConfigurations?: Array, deleteUnmanagedCodeSecurityConfigurations?: boolean, actionsPolicy?: Object, actionsAllowList?: string[], dotGithubSourceDir?: string, dotGithubPrivateSourceDir?: string }>} Parsed org configs
  */
 export function parseOrganizations(
   organizationsInput,
@@ -699,7 +707,8 @@ export function parseOrganizations(
   actionsPolicyFromInputs,
   actionsAllowListFile,
   dotGithubSourceDir,
-  dotGithubPrivateSourceDir
+  dotGithubPrivateSourceDir,
+  organizationRoleTeamAssignmentsFile
 ) {
   let resolvedCodeSecurityConfigurationsFile = codeSecurityConfigurationsFile;
   let resolvedActionsPolicyFromInputs = actionsPolicyFromInputs;
@@ -772,6 +781,11 @@ export function parseOrganizations(
     baseActionsAllowList = parseActionsAllowListFile(resolvedActionsAllowListFile);
   }
 
+  let baseOrganizationRoleTeamAssignments = null;
+  if (organizationRoleTeamAssignmentsFile) {
+    baseOrganizationRoleTeamAssignments = parseOrganizationRoleTeamAssignmentsFile(organizationRoleTeamAssignmentsFile);
+  }
+
   if (organizationsFile) {
     const orgConfigs = parseOrganizationsFile(organizationsFile);
 
@@ -834,6 +848,33 @@ export function parseOrganizations(
           baseMemberPrivileges || {},
           orgConfig.memberPrivileges || {}
         );
+      }
+
+      if (orgConfig.organizationRoleTeamAssignmentsFile && orgConfig.organizationRoleTeamAssignments !== undefined) {
+        core.warning(
+          `Organization "${orgConfig.org}" specifies both inline "organization-role-team-assignments" and ` +
+            `"organization-role-team-assignments-file". Inline values take precedence; the file will be ignored.`
+        );
+      }
+      if (orgConfig.organizationRoleTeamAssignmentsFile && orgConfig.organizationRoleTeamAssignments === undefined) {
+        try {
+          orgConfig.organizationRoleTeamAssignments = parseOrganizationRoleTeamAssignmentsFile(
+            orgConfig.organizationRoleTeamAssignmentsFile
+          );
+        } catch (error) {
+          throw new Error(
+            `Failed to parse organization role team assignments file "${orgConfig.organizationRoleTeamAssignmentsFile}" for organization "${orgConfig.org}": ${error.message}`,
+            { cause: error }
+          );
+        }
+      }
+      delete orgConfig.organizationRoleTeamAssignmentsFile;
+
+      if (orgConfig.organizationRoleTeamAssignments === undefined && baseOrganizationRoleTeamAssignments) {
+        orgConfig.organizationRoleTeamAssignments = baseOrganizationRoleTeamAssignments.map(assignment => ({
+          ...assignment,
+          teams: [...assignment.teams]
+        }));
       }
 
       // Per-org custom-org-roles-file overrides the base for this org
@@ -958,6 +999,14 @@ export function parseOrganizations(
     ...(rulesetsFiles && rulesetsFiles.length > 0 ? { rulesetsFiles } : {}),
     ...(deleteUnmanagedRulesets !== undefined ? { deleteUnmanagedRulesets } : {}),
     ...(baseMemberPrivileges ? { memberPrivileges: baseMemberPrivileges } : {}),
+    ...(baseOrganizationRoleTeamAssignments
+      ? {
+          organizationRoleTeamAssignments: baseOrganizationRoleTeamAssignments.map(assignment => ({
+            ...assignment,
+            teams: [...assignment.teams]
+          }))
+        }
+      : {}),
     ...(baseCustomOrgRoles ? { customOrgRoles: baseCustomOrgRoles } : {}),
     ...(baseCustomRepoRoles ? { customRepoRoles: baseCustomRepoRoles } : {}),
     ...(baseOrgProfile ? { orgProfile: baseOrgProfile } : {}),
@@ -1035,6 +1084,317 @@ export function mergeCustomRoles(baseRoles, orgRoles) {
  */
 export function mergeMemberPrivileges(basePrivileges, orgPrivileges) {
   return { ...basePrivileges, ...orgPrivileges };
+}
+
+// ─── Organization Role Team Assignments Parsing & Sync ──────────────────────────
+
+const KNOWN_ORG_ROLE_TEAM_ASSIGNMENT_KEYS = new Set(['role', 'teams', 'delete-unmanaged']);
+
+const BUILT_IN_ORG_ROLE_ALIASES = new Map([
+  ['all-repository read', 'all_repo_read'],
+  ['all repository read', 'all_repo_read'],
+  ['all-repository triage', 'all_repo_triage'],
+  ['all repository triage', 'all_repo_triage'],
+  ['all-repository write', 'all_repo_write'],
+  ['all repository write', 'all_repo_write'],
+  ['all-repository maintain', 'all_repo_maintain'],
+  ['all repository maintain', 'all_repo_maintain'],
+  ['all-repository admin', 'all_repo_admin'],
+  ['all repository admin', 'all_repo_admin'],
+  ['apps manager', 'app_manager'],
+  ['app manager', 'app_manager'],
+  ['ci/cd admin', 'ci_cd_admin'],
+  ['cicd admin', 'ci_cd_admin'],
+  ['security manager', 'security_manager']
+]);
+
+/**
+ * Normalize a role name for case-insensitive matching and known built-in display aliases.
+ * @param {string} roleName - Role name from config or API
+ * @returns {string} Lookup key
+ */
+function normalizeOrganizationRoleLookupKey(roleName) {
+  const normalized = roleName.trim().toLowerCase();
+  return BUILT_IN_ORG_ROLE_ALIASES.get(normalized) || normalized;
+}
+
+/**
+ * Parse team slugs from comma-separated input or YAML array.
+ * @param {string|string[]|null|undefined} value - Raw team slug value
+ * @param {string} [context] - Human-readable context for errors
+ * @returns {string[]} Normalized lowercase team slugs
+ */
+function parseTeamSlugs(value, context = 'teams') {
+  if (value === undefined || value === null) {
+    return [];
+  }
+
+  const rawTeams =
+    typeof value === 'string'
+      ? value
+          .split(',')
+          .map(v => v.trim())
+          .filter(v => v.length > 0)
+      : value;
+
+  if (!Array.isArray(rawTeams)) {
+    throw new Error(`Invalid ${context}: expected a comma-separated string or array of team slugs`);
+  }
+
+  const seen = new Set();
+  const teams = [];
+  for (const entry of rawTeams) {
+    if (typeof entry !== 'string') {
+      throw new Error(`Invalid ${context}: expected team slugs to be strings`);
+    }
+
+    const slug = entry.trim().toLowerCase();
+    if (slug.length > 0 && !seen.has(slug)) {
+      teams.push(slug);
+      seen.add(slug);
+    }
+  }
+
+  return teams;
+}
+
+/**
+ * Parse a standalone organization role team assignments YAML file.
+ * @param {string} filePath - Path to the YAML file
+ * @returns {Array<Object>} Normalized organization role team assignments
+ */
+export function parseOrganizationRoleTeamAssignmentsFile(filePath) {
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`Organization role team assignments file not found: ${filePath}`);
+  }
+
+  const content = fs.readFileSync(filePath, 'utf8');
+  const assignments = yaml.load(content);
+  return normalizeOrganizationRoleTeamAssignments(assignments, filePath);
+}
+
+/**
+ * Normalize organization role team assignment definitions from YAML format.
+ * @param {Array<Object>} assignments - Assignment definitions from YAML
+ * @param {string} [context] - Human-readable context for errors
+ * @returns {Array<{ role: string, teams: string[], delete_unmanaged: boolean }>}
+ */
+export function normalizeOrganizationRoleTeamAssignments(assignments, context = 'organization-role-team-assignments') {
+  if (!Array.isArray(assignments)) {
+    throw new Error(`Invalid ${context}: expected an array`);
+  }
+
+  const seenRoles = new Set();
+  return assignments.map((assignment, index) => {
+    if (typeof assignment !== 'object' || assignment === null || Array.isArray(assignment)) {
+      throw new Error(`Organization role team assignment at index ${index} must be a key-value map`);
+    }
+
+    if (typeof assignment.role !== 'string' || assignment.role.trim() === '') {
+      throw new Error(`Organization role team assignment at index ${index} must have a non-empty "role" string`);
+    }
+
+    const role = assignment.role.trim();
+    const roleKey = normalizeOrganizationRoleLookupKey(role);
+    if (seenRoles.has(roleKey)) {
+      throw new Error(`Duplicate organization role team assignment for role "${role}"`);
+    }
+    seenRoles.add(roleKey);
+
+    if (!Object.prototype.hasOwnProperty.call(assignment, 'teams')) {
+      throw new Error(`Organization role team assignment for "${role}" must have a "teams" field`);
+    }
+
+    if (
+      Object.prototype.hasOwnProperty.call(assignment, 'delete-unmanaged') &&
+      typeof assignment['delete-unmanaged'] !== 'boolean'
+    ) {
+      throw new Error(`Organization role team assignment for "${role}" has invalid delete-unmanaged value`);
+    }
+
+    // Validate known keys
+    for (const key of Object.keys(assignment)) {
+      if (!KNOWN_ORG_ROLE_TEAM_ASSIGNMENT_KEYS.has(key)) {
+        core.warning(
+          `⚠️  Unknown key "${key}" found for organization role team assignment "${role}". ` +
+            `This key may not exist or may have a typo.`
+        );
+      }
+    }
+
+    return {
+      role,
+      teams: parseTeamSlugs(assignment.teams, `teams for organization role "${role}"`),
+      delete_unmanaged: assignment['delete-unmanaged'] ?? false
+    };
+  });
+}
+
+/**
+ * Resolve an organization role by configured role name.
+ * @param {Array<Object>} roles - Organization roles from API
+ * @param {string} desiredRoleName - Role name from config
+ * @returns {Object|undefined} Matching role
+ */
+function findOrganizationRoleByName(roles, desiredRoleName) {
+  const desiredKey = normalizeOrganizationRoleLookupKey(desiredRoleName);
+  return roles.find(role => normalizeOrganizationRoleLookupKey(role.name) === desiredKey);
+}
+
+/**
+ * Sync organization role team assignments for an organization.
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} org - Organization name
+ * @param {Array<Object>} assignments - Desired organization role team assignments
+ * @param {boolean} dryRun - Preview mode
+ * @param {Array<Object>} [plannedCustomOrgRoles] - Custom organization roles configured earlier in the same run
+ * @returns {Promise<Object>} Result object with subResults
+ */
+export async function syncOrganizationRoleTeamAssignments(
+  octokit,
+  org,
+  assignments,
+  dryRun,
+  plannedCustomOrgRoles = []
+) {
+  const subResults = [];
+  const wouldPrefix = dryRun ? 'Would ' : '';
+  let hasFailed = false;
+
+  let roles;
+  try {
+    roles = await octokit.paginate(
+      'GET /orgs/{org}/organization-roles',
+      { org, per_page: 100 },
+      response => response.data.roles || []
+    );
+  } catch (error) {
+    if (isPermissionLikeFetchError(error)) {
+      const message = formatPermissionFetchWarning('organization roles', org, error);
+      core.warning(`  ⚠️  ${message}`);
+      subResults.push(createSubResult('organization-role-team-fetch', SubResultStatus.WARNING, message));
+      return { subResults, failed: false };
+    }
+
+    throw error;
+  }
+
+  for (const assignment of assignments) {
+    const role = findOrganizationRoleByName(roles, assignment.role);
+    if (!role) {
+      const plannedRole = dryRun ? findOrganizationRoleByName(plannedCustomOrgRoles, assignment.role) : undefined;
+      if (plannedRole) {
+        for (const teamSlug of assignment.teams) {
+          const detail = `${wouldPrefix}add team "${teamSlug}" to role "${assignment.role}"`;
+          core.info(`  🆕 ${detail}`);
+          subResults.push(createSubResult('organization-role-team-add', SubResultStatus.CHANGED, detail));
+        }
+        continue;
+      }
+
+      hasFailed = true;
+      const message = `Could not find organization role "${assignment.role}" for "${org}".`;
+      core.warning(`  ⚠️  ${message}`);
+      subResults.push(createSubResult('organization-role-team-fetch', SubResultStatus.WARNING, message));
+      continue;
+    }
+
+    let existingTeams;
+    try {
+      existingTeams = await octokit.paginate('GET /orgs/{org}/organization-roles/{role_id}/teams', {
+        org,
+        role_id: role.id,
+        per_page: 100
+      });
+    } catch (error) {
+      if (isPermissionLikeFetchError(error)) {
+        const message = formatPermissionFetchWarning(
+          `teams assigned to organization role "${assignment.role}"`,
+          org,
+          error
+        );
+        core.warning(`  ⚠️  ${message}`);
+        subResults.push(createSubResult('organization-role-team-fetch', SubResultStatus.WARNING, message));
+        continue;
+      }
+
+      throw error;
+    }
+
+    const existingSlugs = new Set(existingTeams.map(team => String(team.slug).toLowerCase()));
+    const desiredSlugs = new Set(assignment.teams);
+    let addFailedForRole = false;
+
+    for (const teamSlug of assignment.teams) {
+      if (existingSlugs.has(teamSlug)) {
+        core.info(`  ✅ Organization role team assignment unchanged: ${assignment.role} / ${teamSlug}`);
+        continue;
+      }
+
+      const detail = `${wouldPrefix}add team "${teamSlug}" to role "${assignment.role}"`;
+      core.info(`  🆕 ${detail}`);
+      subResults.push(createSubResult('organization-role-team-add', SubResultStatus.CHANGED, detail));
+
+      if (!dryRun) {
+        try {
+          await octokit.request('PUT /orgs/{org}/organization-roles/teams/{team_slug}/{role_id}', {
+            org,
+            team_slug: teamSlug,
+            role_id: role.id
+          });
+        } catch (error) {
+          hasFailed = true;
+          addFailedForRole = true;
+          core.warning(`  ⚠️  Failed to add team "${teamSlug}" to role "${assignment.role}": ${error.message}`);
+          subResults[subResults.length - 1] = createSubResult(
+            'organization-role-team-add',
+            SubResultStatus.WARNING,
+            `Failed to add team "${teamSlug}" to role "${assignment.role}": ${error.message}`
+          );
+        }
+      }
+    }
+
+    if (addFailedForRole && assignment.delete_unmanaged) {
+      const message = `Skipped removing unmanaged teams from role "${assignment.role}" because one or more desired team assignments failed`;
+      core.warning(`  ⚠️  ${message}`);
+      subResults.push(createSubResult('organization-role-team-remove', SubResultStatus.WARNING, message));
+      continue;
+    }
+
+    if (assignment.delete_unmanaged) {
+      for (const team of existingTeams) {
+        const teamSlug = String(team.slug).toLowerCase();
+        if (desiredSlugs.has(teamSlug)) {
+          continue;
+        }
+
+        const detail = `${wouldPrefix}remove team "${teamSlug}" from role "${assignment.role}"`;
+        core.info(`  🗑️ ${detail}`);
+        subResults.push(createSubResult('organization-role-team-remove', SubResultStatus.CHANGED, detail));
+
+        if (!dryRun) {
+          try {
+            await octokit.request('DELETE /orgs/{org}/organization-roles/teams/{team_slug}/{role_id}', {
+              org,
+              team_slug: teamSlug,
+              role_id: role.id
+            });
+          } catch (error) {
+            hasFailed = true;
+            core.warning(`  ⚠️  Failed to remove team "${teamSlug}" from role "${assignment.role}": ${error.message}`);
+            subResults[subResults.length - 1] = createSubResult(
+              'organization-role-team-remove',
+              SubResultStatus.WARNING,
+              `Failed to remove team "${teamSlug}" from role "${assignment.role}": ${error.message}`
+            );
+          }
+        }
+      }
+    }
+  }
+
+  return { subResults, failed: hasFailed };
 }
 
 // ─── Actions Policy Parsing ─────────────────────────────────────────────────────
@@ -1189,7 +1549,7 @@ export function mergeOrgProfile(baseProfile, orgProfile) {
 /**
  * Parse the organizations YAML config file.
  * @param {string} filePath - Path to the YAML file
- * @returns {Array<{ org: string, customPropertiesFile?: string, customProperties?: Array, issueTypesFile?: string, issueTypes?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, deleteUnmanagedProperties?: boolean, deleteUnmanagedIssueTypes?: boolean, memberPrivileges?: Object, orgProfile?: Object, codeSecurityConfigurationsFile?: string, codeSecurityConfigurations?: Array, deleteUnmanagedCodeSecurityConfigurations?: boolean, actionsPolicy?: Object, actionsAllowListFile?: string }>}
+ * @returns {Array<{ org: string, customPropertiesFile?: string, customProperties?: Array, issueTypesFile?: string, issueTypes?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, deleteUnmanagedProperties?: boolean, deleteUnmanagedIssueTypes?: boolean, memberPrivileges?: Object, orgProfile?: Object, codeSecurityConfigurationsFile?: string, codeSecurityConfigurations?: Array, deleteUnmanagedCodeSecurityConfigurations?: boolean, actionsPolicy?: Object, actionsAllowListFile?: string, organizationRoleTeamAssignments?: Array, organizationRoleTeamAssignmentsFile?: string }>}
  */
 export function parseOrganizationsFile(filePath) {
   if (!fs.existsSync(filePath)) {
@@ -1279,6 +1639,23 @@ export function parseOrganizationsFile(filePath) {
 
     if (Object.prototype.hasOwnProperty.call(orgConfig, 'member-privileges')) {
       result.memberPrivileges = parseMemberPrivileges(orgConfig['member-privileges'], orgConfig.org);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'organization-role-team-assignments')) {
+      result.organizationRoleTeamAssignments = normalizeOrganizationRoleTeamAssignments(
+        orgConfig['organization-role-team-assignments'],
+        `organization-role-team-assignments for org "${orgConfig.org}"`
+      );
+    }
+
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'organization-role-team-assignments-file')) {
+      const assignmentsFile = orgConfig['organization-role-team-assignments-file'];
+      if (typeof assignmentsFile !== 'string' || assignmentsFile.trim() === '') {
+        throw new Error(
+          `Invalid "organization-role-team-assignments-file" for org "${orgConfig.org}": expected a non-empty string`
+        );
+      }
+      result.organizationRoleTeamAssignmentsFile = assignmentsFile.trim();
     }
 
     if (Object.prototype.hasOwnProperty.call(orgConfig, 'custom-org-roles-file')) {
@@ -4709,6 +5086,7 @@ export async function run() {
     const dotGithubSourceDir = core.getInput('dot-github-source-dir') || '';
     const dotGithubPrivateSourceDir = core.getInput('dot-github-private-source-dir') || '';
     const memberPrivilegesFromInputs = getMemberPrivilegesFromInputs();
+    const organizationRoleTeamAssignmentsFile = core.getInput('organization-role-team-assignments-file');
     const customOrgRolesFile = core.getInput('custom-org-roles-file');
     const deleteUnmanagedOrgRoles = getBooleanInput('delete-unmanaged-org-roles') ?? false;
     const customRepoRolesFile = core.getInput('custom-repo-roles-file');
@@ -4747,7 +5125,8 @@ export async function run() {
       actionsPolicyFromInputs,
       actionsAllowListFile,
       dotGithubSourceDir,
-      dotGithubPrivateSourceDir
+      dotGithubPrivateSourceDir,
+      organizationRoleTeamAssignmentsFile
     );
 
     // Check that at least one setting type is specified
@@ -4755,6 +5134,9 @@ export async function run() {
     const hasRulesets = orgList.some(o => o.rulesetsFiles && o.rulesetsFiles.length > 0);
     const hasIssueTypes = orgList.some(o => o.issueTypes && o.issueTypes.length > 0);
     const hasMemberPrivileges = orgList.some(o => o.memberPrivileges && Object.keys(o.memberPrivileges).length > 0);
+    const hasOrganizationRoleTeamAssignments = orgList.some(
+      o => o.organizationRoleTeamAssignments && o.organizationRoleTeamAssignments.length > 0
+    );
     const hasDotGithub = orgList.some(o => o.dotGithubSourceDir);
     const hasDotGithubPrivate = orgList.some(o => o.dotGithubPrivateSourceDir);
     const hasCustomOrgRoles = orgList.some(
@@ -4778,6 +5160,7 @@ export async function run() {
       !hasRulesets &&
       !hasIssueTypes &&
       !hasMemberPrivileges &&
+      !hasOrganizationRoleTeamAssignments &&
       !hasDotGithub &&
       !hasDotGithubPrivate &&
       !hasCustomOrgRoles &&
@@ -4791,6 +5174,7 @@ export async function run() {
           '"organizations-file" or via "organizations" + "custom-properties-file" inputs, ' +
           'provide issue types via "issue-types-file", rulesets via "rulesets-file", ' +
           'member privileges via individual inputs (e.g., "default-repository-permission"), ' +
+          'organization role team assignments via "organization-role-team-assignments-file", ' +
           'custom org roles via "custom-org-roles-file", custom repo roles via "custom-repo-roles-file", ' +
           'org profile via individual inputs (e.g., "org-name", "org-description"), ' +
           'code security configurations via "code-security-configurations-file", ' +
@@ -4981,6 +5365,28 @@ export async function run() {
             result.error = result.error
               ? `${result.error}; Custom org roles sync failed`
               : 'Custom org roles sync failed';
+          }
+        }
+
+        // Sync organization role team assignments after custom org roles so new custom roles can be assigned.
+        if (orgConfig.organizationRoleTeamAssignments && orgConfig.organizationRoleTeamAssignments.length > 0) {
+          core.info(
+            `  🛡️  Syncing organization role team assignments (${orgConfig.organizationRoleTeamAssignments.length} role(s) defined)...`
+          );
+          const ortaResult = await syncOrganizationRoleTeamAssignments(
+            octokit,
+            org,
+            orgConfig.organizationRoleTeamAssignments,
+            dryRun,
+            orgConfig.customOrgRoles || []
+          );
+          result.subResults.push(...ortaResult.subResults);
+
+          if (ortaResult.failed) {
+            result.success = false;
+            result.error = result.error
+              ? `${result.error}; Organization role team assignments sync failed`
+              : 'Organization role team assignments sync failed';
           }
         }
 

@@ -83,6 +83,8 @@ inputs:
     description: 'Members can view dependency insights'
   display-commenter-full-name-setting-enabled:
     description: 'Display commenter full name'
+  organization-role-team-assignments-file:
+    description: 'Organization role team assignments file'
   rulesets-file:
     description: 'Rulesets file'
   delete-unmanaged-rulesets:
@@ -208,6 +210,9 @@ const {
   syncOrgRulesets,
   mergeCustomProperties,
   mergeMemberPrivileges,
+  parseOrganizationRoleTeamAssignmentsFile,
+  normalizeOrganizationRoleTeamAssignments,
+  syncOrganizationRoleTeamAssignments,
   mergeCustomRoles,
   parseMemberPrivileges,
   getMemberPrivilegesFromInputs,
@@ -2132,6 +2137,57 @@ orgs:
       expect(mockCore.setOutput).toHaveBeenCalledWith('failed-organizations', '0');
     });
 
+    test('should process organization role team assignments from action input file', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          'github-api-url': 'https://api.github.com',
+          organizations: 'my-org',
+          'organization-role-team-assignments-file': '/mock/organization-role-team-assignments.yml',
+          'dry-run': 'true'
+        };
+        return inputs[name] ?? '';
+      });
+      mockCore.getBooleanInput.mockImplementation(name => {
+        if (name === 'dry-run') return true;
+        return false;
+      });
+      mockFs.existsSync.mockImplementation(filePath => filePath === '/mock/organization-role-team-assignments.yml');
+      mockFs.readFileSync.mockImplementation(filePath => {
+        if (filePath === '/mock/organization-role-team-assignments.yml') {
+          return `
+- role: security_manager
+  teams:
+    - security-team
+`;
+        }
+        return '';
+      });
+      mockPaginate.mockResolvedValueOnce([{ id: 138, name: 'security_manager' }]);
+      mockPaginate.mockResolvedValueOnce([]);
+
+      await run();
+
+      expect(mockCore.setFailed).not.toHaveBeenCalled();
+      expect(mockPaginate).toHaveBeenCalledWith('GET /orgs/{org}/organization-roles/{role_id}/teams', {
+        org: 'my-org',
+        role_id: 138,
+        per_page: 100
+      });
+      expect(mockCore.setOutput).toHaveBeenCalledWith('updated-organizations', '1');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-organizations', '1');
+      expect(mockCore.summary.addTable).toHaveBeenLastCalledWith([
+        [
+          { data: 'Status', header: true },
+          { data: 'Details', header: true }
+        ],
+        [
+          '✅ Changed',
+          'organization role team assignment (added): Would add team "security-team" to role "security_manager"'
+        ]
+      ]);
+    });
+
     test('should render an org-specific summary table with one row per changed sub-result', async () => {
       const cpYaml = `- name: team
   value-type: string
@@ -3233,6 +3289,423 @@ orgs:
     test('should not include memberPrivileges when not specified', () => {
       const result = parseOrganizations('org1', '', '');
       expect(result[0].memberPrivileges).toBeUndefined();
+    });
+  });
+
+  // ─── organization role team assignments ────────────────────────────────────
+
+  describe('normalizeOrganizationRoleTeamAssignments', () => {
+    test('should normalize role assignments and team slugs', () => {
+      const result = normalizeOrganizationRoleTeamAssignments([
+        {
+          role: 'Security Manager',
+          teams: 'Security-Team, platform-admins, Security-Team',
+          'delete-unmanaged': true
+        },
+        { role: 'Security Auditor', teams: ['Compliance'] }
+      ]);
+
+      expect(result).toEqual([
+        {
+          role: 'Security Manager',
+          teams: ['security-team', 'platform-admins'],
+          delete_unmanaged: true
+        },
+        {
+          role: 'Security Auditor',
+          teams: ['compliance'],
+          delete_unmanaged: false
+        }
+      ]);
+    });
+
+    test('should throw for duplicate built-in role aliases', () => {
+      expect(() =>
+        normalizeOrganizationRoleTeamAssignments([
+          { role: 'security_manager', teams: ['security'] },
+          { role: 'Security Manager', teams: ['appsec'] }
+        ])
+      ).toThrow('Duplicate organization role team assignment');
+    });
+
+    test('should throw for invalid team entries', () => {
+      expect(() =>
+        normalizeOrganizationRoleTeamAssignments([{ role: 'security_manager', teams: ['security', 123] }])
+      ).toThrow('expected team slugs to be strings');
+    });
+
+    test('should warn on unknown keys like delete_unmanaged typo', () => {
+      normalizeOrganizationRoleTeamAssignments([
+        { role: 'security_manager', teams: ['security'], delete_unmanaged: true }
+      ]);
+
+      expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('Unknown key "delete_unmanaged"'));
+    });
+  });
+
+  describe('parseOrganizations with organization role team assignments', () => {
+    test('should apply global organization role team assignments file to organizations input', () => {
+      setMockFileContent(
+        `
+- role: security_manager
+  teams:
+    - security-team
+  delete-unmanaged: true
+`,
+        '/mock/role-team-assignments.yml'
+      );
+
+      const result = parseOrganizations(
+        'org1,org2',
+        '',
+        '',
+        [],
+        false,
+        '',
+        null,
+        null,
+        null,
+        null,
+        '',
+        null,
+        '',
+        '',
+        '',
+        '/mock/role-team-assignments.yml'
+      );
+
+      expect(result).toHaveLength(2);
+      expect(result[0].organizationRoleTeamAssignments).toEqual([
+        { role: 'security_manager', teams: ['security-team'], delete_unmanaged: true }
+      ]);
+      expect(result[1].organizationRoleTeamAssignments).toEqual([
+        { role: 'security_manager', teams: ['security-team'], delete_unmanaged: true }
+      ]);
+    });
+
+    test('should let per-org organization role team assignments override global assignments', () => {
+      setMockFileContent(
+        `
+- role: security_manager
+  teams:
+    - global-security
+`,
+        '/mock/global-role-team-assignments.yml'
+      );
+      const orgsYaml = `orgs:
+  - org: my-org
+  - org: my-other-org
+    organization-role-team-assignments:
+      - role: Security Auditor
+        teams:
+          - org-security
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+
+      const result = parseOrganizations(
+        '',
+        '/mock/orgs.yml',
+        '',
+        [],
+        false,
+        '',
+        null,
+        null,
+        null,
+        null,
+        '',
+        null,
+        '',
+        '',
+        '',
+        '/mock/global-role-team-assignments.yml'
+      );
+
+      expect(result[0].organizationRoleTeamAssignments).toEqual([
+        { role: 'security_manager', teams: ['global-security'], delete_unmanaged: false }
+      ]);
+      expect(result[1].organizationRoleTeamAssignments).toEqual([
+        { role: 'Security Auditor', teams: ['org-security'], delete_unmanaged: false }
+      ]);
+    });
+
+    test('should parse per-org organization role team assignments file', () => {
+      const orgsYaml = `orgs:
+  - org: my-org
+    organization-role-team-assignments-file: /mock/org-role-team-assignments.yml
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+      setMockFileContent(
+        `
+- role: CI/CD Admin
+  teams: platform-admins
+`,
+        '/mock/org-role-team-assignments.yml'
+      );
+
+      const result = parseOrganizations('', '/mock/orgs.yml', '');
+
+      expect(result[0].organizationRoleTeamAssignments).toEqual([
+        { role: 'CI/CD Admin', teams: ['platform-admins'], delete_unmanaged: false }
+      ]);
+    });
+
+    test('should not warn for valid per-org organization role team assignments config', () => {
+      const orgsYaml = `orgs:
+  - org: my-org
+    organization-role-team-assignments:
+      - role: security_manager
+        teams:
+          - security-team
+        delete-unmanaged: true
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+
+      parseOrganizationsFile('/mock/orgs.yml');
+
+      expect(mockCore.warning).not.toHaveBeenCalled();
+    });
+
+    test('should prefer inline assignments over file when both are specified per-org', () => {
+      const orgsYaml = `orgs:
+  - org: my-org
+    organization-role-team-assignments:
+      - role: security_manager
+        teams:
+          - inline-team
+    organization-role-team-assignments-file: /mock/org-role-team-assignments.yml
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+      setMockFileContent(
+        `
+- role: CI/CD Admin
+  teams: file-team
+`,
+        '/mock/org-role-team-assignments.yml'
+      );
+
+      const result = parseOrganizations('', '/mock/orgs.yml', '');
+
+      expect(result[0].organizationRoleTeamAssignments).toEqual([
+        { role: 'security_manager', teams: ['inline-team'], delete_unmanaged: false }
+      ]);
+      expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('Inline values take precedence'));
+    });
+  });
+
+  describe('parseOrganizationRoleTeamAssignmentsFile', () => {
+    test('should parse standalone organization role team assignments file', () => {
+      setMockFileContent(
+        `
+- role: Apps Manager
+  teams:
+    - app-admins
+`,
+        '/mock/role-team-assignments.yml'
+      );
+
+      expect(parseOrganizationRoleTeamAssignmentsFile('/mock/role-team-assignments.yml')).toEqual([
+        { role: 'Apps Manager', teams: ['app-admins'], delete_unmanaged: false }
+      ]);
+    });
+  });
+
+  describe('syncOrganizationRoleTeamAssignments', () => {
+    test('should add missing organization role team assignments', async () => {
+      mockPaginate.mockResolvedValueOnce([{ id: 138, name: 'security_manager' }]);
+      mockPaginate.mockResolvedValueOnce([{ slug: 'existing-security' }]);
+      mockRequest.mockResolvedValueOnce({ status: 204 });
+
+      const result = await syncOrganizationRoleTeamAssignments(
+        mockOctokit,
+        'my-org',
+        [{ role: 'Security Manager', teams: ['existing-security', 'new-security'], delete_unmanaged: false }],
+        false
+      );
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults).toEqual([
+        {
+          kind: 'organization-role-team-add',
+          status: 'changed',
+          message: 'add team "new-security" to role "Security Manager"'
+        }
+      ]);
+      expect(mockRequest).toHaveBeenCalledWith('PUT /orgs/{org}/organization-roles/teams/{team_slug}/{role_id}', {
+        org: 'my-org',
+        team_slug: 'new-security',
+        role_id: 138
+      });
+    });
+
+    test('should remove unmanaged organization role team assignments when enabled', async () => {
+      mockPaginate.mockResolvedValueOnce([{ id: 99, name: 'Security Auditor' }]);
+      mockPaginate.mockResolvedValueOnce([{ slug: 'keep-security' }, { slug: 'old-security' }]);
+      mockRequest.mockResolvedValueOnce({ status: 204 });
+
+      const result = await syncOrganizationRoleTeamAssignments(
+        mockOctokit,
+        'my-org',
+        [{ role: 'Security Auditor', teams: ['keep-security'], delete_unmanaged: true }],
+        false
+      );
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults).toEqual([
+        {
+          kind: 'organization-role-team-remove',
+          status: 'changed',
+          message: 'remove team "old-security" from role "Security Auditor"'
+        }
+      ]);
+      expect(mockRequest).toHaveBeenCalledWith('DELETE /orgs/{org}/organization-roles/teams/{team_slug}/{role_id}', {
+        org: 'my-org',
+        team_slug: 'old-security',
+        role_id: 99
+      });
+    });
+
+    test('should dry-run add and remove organization role team assignments without API changes', async () => {
+      mockPaginate.mockResolvedValueOnce([{ id: 138, name: 'security_manager' }]);
+      mockPaginate.mockResolvedValueOnce([{ slug: 'old-security' }]);
+
+      const result = await syncOrganizationRoleTeamAssignments(
+        mockOctokit,
+        'my-org',
+        [{ role: 'security_manager', teams: ['new-security'], delete_unmanaged: true }],
+        true
+      );
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults).toEqual([
+        {
+          kind: 'organization-role-team-add',
+          status: 'changed',
+          message: 'Would add team "new-security" to role "security_manager"'
+        },
+        {
+          kind: 'organization-role-team-remove',
+          status: 'changed',
+          message: 'Would remove team "old-security" from role "security_manager"'
+        }
+      ]);
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    test('should skip with permission warning on 404 fetch', async () => {
+      const error404 = new Error('Not Found');
+      error404.status = 404;
+      mockPaginate.mockResolvedValueOnce([{ id: 138, name: 'security_manager' }]);
+      mockPaginate.mockRejectedValueOnce(error404);
+
+      const result = await syncOrganizationRoleTeamAssignments(
+        mockOctokit,
+        'my-org',
+        [{ role: 'security_manager', teams: ['security'], delete_unmanaged: false }],
+        false
+      );
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('organization-role-team-fetch');
+      expect(result.subResults[0].status).toBe('warning');
+      expect(result.subResults[0].message).toContain('proper permissions');
+    });
+
+    test('should mark add failures as failed warnings', async () => {
+      mockPaginate.mockResolvedValueOnce([{ id: 138, name: 'security_manager' }]);
+      mockPaginate.mockResolvedValueOnce([]);
+      mockRequest.mockRejectedValueOnce(new Error('Team not found'));
+
+      const result = await syncOrganizationRoleTeamAssignments(
+        mockOctokit,
+        'my-org',
+        [{ role: 'security_manager', teams: ['missing-team'], delete_unmanaged: false }],
+        false
+      );
+
+      expect(result.failed).toBe(true);
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('organization-role-team-add');
+      expect(result.subResults[0].status).toBe('warning');
+      expect(result.subResults[0].message).toContain('Failed to add');
+    });
+
+    test('should skip unmanaged removals when an add fails for the same role', async () => {
+      mockPaginate.mockResolvedValueOnce([{ id: 138, name: 'security_manager' }]);
+      mockPaginate.mockResolvedValueOnce([{ slug: 'old-security' }]);
+      mockRequest.mockRejectedValueOnce(new Error('Team not found'));
+
+      const result = await syncOrganizationRoleTeamAssignments(
+        mockOctokit,
+        'my-org',
+        [{ role: 'security_manager', teams: ['missing-team'], delete_unmanaged: true }],
+        false
+      );
+
+      expect(result.failed).toBe(true);
+      expect(result.subResults).toEqual([
+        {
+          kind: 'organization-role-team-add',
+          status: 'warning',
+          message: 'Failed to add team "missing-team" to role "security_manager": Team not found'
+        },
+        {
+          kind: 'organization-role-team-remove',
+          status: 'warning',
+          message:
+            'Skipped removing unmanaged teams from role "security_manager" because one or more desired team assignments failed'
+        }
+      ]);
+      expect(mockRequest).toHaveBeenCalledTimes(1);
+      expect(mockRequest).not.toHaveBeenCalledWith(
+        'DELETE /orgs/{org}/organization-roles/teams/{team_slug}/{role_id}',
+        expect.any(Object)
+      );
+    });
+
+    test('should fail when configured organization role is unavailable', async () => {
+      mockPaginate.mockResolvedValueOnce([{ id: 1, name: 'auditor' }]);
+
+      const result = await syncOrganizationRoleTeamAssignments(
+        mockOctokit,
+        'my-org',
+        [{ role: 'security_manager', teams: ['security'], delete_unmanaged: false }],
+        false
+      );
+
+      expect(result.failed).toBe(true);
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('organization-role-team-fetch');
+      expect(result.subResults[0].status).toBe('warning');
+      expect(result.subResults[0].message).toContain('security_manager');
+      expect(mockPaginate).toHaveBeenCalledWith(
+        'GET /orgs/{org}/organization-roles',
+        { org: 'my-org', per_page: 100 },
+        expect.any(Function)
+      );
+    });
+
+    test('should preview assignments to planned custom org roles in dry-run mode', async () => {
+      mockPaginate.mockResolvedValueOnce([]);
+
+      const result = await syncOrganizationRoleTeamAssignments(
+        mockOctokit,
+        'my-org',
+        [{ role: 'Security Auditor', teams: ['compliance'], delete_unmanaged: true }],
+        true,
+        [{ name: 'Security Auditor', permissions: ['read_org_repo'] }]
+      );
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults).toEqual([
+        {
+          kind: 'organization-role-team-add',
+          status: 'changed',
+          message: 'Would add team "compliance" to role "Security Auditor"'
+        }
+      ]);
+      expect(mockRequest).not.toHaveBeenCalled();
     });
   });
 

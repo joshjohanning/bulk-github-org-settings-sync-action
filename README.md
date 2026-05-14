@@ -71,7 +71,7 @@ For stronger security and higher rate limits, use a GitHub App:
 1. Create a GitHub App with the following permissions:
 
    **Organization permissions:**
-   - **Administration**: Read and write (required for managing organization settings and rulesets)
+   - **Administration**: Read and write (required for managing organization settings, rulesets, and organization role team assignments)
    - **Custom properties**: Admin (required for managing custom property definitions)
    - **Custom organization roles**: Write (required for managing custom organization roles)
    - **Custom repository roles**: Write (required for managing custom repository roles)
@@ -771,6 +771,68 @@ orgs:
 
 ---
 
+## Syncing Organization Role Team Assignments
+
+Assign built-in or custom organization roles to teams by slug.
+
+This uses GitHub's organization roles APIs and supports built-in roles such as `security_manager` and `CI/CD Admin`, plus custom organization roles created by `custom-org-roles-file`. Custom organization role definitions are synced before team assignments, so newly created custom roles can be assigned in the same run.
+
+```yml
+- name: Sync Organization Settings
+  uses: joshjohanning/bulk-github-org-settings-sync-action@v1
+  with:
+    github-token: ${{ secrets.ORG_ADMIN_TOKEN }}
+    organizations: 'my-org,my-other-org'
+    organization-role-team-assignments-file: './config/organization-role-team-assignments.yml'
+```
+
+```yaml
+# config/organization-role-team-assignments.yml
+- role: security_manager
+  teams:
+    - security-team
+    - appsec
+  delete-unmanaged: true
+- role: CI/CD Admin
+  teams: platform-admins
+- role: Security Auditor
+  teams:
+    - compliance
+```
+
+**Behavior:**
+
+- Adds configured team slugs that do not already have the organization role
+- Leaves existing role team assignments alone unless `delete-unmanaged: true` is set for that role
+- When `delete-unmanaged: true`, removes teams assigned to that role that are not in the configured desired set
+- In dry-run mode, shows which teams would be added or removed without applying changes
+
+In `orgs.yml`, `organization-role-team-assignments` can be configured inline. Per-org values replace the global `organization-role-team-assignments-file` input for that org:
+
+```yaml
+orgs:
+  - org: my-org
+    organization-role-team-assignments:
+      - role: security_manager
+        teams:
+          - security-team
+          - appsec
+        delete-unmanaged: true
+```
+
+You can also point a specific organization at a different assignments file:
+
+```yaml
+orgs:
+  - org: my-org
+    organization-role-team-assignments-file: './config/my-org-role-team-assignments.yml'
+```
+
+> [!NOTE]
+> If both inline `organization-role-team-assignments` and `organization-role-team-assignments-file` are specified for the same org, inline values take precedence and the file is ignored.
+
+---
+
 ## Syncing Member Privileges
 
 Sync organization-level member privilege settings (repository policies) across organizations. These control what members can do within the organization, such as creating repositories, forking private repos, and managing pages.
@@ -893,6 +955,7 @@ Per-org overrides can be set in `orgs.yml` using the `dot-github-source-dir` and
 | `readers-can-create-discussions`              | Whether users with read access can create discussions                               | No       |                         |
 | `members-can-view-dependency-insights`        | Whether members can view dependency insights                                        | No       |                         |
 | `display-commenter-full-name-setting-enabled` | Whether to display commenter full name in issues and PRs                            | No       |                         |
+| `organization-role-team-assignments-file`     | Path to a YAML file defining organization role team assignments                     | No       |                         |
 | `rulesets-file`                               | Comma-separated paths to JSON files, each with a single org ruleset config          | No       |                         |
 | `delete-unmanaged-rulesets`                   | Delete all other rulesets besides those being synced                                | No       | `false`                 |
 | `custom-org-roles-file`                       | Path to a YAML file defining custom organization role definitions (GHEC only)       | No       |                         |
@@ -902,7 +965,7 @@ Per-org overrides can be set in `orgs.yml` using the `dot-github-source-dir` and
 | `dry-run`                                     | Preview changes without applying them                                               | No       | `false`                 |
 
 > [!NOTE]
-> You must provide either `organizations` or `organizations-file`. The `custom-properties-file`, `issue-types-file`, `rulesets-file`, `custom-org-roles-file`, and `custom-repo-roles-file` inputs provide base settings for all orgs and can be combined with either approach. Member privilege settings can be provided as individual inputs (e.g., `default-repository-permission`). Per-org overrides in `organizations-file` layer on top of the base.
+> You must provide either `organizations` or `organizations-file`. The `custom-properties-file`, `issue-types-file`, `rulesets-file`, `custom-org-roles-file`, `custom-repo-roles-file`, and `organization-role-team-assignments-file` inputs provide base settings for all orgs and can be combined with either approach. Member privilege settings can be provided as individual inputs (e.g., `default-repository-permission`). Per-org overrides in `organizations-file` layer on top of the base unless otherwise noted.
 > Sync named code security configurations across organizations. These configurations define security feature enablement policies (e.g., Dependabot, secret scanning, code scanning) that can be applied to repositories.
 
 ### Basic Usage
@@ -1127,6 +1190,7 @@ orgs:
 | `readers-can-create-discussions`                          | Whether users with read access can create discussions                                | No       |                         |
 | `members-can-view-dependency-insights`                    | Whether members can view dependency insights                                         | No       |                         |
 | `display-commenter-full-name-setting-enabled`             | Whether to display commenter full name in issues and PRs                             | No       |                         |
+| `organization-role-team-assignments-file`                 | Path to a YAML file defining organization role team assignments                      | No       |                         |
 | `rulesets-file`                                           | Comma-separated paths to JSON files, each with a single org ruleset config           | No       |                         |
 | `delete-unmanaged-rulesets`                               | Delete all other rulesets besides those being synced                                 | No       | `false`                 |
 | `custom-org-roles-file`                                   | Path to a YAML file defining custom organization role definitions (GHEC only)        | No       |                         |
@@ -1153,7 +1217,7 @@ orgs:
 | `dry-run`                                                 | Preview changes without applying them                                                | No       | `false`                 |
 
 > [!NOTE]
-> You must provide either `organizations` or `organizations-file`. The `custom-properties-file`, `issue-types-file`, `rulesets-file`, `custom-org-roles-file`, `custom-repo-roles-file`, `actions-allow-list-file`, and `code-security-configurations-file` inputs provide base settings for all orgs and can be combined with either approach. Member privilege settings can be provided as individual inputs (e.g., `default-repository-permission`). Actions policy settings can be provided as individual inputs (e.g., `actions-policy-allowed-actions`). Org profile settings can be provided as individual inputs (e.g., `org-name`). The `dot-github-source-dir` and `dot-github-private-source-dir` inputs sync a local directory to the respective special repositories via PR. Per-org overrides in `organizations-file` layer on top of the base.
+> You must provide either `organizations` or `organizations-file`. The `custom-properties-file`, `issue-types-file`, `rulesets-file`, `custom-org-roles-file`, `custom-repo-roles-file`, `actions-allow-list-file`, `code-security-configurations-file`, and `organization-role-team-assignments-file` inputs provide base settings for all orgs and can be combined with either approach. Member privilege settings can be provided as individual inputs (e.g., `default-repository-permission`). Actions policy settings can be provided as individual inputs (e.g., `actions-policy-allowed-actions`). Org profile settings can be provided as individual inputs (e.g., `org-name`). The `dot-github-source-dir` and `dot-github-private-source-dir` inputs sync a local directory to the respective special repositories via PR. Per-org overrides in `organizations-file` layer on top of the base unless otherwise noted.
 
 ## Action Outputs
 

@@ -21,6 +21,10 @@
 # member-privileges overrides layer on top — settings with the same key
 # override the base value.
 #
+# Organization role team assignments can be defined via the
+# organization-role-team-assignments-file action input. Per-org
+# organization-role-team-assignments replaces the base assignments for that org.
+#
 # Organization profile fields can be defined as direct action inputs. Per-org
 # org-profile overrides layer on top — fields with the same key override the
 # base value.
@@ -31,19 +35,38 @@
 # layer on top — configurations with the same name override the base definition.
 
 orgs:
-  # Org that inherits all base properties from custom-properties-file as-is
+  # Org that inherits all base settings from action inputs / file inputs as-is
   - org: my-org
 
-  # Org with per-org inline overrides (layers on top of base custom-properties-file)
+  # Org with per-org inline overrides (layers on top of base action inputs / file inputs)
+  #
+  # For most features, per-org config can be provided INLINE or via a FILE PATH:
+  #   inline:  organization-role-team-assignments: [...]
+  #   file:    organization-role-team-assignments-file: './config/my-other-org-roles.yml'
+  #
+  # The file path form lets you keep per-org config in separate files while
+  # still using a single orgs.yml to map orgs. Inline values take precedence
+  # if both are specified. Per-org values REPLACE the global base for that org
+  # (they do not merge) unless noted otherwise below.
   - org: my-other-org
-    # custom-properties-file: './config/custom-properties/other-org.yml' # Use a different base file for this org
-    # issue-types-file: './config/issue-types/other-org.yml' # Use a different issue types file for this org
-    # rulesets-file:                              # Override rulesets for this org (YAML array)
+    # --- Per-org file path overrides (point to a different base file for this org) ---
+    # custom-properties-file: './config/custom-properties/other-org.yml'
+    # issue-types-file: './config/issue-types/other-org.yml'
+    # rulesets-file:                              # YAML array of ruleset JSON files
     #   - './config/rulesets/branch-protection.json'
     #   - './config/rulesets/tag-protection.json'
-    # delete-unmanaged-rulesets: true             # Delete rulesets not in the config for this org
-    # delete-unmanaged-properties: true # Override the action input for this org
-    # delete-unmanaged-issue-types: true # Override the action input for this org
+    # code-security-configurations-file: './config/code-security/other-org.yml'
+    # organization-role-team-assignments-file: './config/org-role-team-assignments/other-org.yml'
+    # actions-allow-list-file: './config/actions-allow-list.yml'
+    # dot-github-source-dir: './config/dot-github/other-org'
+    # dot-github-private-source-dir: './config/dot-github-private/other-org'
+
+    # --- Per-org boolean overrides ---
+    # delete-unmanaged-properties: true
+    # delete-unmanaged-issue-types: true
+    # delete-unmanaged-rulesets: true
+
+    # --- Per-org inline overrides ---
     custom-properties:
       - name: team
         value-type: single_select
@@ -69,13 +92,22 @@ orgs:
     member-privileges:
       members-can-fork-private-repositories: true # Override the base setting for this org
       members-can-create-internal-repositories: true # GHEC/GHES only
+    # Per-org organization role team assignments (replaces the global assignments for this org)
+    organization-role-team-assignments:
+      - role: security_manager
+        teams:
+          - security-team
+          - appsec
+        # delete-unmanaged: true # Remove teams assigned to this role that are not listed above
+      - role: CI/CD Admin
+        teams:
+          - platform-admins
     # Per-org organization profile overrides (layers on top of base action inputs)
     org-profile:
       org-name: 'My Other Org'
       org-description: 'Custom description for this org'
     # Per-org code security configuration overrides (layers on top of base code-security-configurations-file)
-    # code-security-configurations-file: './config/code-security/other-org.yml' # Use a different base file for this org
-    # delete-unmanaged-code-security-configurations: true # Override the action input for this org
+    # delete-unmanaged-code-security-configurations: true
     code-security-configurations:
       - name: High risk settings
         description: Security configuration for high risk repositories (stricter for this org)
@@ -86,8 +118,6 @@ orgs:
         attach-scope: selected
         selected-repositories: [high-risk-service, app-api]
         default-for-new-repos: private_and_internal
-
-    # actions-allow-list-file: './config/actions-allow-list.yml' # Override allow list for this org
     # Per-org actions policy overrides (layers on top of base action inputs)
     actions-policy:
       allowed-actions: selected # Override the base actions policy for this org
@@ -95,9 +125,6 @@ orgs:
       verified-allowed: true
       default-workflow-permissions: read
       actions-can-approve-pull-request-reviews: false
-    # Per-org .github repo source directory override
-    # dot-github-source-dir: './config/dot-github/other-org'
-    # dot-github-private-source-dir: './config/dot-github-private/other-org'
 
 # ---
 # Alternative: fully self-contained (no base custom-properties-file needed)

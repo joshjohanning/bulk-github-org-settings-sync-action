@@ -126,6 +126,11 @@ inputs:
     description: 'Whether to display commenter full name in issues and PRs'
     required: false
 
+  # === Organization Role Team Assignments ===
+  organization-role-team-assignments-file:
+    description: 'Path to a YAML file defining organization role team assignments to sync'
+    required: false
+
   # === Custom Roles (GHEC only) ===
   custom-org-roles-file:
     description: 'Path to a YAML file defining custom organization role definitions to sync (requires GitHub Enterprise Cloud)'
