@@ -21,9 +21,9 @@
 # member-privileges overrides layer on top — settings with the same key
 # override the base value.
 #
-# Security manager teams can be defined via the security-manager-teams
-# action input. Per-org security-manager-teams replaces the base list for
-# that org.
+# Organization role team assignments can be defined via the
+# organization-role-team-assignments-file action input. Per-org
+# organization-role-team-assignments replaces the base assignments for that org.
 #
 # Organization profile fields can be defined as direct action inputs. Per-org
 # org-profile overrides layer on top — fields with the same key override the
@@ -73,11 +73,16 @@ orgs:
     member-privileges:
       members-can-fork-private-repositories: true # Override the base setting for this org
       members-can-create-internal-repositories: true # GHEC/GHES only
-    # Per-org security manager team override (team slugs)
-    security-manager-teams:
-      - security-team
-      - appsec
-    # delete-unmanaged-security-manager-teams: true # Remove security manager teams not listed above
+    # Per-org organization role team assignment override
+    organization-role-team-assignments:
+      - role: security_manager
+        teams:
+          - security-team
+          - appsec
+        # delete-unmanaged: true # Remove teams assigned to this role that are not listed above
+      - role: CI/CD Admin
+        teams:
+          - platform-admins
     # Per-org organization profile overrides (layers on top of base action inputs)
     org-profile:
       org-name: 'My Other Org'

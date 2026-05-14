@@ -771,11 +771,11 @@ orgs:
 
 ---
 
-## Syncing Security Manager Teams
+## Syncing Organization Role Team Assignments
 
-Assign organization security manager access to teams by slug.
+Assign built-in or custom organization roles to teams by slug.
 
-This uses GitHub's organization roles APIs to assign the built-in `security_manager` organization role to teams.
+This uses GitHub's organization roles APIs and supports built-in roles such as `security_manager` and `CI/CD Admin`, plus custom organization roles created by `custom-org-roles-file`. Custom organization role definitions are synced before team assignments, so newly created custom roles can be assigned in the same run.
 
 ```yml
 - name: Sync Organization Settings
@@ -783,35 +783,49 @@ This uses GitHub's organization roles APIs to assign the built-in `security_mana
   with:
     github-token: ${{ secrets.ORG_ADMIN_TOKEN }}
     organizations: 'my-org,my-other-org'
-    security-manager-teams: 'security-team,appsec'
-    delete-unmanaged-security-manager-teams: false
+    organization-role-team-assignments-file: './config/organization-role-team-assignments.yml'
+```
+
+```yaml
+# config/organization-role-team-assignments.yml
+- role: security_manager
+  teams:
+    - security-team
+    - appsec
+  delete-unmanaged: true
+- role: CI/CD Admin
+  teams: platform-admins
+- role: Security Auditor
+  teams:
+    - compliance
 ```
 
 **Behavior:**
 
-- Adds configured team slugs that are not already security managers
-- Leaves existing security manager teams alone unless deletion is enabled
-- When `delete-unmanaged-security-manager-teams: true`, removes security manager teams not in the configured desired set
+- Adds configured team slugs that do not already have the organization role
+- Leaves existing role team assignments alone unless `delete-unmanaged: true` is set for that role
+- When `delete-unmanaged: true`, removes teams assigned to that role that are not in the configured desired set
 - In dry-run mode, shows which teams would be added or removed without applying changes
 
-In `orgs.yml`, `security-manager-teams` can be a comma-separated string or YAML array. Per-org values replace the global `security-manager-teams` input for that org:
+In `orgs.yml`, `organization-role-team-assignments` can be configured inline. Per-org values replace the global `organization-role-team-assignments-file` input for that org:
 
 ```yaml
 orgs:
   - org: my-org
-    security-manager-teams:
-      - security-team
-      - appsec
-    delete-unmanaged-security-manager-teams: true
+    organization-role-team-assignments:
+      - role: security_manager
+        teams:
+          - security-team
+          - appsec
+        delete-unmanaged: true
 ```
 
-To remove all security manager teams from a specific org, set an explicit empty list and enable deletion for that org:
+You can also point a specific organization at a different assignments file:
 
 ```yaml
 orgs:
   - org: my-org
-    security-manager-teams: []
-    delete-unmanaged-security-manager-teams: true
+    organization-role-team-assignments-file: './config/my-org-role-team-assignments.yml'
 ```
 
 ---
@@ -938,8 +952,7 @@ Per-org overrides can be set in `orgs.yml` using the `dot-github-source-dir` and
 | `readers-can-create-discussions`              | Whether users with read access can create discussions                               | No       |                         |
 | `members-can-view-dependency-insights`        | Whether members can view dependency insights                                        | No       |                         |
 | `display-commenter-full-name-setting-enabled` | Whether to display commenter full name in issues and PRs                            | No       |                         |
-| `security-manager-teams`                      | Comma-separated team slugs to assign as organization security managers              | No       |                         |
-| `delete-unmanaged-security-manager-teams`     | Remove security manager teams not defined in the configuration                      | No       | `false`                 |
+| `organization-role-team-assignments-file`     | Path to a YAML file defining organization role team assignments                     | No       |                         |
 | `rulesets-file`                               | Comma-separated paths to JSON files, each with a single org ruleset config          | No       |                         |
 | `delete-unmanaged-rulesets`                   | Delete all other rulesets besides those being synced                                | No       | `false`                 |
 | `custom-org-roles-file`                       | Path to a YAML file defining custom organization role definitions (GHEC only)       | No       |                         |
@@ -1174,8 +1187,7 @@ orgs:
 | `readers-can-create-discussions`                          | Whether users with read access can create discussions                                | No       |                         |
 | `members-can-view-dependency-insights`                    | Whether members can view dependency insights                                         | No       |                         |
 | `display-commenter-full-name-setting-enabled`             | Whether to display commenter full name in issues and PRs                             | No       |                         |
-| `security-manager-teams`                                  | Comma-separated team slugs to assign as organization security managers               | No       |                         |
-| `delete-unmanaged-security-manager-teams`                 | Remove security manager teams not defined in the configuration                       | No       | `false`                 |
+| `organization-role-team-assignments-file`                 | Path to a YAML file defining organization role team assignments                      | No       |                         |
 | `rulesets-file`                                           | Comma-separated paths to JSON files, each with a single org ruleset config           | No       |                         |
 | `delete-unmanaged-rulesets`                               | Delete all other rulesets besides those being synced                                 | No       | `false`                 |
 | `custom-org-roles-file`                                   | Path to a YAML file defining custom organization role definitions (GHEC only)        | No       |                         |

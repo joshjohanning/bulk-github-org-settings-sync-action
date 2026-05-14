@@ -60,7 +60,8 @@ function getKnownOrgConfigKeys() {
     'custom-repo-roles',
     'org-profile',
     'code-security-configurations',
-    'actions-policy'
+    'actions-policy',
+    'organization-role-team-assignments'
   ]);
 
   try {
@@ -244,8 +245,8 @@ const ORG_CONFIG_TOP_LEVEL_KEYS = new Set([
   'issue-types',
   'issue-types-file',
   'delete-unmanaged-issue-types',
-  'security-manager-teams',
-  'delete-unmanaged-security-manager-teams',
+  'organization-role-team-assignments',
+  'organization-role-team-assignments-file',
   'rulesets-file',
   'delete-unmanaged-rulesets',
   'member-privileges',
@@ -429,6 +430,7 @@ const FILE_PATH_CONFIG_KEYS = [
   'custom-org-roles-file',
   'custom-repo-roles-file',
   'code-security-configurations-file',
+  'organization-role-team-assignments-file',
   'actions-allow-list-file',
   'dot-github-source-dir',
   'dot-github-private-source-dir'
@@ -515,9 +517,9 @@ const SYNC_KIND_LABELS = Object.freeze({
   'issue-type-delete': 'issue type (deleted)',
   'issue-type-fetch': 'issue type (fetch failed)',
   'member-privileges-update': 'member privileges (updated)',
-  'security-manager-team-add': 'security manager team (added)',
-  'security-manager-team-remove': 'security manager team (removed)',
-  'security-manager-team-fetch': 'security manager team (fetch failed)',
+  'organization-role-team-add': 'organization role team assignment (added)',
+  'organization-role-team-remove': 'organization role team assignment (removed)',
+  'organization-role-team-fetch': 'organization role team assignment (fetch failed)',
   'org-profile-update': 'organization profile (updated)',
   'ruleset-create': 'ruleset (created)',
   'ruleset-update': 'ruleset (updated)',
@@ -687,8 +689,7 @@ function formatSubResultStatus(status) {
  * @param {string} [actionsAllowListFile] - Path to actions allow list YAML file (base for all orgs)
  * @param {string} [dotGithubSourceDir] - Path to source directory for .github repo sync
  * @param {string} [dotGithubPrivateSourceDir] - Path to source directory for .github-private repo sync
- * @param {string[]} [securityManagerTeamsFromInputs] - Security manager team slugs from action inputs (base for all orgs)
- * @param {boolean} [deleteUnmanagedSecurityManagerTeams] - Whether to remove security manager teams not in config
+ * @param {string} [organizationRoleTeamAssignmentsFile] - Path to organization role team assignments YAML file (base for all orgs)
  * @returns {Array<{ org: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, issueTypes?: Array, memberPrivileges?: Object, customOrgRoles?: Array, customRepoRoles?: Array, orgProfile?: Object, codeSecurityConfigurations?: Array, deleteUnmanagedCodeSecurityConfigurations?: boolean, actionsPolicy?: Object, actionsAllowList?: string[], dotGithubSourceDir?: string, dotGithubPrivateSourceDir?: string }>} Parsed org configs
  */
 export function parseOrganizations(
@@ -707,8 +708,7 @@ export function parseOrganizations(
   actionsAllowListFile,
   dotGithubSourceDir,
   dotGithubPrivateSourceDir,
-  securityManagerTeamsFromInputs,
-  deleteUnmanagedSecurityManagerTeams
+  organizationRoleTeamAssignmentsFile
 ) {
   let resolvedCodeSecurityConfigurationsFile = codeSecurityConfigurationsFile;
   let resolvedActionsPolicyFromInputs = actionsPolicyFromInputs;
@@ -781,9 +781,10 @@ export function parseOrganizations(
     baseActionsAllowList = parseActionsAllowListFile(resolvedActionsAllowListFile);
   }
 
-  const baseSecurityManagerTeams = Array.isArray(securityManagerTeamsFromInputs)
-    ? [...securityManagerTeamsFromInputs]
-    : null;
+  let baseOrganizationRoleTeamAssignments = null;
+  if (organizationRoleTeamAssignmentsFile) {
+    baseOrganizationRoleTeamAssignments = parseOrganizationRoleTeamAssignmentsFile(organizationRoleTeamAssignmentsFile);
+  }
 
   if (organizationsFile) {
     const orgConfigs = parseOrganizationsFile(organizationsFile);
@@ -849,16 +850,25 @@ export function parseOrganizations(
         );
       }
 
-      // Per-org security-manager-teams replaces the base desired set for this org.
-      if (orgConfig.securityManagerTeams === undefined && baseSecurityManagerTeams) {
-        orgConfig.securityManagerTeams = [...baseSecurityManagerTeams];
+      if (orgConfig.organizationRoleTeamAssignmentsFile) {
+        try {
+          orgConfig.organizationRoleTeamAssignments = parseOrganizationRoleTeamAssignmentsFile(
+            orgConfig.organizationRoleTeamAssignmentsFile
+          );
+        } catch (error) {
+          throw new Error(
+            `Failed to parse organization role team assignments file "${orgConfig.organizationRoleTeamAssignmentsFile}" for organization "${orgConfig.org}": ${error.message}`,
+            { cause: error }
+          );
+        }
       }
+      delete orgConfig.organizationRoleTeamAssignmentsFile;
 
-      if (
-        orgConfig.deleteUnmanagedSecurityManagerTeams === undefined &&
-        deleteUnmanagedSecurityManagerTeams !== undefined
-      ) {
-        orgConfig.deleteUnmanagedSecurityManagerTeams = deleteUnmanagedSecurityManagerTeams;
+      if (orgConfig.organizationRoleTeamAssignments === undefined && baseOrganizationRoleTeamAssignments) {
+        orgConfig.organizationRoleTeamAssignments = baseOrganizationRoleTeamAssignments.map(assignment => ({
+          ...assignment,
+          teams: [...assignment.teams]
+        }));
       }
 
       // Per-org custom-org-roles-file overrides the base for this org
@@ -983,8 +993,14 @@ export function parseOrganizations(
     ...(rulesetsFiles && rulesetsFiles.length > 0 ? { rulesetsFiles } : {}),
     ...(deleteUnmanagedRulesets !== undefined ? { deleteUnmanagedRulesets } : {}),
     ...(baseMemberPrivileges ? { memberPrivileges: baseMemberPrivileges } : {}),
-    ...(baseSecurityManagerTeams ? { securityManagerTeams: [...baseSecurityManagerTeams] } : {}),
-    ...(deleteUnmanagedSecurityManagerTeams !== undefined ? { deleteUnmanagedSecurityManagerTeams } : {}),
+    ...(baseOrganizationRoleTeamAssignments
+      ? {
+          organizationRoleTeamAssignments: baseOrganizationRoleTeamAssignments.map(assignment => ({
+            ...assignment,
+            teams: [...assignment.teams]
+          }))
+        }
+      : {}),
     ...(baseCustomOrgRoles ? { customOrgRoles: baseCustomOrgRoles } : {}),
     ...(baseCustomRepoRoles ? { customRepoRoles: baseCustomRepoRoles } : {}),
     ...(baseOrgProfile ? { orgProfile: baseOrgProfile } : {}),
@@ -1064,15 +1080,43 @@ export function mergeMemberPrivileges(basePrivileges, orgPrivileges) {
   return { ...basePrivileges, ...orgPrivileges };
 }
 
-// ─── Security Manager Teams Parsing & Sync ──────────────────────────────────────
+// ─── Organization Role Team Assignments Parsing & Sync ──────────────────────────
+
+const BUILT_IN_ORG_ROLE_ALIASES = new Map([
+  ['all-repository read', 'all_repo_read'],
+  ['all repository read', 'all_repo_read'],
+  ['all-repository triage', 'all_repo_triage'],
+  ['all repository triage', 'all_repo_triage'],
+  ['all-repository write', 'all_repo_write'],
+  ['all repository write', 'all_repo_write'],
+  ['all-repository maintain', 'all_repo_maintain'],
+  ['all repository maintain', 'all_repo_maintain'],
+  ['all-repository admin', 'all_repo_admin'],
+  ['all repository admin', 'all_repo_admin'],
+  ['apps manager', 'app_manager'],
+  ['app manager', 'app_manager'],
+  ['ci/cd admin', 'ci_cd_admin'],
+  ['cicd admin', 'ci_cd_admin'],
+  ['security manager', 'security_manager']
+]);
 
 /**
- * Parse security manager team slugs from comma-separated input or YAML array.
+ * Normalize a role name for case-insensitive matching and known built-in display aliases.
+ * @param {string} roleName - Role name from config or API
+ * @returns {string} Lookup key
+ */
+function normalizeOrganizationRoleLookupKey(roleName) {
+  const normalized = roleName.trim().toLowerCase();
+  return BUILT_IN_ORG_ROLE_ALIASES.get(normalized) || normalized;
+}
+
+/**
+ * Parse team slugs from comma-separated input or YAML array.
  * @param {string|string[]|null|undefined} value - Raw team slug value
  * @param {string} [context] - Human-readable context for errors
  * @returns {string[]} Normalized lowercase team slugs
  */
-export function parseSecurityManagerTeams(value, context = 'security-manager-teams') {
+function parseTeamSlugs(value, context = 'teams') {
   if (value === undefined || value === null) {
     return [];
   }
@@ -1107,119 +1151,197 @@ export function parseSecurityManagerTeams(value, context = 'security-manager-tea
 }
 
 /**
- * Sync security manager team assignments for an organization.
+ * Parse a standalone organization role team assignments YAML file.
+ * @param {string} filePath - Path to the YAML file
+ * @returns {Array<Object>} Normalized organization role team assignments
+ */
+export function parseOrganizationRoleTeamAssignmentsFile(filePath) {
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`Organization role team assignments file not found: ${filePath}`);
+  }
+
+  const content = fs.readFileSync(filePath, 'utf8');
+  const assignments = yaml.load(content);
+  return normalizeOrganizationRoleTeamAssignments(assignments, filePath);
+}
+
+/**
+ * Normalize organization role team assignment definitions from YAML format.
+ * @param {Array<Object>} assignments - Assignment definitions from YAML
+ * @param {string} [context] - Human-readable context for errors
+ * @returns {Array<{ role: string, teams: string[], delete_unmanaged: boolean }>}
+ */
+export function normalizeOrganizationRoleTeamAssignments(assignments, context = 'organization-role-team-assignments') {
+  if (!Array.isArray(assignments)) {
+    throw new Error(`Invalid ${context}: expected an array`);
+  }
+
+  const seenRoles = new Set();
+  return assignments.map((assignment, index) => {
+    if (typeof assignment !== 'object' || assignment === null || Array.isArray(assignment)) {
+      throw new Error(`Organization role team assignment at index ${index} must be a key-value map`);
+    }
+
+    if (typeof assignment.role !== 'string' || assignment.role.trim() === '') {
+      throw new Error(`Organization role team assignment at index ${index} must have a non-empty "role" string`);
+    }
+
+    const role = assignment.role.trim();
+    const roleKey = normalizeOrganizationRoleLookupKey(role);
+    if (seenRoles.has(roleKey)) {
+      throw new Error(`Duplicate organization role team assignment for role "${role}"`);
+    }
+    seenRoles.add(roleKey);
+
+    if (!Object.prototype.hasOwnProperty.call(assignment, 'teams')) {
+      throw new Error(`Organization role team assignment for "${role}" must have a "teams" field`);
+    }
+
+    if (
+      Object.prototype.hasOwnProperty.call(assignment, 'delete-unmanaged') &&
+      typeof assignment['delete-unmanaged'] !== 'boolean'
+    ) {
+      throw new Error(`Organization role team assignment for "${role}" has invalid delete-unmanaged value`);
+    }
+
+    return {
+      role,
+      teams: parseTeamSlugs(assignment.teams, `teams for organization role "${role}"`),
+      delete_unmanaged: assignment['delete-unmanaged'] ?? false
+    };
+  });
+}
+
+/**
+ * Resolve an organization role by configured role name.
+ * @param {Array<Object>} roles - Organization roles from API
+ * @param {string} desiredRoleName - Role name from config
+ * @returns {Object|undefined} Matching role
+ */
+function findOrganizationRoleByName(roles, desiredRoleName) {
+  const desiredKey = normalizeOrganizationRoleLookupKey(desiredRoleName);
+  return roles.find(role => normalizeOrganizationRoleLookupKey(role.name) === desiredKey);
+}
+
+/**
+ * Sync organization role team assignments for an organization.
  * @param {Octokit} octokit - Octokit instance
  * @param {string} org - Organization name
- * @param {string[]} desiredTeamSlugs - Desired security manager team slugs
- * @param {boolean} deleteUnmanaged - Whether to remove teams not in config
+ * @param {Array<Object>} assignments - Desired organization role team assignments
  * @param {boolean} dryRun - Preview mode
  * @returns {Promise<Object>} Result object with subResults
  */
-export async function syncSecurityManagerTeams(octokit, org, desiredTeamSlugs, deleteUnmanaged, dryRun) {
+export async function syncOrganizationRoleTeamAssignments(octokit, org, assignments, dryRun) {
   const subResults = [];
   const wouldPrefix = dryRun ? 'Would ' : '';
   let hasFailed = false;
 
-  let securityManagerRole;
+  let roles;
   try {
     const { data } = await octokit.request('GET /orgs/{org}/organization-roles', { org, per_page: 100 });
-    securityManagerRole = (data.roles || []).find(role => role.name === 'security_manager');
+    roles = data.roles || [];
   } catch (error) {
     if (isPermissionLikeFetchError(error)) {
       const message = formatPermissionFetchWarning('organization roles', org, error);
       core.warning(`  ⚠️  ${message}`);
-      subResults.push(createSubResult('security-manager-team-fetch', SubResultStatus.WARNING, message));
+      subResults.push(createSubResult('organization-role-team-fetch', SubResultStatus.WARNING, message));
       return { subResults, failed: false };
     }
 
     throw error;
   }
 
-  if (!securityManagerRole) {
-    const message = `Could not find the built-in "security_manager" organization role for "${org}".`;
-    core.warning(`  ⚠️  ${message}`);
-    subResults.push(createSubResult('security-manager-team-fetch', SubResultStatus.WARNING, message));
-    return { subResults, failed: false };
-  }
-
-  let existingTeams;
-  try {
-    existingTeams = await octokit.paginate('GET /orgs/{org}/organization-roles/{role_id}/teams', {
-      org,
-      role_id: securityManagerRole.id,
-      per_page: 100
-    });
-  } catch (error) {
-    if (isPermissionLikeFetchError(error)) {
-      const message = formatPermissionFetchWarning('security manager teams', org, error);
+  for (const assignment of assignments) {
+    const role = findOrganizationRoleByName(roles, assignment.role);
+    if (!role) {
+      hasFailed = true;
+      const message = `Could not find organization role "${assignment.role}" for "${org}".`;
       core.warning(`  ⚠️  ${message}`);
-      subResults.push(createSubResult('security-manager-team-fetch', SubResultStatus.WARNING, message));
-      return { subResults, failed: false };
-    }
-
-    throw error;
-  }
-
-  const existingSlugs = new Set(existingTeams.map(team => String(team.slug).toLowerCase()));
-  const desiredSlugs = new Set(desiredTeamSlugs);
-
-  for (const teamSlug of desiredTeamSlugs) {
-    if (existingSlugs.has(teamSlug)) {
-      core.info(`  ✅ Security manager team unchanged: ${teamSlug}`);
+      subResults.push(createSubResult('organization-role-team-fetch', SubResultStatus.WARNING, message));
       continue;
     }
 
-    core.info(`  🆕 ${wouldPrefix}Add security manager team: ${teamSlug}`);
-    subResults.push(
-      createSubResult('security-manager-team-add', SubResultStatus.CHANGED, `${wouldPrefix}add "${teamSlug}"`)
-    );
-
-    if (!dryRun) {
-      try {
-        await octokit.request('PUT /orgs/{org}/organization-roles/teams/{team_slug}/{role_id}', {
+    let existingTeams;
+    try {
+      existingTeams = await octokit.paginate('GET /orgs/{org}/organization-roles/{role_id}/teams', {
+        org,
+        role_id: role.id,
+        per_page: 100
+      });
+    } catch (error) {
+      if (isPermissionLikeFetchError(error)) {
+        const message = formatPermissionFetchWarning(
+          `teams assigned to organization role "${assignment.role}"`,
           org,
-          team_slug: teamSlug,
-          role_id: securityManagerRole.id
-        });
-      } catch (error) {
-        hasFailed = true;
-        core.warning(`  ⚠️  Failed to add security manager team "${teamSlug}": ${error.message}`);
-        subResults[subResults.length - 1] = createSubResult(
-          'security-manager-team-add',
-          SubResultStatus.WARNING,
-          `Failed to add "${teamSlug}": ${error.message}`
+          error
         );
-      }
-    }
-  }
-
-  if (deleteUnmanaged) {
-    for (const team of existingTeams) {
-      const teamSlug = String(team.slug).toLowerCase();
-      if (desiredSlugs.has(teamSlug)) {
+        core.warning(`  ⚠️  ${message}`);
+        subResults.push(createSubResult('organization-role-team-fetch', SubResultStatus.WARNING, message));
         continue;
       }
 
-      core.info(`  🗑️ ${wouldPrefix}Remove security manager team: ${teamSlug}`);
-      subResults.push(
-        createSubResult('security-manager-team-remove', SubResultStatus.CHANGED, `${wouldPrefix}remove "${teamSlug}"`)
-      );
+      throw error;
+    }
+
+    const existingSlugs = new Set(existingTeams.map(team => String(team.slug).toLowerCase()));
+    const desiredSlugs = new Set(assignment.teams);
+
+    for (const teamSlug of assignment.teams) {
+      if (existingSlugs.has(teamSlug)) {
+        core.info(`  ✅ Organization role team assignment unchanged: ${assignment.role} / ${teamSlug}`);
+        continue;
+      }
+
+      const detail = `${wouldPrefix}add team "${teamSlug}" to role "${assignment.role}"`;
+      core.info(`  🆕 ${detail}`);
+      subResults.push(createSubResult('organization-role-team-add', SubResultStatus.CHANGED, detail));
 
       if (!dryRun) {
         try {
-          await octokit.request('DELETE /orgs/{org}/organization-roles/teams/{team_slug}/{role_id}', {
+          await octokit.request('PUT /orgs/{org}/organization-roles/teams/{team_slug}/{role_id}', {
             org,
             team_slug: teamSlug,
-            role_id: securityManagerRole.id
+            role_id: role.id
           });
         } catch (error) {
           hasFailed = true;
-          core.warning(`  ⚠️  Failed to remove security manager team "${teamSlug}": ${error.message}`);
+          core.warning(`  ⚠️  Failed to add team "${teamSlug}" to role "${assignment.role}": ${error.message}`);
           subResults[subResults.length - 1] = createSubResult(
-            'security-manager-team-remove',
+            'organization-role-team-add',
             SubResultStatus.WARNING,
-            `Failed to remove "${teamSlug}": ${error.message}`
+            `Failed to add team "${teamSlug}" to role "${assignment.role}": ${error.message}`
           );
+        }
+      }
+    }
+
+    if (assignment.delete_unmanaged) {
+      for (const team of existingTeams) {
+        const teamSlug = String(team.slug).toLowerCase();
+        if (desiredSlugs.has(teamSlug)) {
+          continue;
+        }
+
+        const detail = `${wouldPrefix}remove team "${teamSlug}" from role "${assignment.role}"`;
+        core.info(`  🗑️ ${detail}`);
+        subResults.push(createSubResult('organization-role-team-remove', SubResultStatus.CHANGED, detail));
+
+        if (!dryRun) {
+          try {
+            await octokit.request('DELETE /orgs/{org}/organization-roles/teams/{team_slug}/{role_id}', {
+              org,
+              team_slug: teamSlug,
+              role_id: role.id
+            });
+          } catch (error) {
+            hasFailed = true;
+            core.warning(`  ⚠️  Failed to remove team "${teamSlug}" from role "${assignment.role}": ${error.message}`);
+            subResults[subResults.length - 1] = createSubResult(
+              'organization-role-team-remove',
+              SubResultStatus.WARNING,
+              `Failed to remove team "${teamSlug}" from role "${assignment.role}": ${error.message}`
+            );
+          }
         }
       }
     }
@@ -1472,21 +1594,21 @@ export function parseOrganizationsFile(filePath) {
       result.memberPrivileges = parseMemberPrivileges(orgConfig['member-privileges'], orgConfig.org);
     }
 
-    if (Object.prototype.hasOwnProperty.call(orgConfig, 'security-manager-teams')) {
-      result.securityManagerTeams = parseSecurityManagerTeams(
-        orgConfig['security-manager-teams'],
-        `security-manager-teams for org "${orgConfig.org}"`
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'organization-role-team-assignments')) {
+      result.organizationRoleTeamAssignments = normalizeOrganizationRoleTeamAssignments(
+        orgConfig['organization-role-team-assignments'],
+        `organization-role-team-assignments for org "${orgConfig.org}"`
       );
     }
 
-    if (Object.prototype.hasOwnProperty.call(orgConfig, 'delete-unmanaged-security-manager-teams')) {
-      const val = orgConfig['delete-unmanaged-security-manager-teams'];
-      if (typeof val !== 'boolean') {
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'organization-role-team-assignments-file')) {
+      const assignmentsFile = orgConfig['organization-role-team-assignments-file'];
+      if (typeof assignmentsFile !== 'string' || assignmentsFile.trim() === '') {
         throw new Error(
-          `Invalid "delete-unmanaged-security-manager-teams" for org "${orgConfig.org}": expected a boolean`
+          `Invalid "organization-role-team-assignments-file" for org "${orgConfig.org}": expected a non-empty string`
         );
       }
-      result.deleteUnmanagedSecurityManagerTeams = val;
+      result.organizationRoleTeamAssignmentsFile = assignmentsFile.trim();
     }
 
     if (Object.prototype.hasOwnProperty.call(orgConfig, 'custom-org-roles-file')) {
@@ -4917,11 +5039,7 @@ export async function run() {
     const dotGithubSourceDir = core.getInput('dot-github-source-dir') || '';
     const dotGithubPrivateSourceDir = core.getInput('dot-github-private-source-dir') || '';
     const memberPrivilegesFromInputs = getMemberPrivilegesFromInputs();
-    const securityManagerTeamsInput = core.getInput('security-manager-teams');
-    const securityManagerTeamsFromInputs = securityManagerTeamsInput
-      ? parseSecurityManagerTeams(securityManagerTeamsInput, 'security-manager-teams input')
-      : undefined;
-    const deleteUnmanagedSecurityManagerTeams = getBooleanInput('delete-unmanaged-security-manager-teams') ?? false;
+    const organizationRoleTeamAssignmentsFile = core.getInput('organization-role-team-assignments-file');
     const customOrgRolesFile = core.getInput('custom-org-roles-file');
     const deleteUnmanagedOrgRoles = getBooleanInput('delete-unmanaged-org-roles') ?? false;
     const customRepoRolesFile = core.getInput('custom-repo-roles-file');
@@ -4961,8 +5079,7 @@ export async function run() {
       actionsAllowListFile,
       dotGithubSourceDir,
       dotGithubPrivateSourceDir,
-      securityManagerTeamsFromInputs,
-      deleteUnmanagedSecurityManagerTeams
+      organizationRoleTeamAssignmentsFile
     );
 
     // Check that at least one setting type is specified
@@ -4970,11 +5087,8 @@ export async function run() {
     const hasRulesets = orgList.some(o => o.rulesetsFiles && o.rulesetsFiles.length > 0);
     const hasIssueTypes = orgList.some(o => o.issueTypes && o.issueTypes.length > 0);
     const hasMemberPrivileges = orgList.some(o => o.memberPrivileges && Object.keys(o.memberPrivileges).length > 0);
-    const hasSecurityManagerTeams = orgList.some(
-      o =>
-        o.securityManagerTeams &&
-        (o.securityManagerTeams.length > 0 ||
-          (o.deleteUnmanagedSecurityManagerTeams ?? deleteUnmanagedSecurityManagerTeams))
+    const hasOrganizationRoleTeamAssignments = orgList.some(
+      o => o.organizationRoleTeamAssignments && o.organizationRoleTeamAssignments.length > 0
     );
     const hasDotGithub = orgList.some(o => o.dotGithubSourceDir);
     const hasDotGithubPrivate = orgList.some(o => o.dotGithubPrivateSourceDir);
@@ -4999,7 +5113,7 @@ export async function run() {
       !hasRulesets &&
       !hasIssueTypes &&
       !hasMemberPrivileges &&
-      !hasSecurityManagerTeams &&
+      !hasOrganizationRoleTeamAssignments &&
       !hasDotGithub &&
       !hasDotGithubPrivate &&
       !hasCustomOrgRoles &&
@@ -5013,7 +5127,7 @@ export async function run() {
           '"organizations-file" or via "organizations" + "custom-properties-file" inputs, ' +
           'provide issue types via "issue-types-file", rulesets via "rulesets-file", ' +
           'member privileges via individual inputs (e.g., "default-repository-permission"), ' +
-          'security manager teams via "security-manager-teams", ' +
+          'organization role team assignments via "organization-role-team-assignments-file", ' +
           'custom org roles via "custom-org-roles-file", custom repo roles via "custom-repo-roles-file", ' +
           'org profile via individual inputs (e.g., "org-name", "org-description"), ' +
           'code security configurations via "code-security-configurations-file", ' +
@@ -5040,12 +5154,6 @@ export async function run() {
 
     if (deleteUnmanagedIssueTypes) {
       core.info('⚠️  delete-unmanaged-issue-types is enabled: issue types not in config will be deleted');
-    }
-
-    if (deleteUnmanagedSecurityManagerTeams) {
-      core.info(
-        '⚠️  delete-unmanaged-security-manager-teams is enabled: security manager teams not in config will be removed'
-      );
     }
 
     if (deleteUnmanagedOrgRoles) {
@@ -5158,30 +5266,6 @@ export async function run() {
           }
         }
 
-        // Sync security manager teams
-        if (
-          orgConfig.securityManagerTeams &&
-          (orgConfig.securityManagerTeams.length > 0 ||
-            (orgConfig.deleteUnmanagedSecurityManagerTeams ?? deleteUnmanagedSecurityManagerTeams))
-        ) {
-          core.info(`  🛡️  Syncing security manager teams (${orgConfig.securityManagerTeams.length} defined)...`);
-          const smtResult = await syncSecurityManagerTeams(
-            octokit,
-            org,
-            orgConfig.securityManagerTeams,
-            orgConfig.deleteUnmanagedSecurityManagerTeams ?? deleteUnmanagedSecurityManagerTeams,
-            dryRun
-          );
-          result.subResults.push(...smtResult.subResults);
-
-          if (smtResult.failed) {
-            result.success = false;
-            result.error = result.error
-              ? `${result.error}; Security manager teams sync failed`
-              : 'Security manager teams sync failed';
-          }
-        }
-
         // Sync .github repo
         if (orgConfig.dotGithubSourceDir) {
           core.info(`  📁 Syncing .github repo from "${orgConfig.dotGithubSourceDir}"...`);
@@ -5234,6 +5318,27 @@ export async function run() {
             result.error = result.error
               ? `${result.error}; Custom org roles sync failed`
               : 'Custom org roles sync failed';
+          }
+        }
+
+        // Sync organization role team assignments after custom org roles so new custom roles can be assigned.
+        if (orgConfig.organizationRoleTeamAssignments && orgConfig.organizationRoleTeamAssignments.length > 0) {
+          core.info(
+            `  🛡️  Syncing organization role team assignments (${orgConfig.organizationRoleTeamAssignments.length} role(s) defined)...`
+          );
+          const ortaResult = await syncOrganizationRoleTeamAssignments(
+            octokit,
+            org,
+            orgConfig.organizationRoleTeamAssignments,
+            dryRun
+          );
+          result.subResults.push(...ortaResult.subResults);
+
+          if (ortaResult.failed) {
+            result.success = false;
+            result.error = result.error
+              ? `${result.error}; Organization role team assignments sync failed`
+              : 'Organization role team assignments sync failed';
           }
         }
 

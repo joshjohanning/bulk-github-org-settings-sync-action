@@ -126,14 +126,10 @@ inputs:
     description: 'Whether to display commenter full name in issues and PRs'
     required: false
 
-  # === Security Manager Teams ===
-  security-manager-teams:
-    description: 'Comma-separated team slugs to assign the organization security manager role'
+  # === Organization Role Team Assignments ===
+  organization-role-team-assignments-file:
+    description: 'Path to a YAML file defining organization role team assignments to sync'
     required: false
-  delete-unmanaged-security-manager-teams:
-    description: 'Remove security manager teams not defined in the configuration'
-    required: false
-    default: 'false'
 
   # === Custom Roles (GHEC only) ===
   custom-org-roles-file:
