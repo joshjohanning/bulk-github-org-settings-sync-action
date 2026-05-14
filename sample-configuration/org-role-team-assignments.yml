@@ -1,0 +1,28 @@
+# Organization role team assignments configuration
+# Use with: organization-role-team-assignments-file: './org-role-team-assignments.yml'
+#
+# Assign built-in or custom organization roles to teams by slug.
+# Custom organization role definitions (custom-org-roles-file) are synced
+# before team assignments, so newly created custom roles can be assigned
+# in the same run.
+#
+# Built-in roles include: security_manager, CI/CD Admin, Apps Manager,
+# All-repository read/write/triage/maintain/admin, and others.
+# Custom roles are matched by name (case-insensitive).
+
+# Assign the built-in security_manager role
+- role: security_manager
+  teams:
+    - security-team
+    - appsec
+  delete-unmanaged: true # Remove teams not listed above from this role
+
+# Assign a built-in role using its display name
+- role: CI/CD Admin
+  teams:
+    - platform-admins
+
+# Assign a custom organization role (must exist or be defined in custom-org-roles-file)
+- role: Security Auditor
+  teams:
+    - compliance
