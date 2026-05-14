@@ -1808,16 +1808,34 @@ orgs:
       expect(result.failed).toBe(true);
     });
 
-    test('should handle 404 on GET as empty issue types', async () => {
+    test('should skip issue types with permission warning on 404 GET', async () => {
       const error404 = new Error('Not Found');
       error404.status = 404;
       mockRequest.mockRejectedValueOnce(error404);
-      mockRequest.mockResolvedValueOnce({ data: { id: 1, name: 'Bug' } });
 
       const result = await syncIssueTypes(mockOctokit, 'my-org', desiredIssueTypes, false, false);
 
       expect(result.subResults).toHaveLength(1);
-      expect(result.subResults[0].kind).toBe('issue-type-create');
+      expect(result.subResults[0].kind).toBe('issue-type-fetch');
+      expect(result.subResults[0].status).toBe('warning');
+      expect(result.subResults[0].message).toContain('Issue types: Write');
+      expect(result.failed).toBe(false);
+      expect(mockRequest).toHaveBeenCalledTimes(1);
+    });
+
+    test('should skip issue types with permission warning on 403 GET', async () => {
+      const error403 = new Error('Forbidden');
+      error403.status = 403;
+      mockRequest.mockRejectedValueOnce(error403);
+
+      const result = await syncIssueTypes(mockOctokit, 'my-org', desiredIssueTypes, false, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('issue-type-fetch');
+      expect(result.subResults[0].message).toContain('status 403');
+      expect(result.subResults[0].message).toContain('Issue types: Write');
+      expect(result.failed).toBe(false);
+      expect(mockRequest).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -1992,17 +2010,19 @@ orgs:
       expect(result.subResults[0].message).toContain('Failed');
     });
 
-    test('should handle 404 on GET as empty properties', async () => {
+    test('should skip custom properties with permission warning on 404 GET', async () => {
       const error404 = new Error('Not Found');
       error404.status = 404;
       mockRequest.mockRejectedValueOnce(error404);
-      // Mock: successful PATCH
-      mockRequest.mockResolvedValueOnce({ data: {} });
 
       const result = await syncCustomProperties(mockOctokit, 'my-org', desiredProperties, false, false);
 
       expect(result.subResults).toHaveLength(1);
-      expect(result.subResults[0].kind).toBe('custom-property-create');
+      expect(result.subResults[0].kind).toBe('custom-property-fetch');
+      expect(result.subResults[0].status).toBe('warning');
+      expect(result.subResults[0].message).toContain('Custom properties: Admin');
+      expect(result.failed).toBe(false);
+      expect(mockRequest).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -2682,17 +2702,19 @@ orgs:
       expect(mockRequest).not.toHaveBeenCalled();
     });
 
-    test('should handle 404 on GET as empty rulesets', async () => {
+    test('should skip rulesets with permission warning on 404 GET', async () => {
       const error404 = new Error('Not Found');
       error404.status = 404;
       mockPaginate.mockRejectedValueOnce(error404);
-      // Mock: successful POST
-      mockRequest.mockResolvedValueOnce({ data: { id: 789 } });
 
       const result = await syncOrgRulesets(mockOctokit, 'my-org', [rulesetPath], false, false);
 
       expect(result.subResults).toHaveLength(1);
-      expect(result.subResults[0].kind).toBe('ruleset-create');
+      expect(result.subResults[0].kind).toBe('ruleset-fetch');
+      expect(result.subResults[0].status).toBe('warning');
+      expect(result.subResults[0].message).toContain('Administration: Write');
+      expect(result.failed).toBe(false);
+      expect(mockRequest).not.toHaveBeenCalled();
     });
 
     test('should throw for missing ruleset file', async () => {
@@ -3531,7 +3553,8 @@ orgs:
 
       expect(result.subResults).toHaveLength(1);
       expect(result.subResults[0].status).toBe('warning');
-      expect(result.subResults[0].message).toContain('not found');
+      expect(result.subResults[0].message).toContain('not found or token lacks access');
+      expect(result.subResults[0].message).toContain('Contents: Read and write');
       expect(result.failed).toBe(false);
     });
 
@@ -4900,16 +4923,19 @@ orgs:
       expect(result.failed).toBe(true);
     });
 
-    test('should handle 404 on list gracefully', async () => {
+    test('should skip code security configurations with permission warning on 404 list', async () => {
       const error404 = new Error('Not Found');
       error404.status = 404;
       mockPaginate.mockRejectedValueOnce(error404);
-      mockRequest.mockResolvedValueOnce({ data: { id: 1, name: 'High risk' } });
 
       const result = await syncCodeSecurityConfigurations(mockOctokit, 'my-org', desiredConfigs, false, false);
 
       expect(result.subResults).toHaveLength(1);
-      expect(result.subResults[0].kind).toBe('code-security-config-create');
+      expect(result.subResults[0].kind).toBe('code-security-config-fetch');
+      expect(result.subResults[0].status).toBe('warning');
+      expect(result.subResults[0].message).toContain('Code security configurations: Write');
+      expect(result.failed).toBe(false);
+      expect(mockRequest).not.toHaveBeenCalled();
     });
 
     test('should skip global configurations when deleting unmanaged', async () => {
@@ -6452,9 +6478,11 @@ orgs:
     });
 
     test('should handle API fetch error gracefully', async () => {
+      const error404 = new Error('Not Found');
+      error404.status = 404;
       mockRequest.mockImplementation(route => {
         if (route === 'GET /orgs/{org}/actions/permissions') {
-          throw new Error('Not Found');
+          throw error404;
         }
         return { data: {} };
       });
@@ -6464,6 +6492,30 @@ orgs:
       const result = await syncActionsPolicy(mockOctokit, 'my-org', desired, null, false);
       expect(result.failed).toBe(true);
       expect(result.subResults[0].status).toBe('warning');
+      expect(result.subResults[0].message).toContain('status 404');
+      expect(result.subResults[0].message).toContain('Administration: Write');
+    });
+
+    test('should include permission hint when selected actions fetch fails with 403', async () => {
+      const error403 = new Error('Forbidden');
+      error403.status = 403;
+      mockRequest.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/actions/permissions') {
+          return { data: { allowed_actions: 'selected', enabled_repositories: 'all' } };
+        }
+        if (route === 'GET /orgs/{org}/actions/permissions/selected-actions') {
+          throw error403;
+        }
+        return { data: {} };
+      });
+
+      const result = await syncActionsPolicy(mockOctokit, 'my-org', { github_owned_allowed: true }, null, false);
+
+      expect(result.failed).toBe(true);
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('actions-policy-selected-actions-update');
+      expect(result.subResults[0].message).toContain('status 403');
+      expect(result.subResults[0].message).toContain('Administration: Write');
     });
 
     test('should sync allow list patterns', async () => {
