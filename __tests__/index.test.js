@@ -3597,6 +3597,39 @@ orgs:
       expect(result.subResults[0].message).toContain('Failed to add');
     });
 
+    test('should skip unmanaged removals when an add fails for the same role', async () => {
+      mockPaginate.mockResolvedValueOnce([{ id: 138, name: 'security_manager' }]);
+      mockPaginate.mockResolvedValueOnce([{ slug: 'old-security' }]);
+      mockRequest.mockRejectedValueOnce(new Error('Team not found'));
+
+      const result = await syncOrganizationRoleTeamAssignments(
+        mockOctokit,
+        'my-org',
+        [{ role: 'security_manager', teams: ['missing-team'], delete_unmanaged: true }],
+        false
+      );
+
+      expect(result.failed).toBe(true);
+      expect(result.subResults).toEqual([
+        {
+          kind: 'organization-role-team-add',
+          status: 'warning',
+          message: 'Failed to add team "missing-team" to role "security_manager": Team not found'
+        },
+        {
+          kind: 'organization-role-team-remove',
+          status: 'warning',
+          message:
+            'Skipped removing unmanaged teams from role "security_manager" because one or more desired team assignments failed'
+        }
+      ]);
+      expect(mockRequest).toHaveBeenCalledTimes(1);
+      expect(mockRequest).not.toHaveBeenCalledWith(
+        'DELETE /orgs/{org}/organization-roles/teams/{team_slug}/{role_id}',
+        expect.any(Object)
+      );
+    });
+
     test('should fail when configured organization role is unavailable', async () => {
       mockPaginate.mockResolvedValueOnce([{ id: 1, name: 'auditor' }]);
 

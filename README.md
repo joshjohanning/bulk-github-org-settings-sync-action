@@ -71,7 +71,7 @@ For stronger security and higher rate limits, use a GitHub App:
 1. Create a GitHub App with the following permissions:
 
    **Organization permissions:**
-   - **Administration**: Read and write (required for managing organization settings, rulesets, and security manager teams)
+   - **Administration**: Read and write (required for managing organization settings, rulesets, and organization role team assignments)
    - **Custom properties**: Admin (required for managing custom property definitions)
    - **Custom organization roles**: Write (required for managing custom organization roles)
    - **Custom repository roles**: Write (required for managing custom repository roles)

@@ -1305,6 +1305,7 @@ export async function syncOrganizationRoleTeamAssignments(
 
     const existingSlugs = new Set(existingTeams.map(team => String(team.slug).toLowerCase()));
     const desiredSlugs = new Set(assignment.teams);
+    let addFailedForRole = false;
 
     for (const teamSlug of assignment.teams) {
       if (existingSlugs.has(teamSlug)) {
@@ -1325,6 +1326,7 @@ export async function syncOrganizationRoleTeamAssignments(
           });
         } catch (error) {
           hasFailed = true;
+          addFailedForRole = true;
           core.warning(`  ⚠️  Failed to add team "${teamSlug}" to role "${assignment.role}": ${error.message}`);
           subResults[subResults.length - 1] = createSubResult(
             'organization-role-team-add',
@@ -1333,6 +1335,13 @@ export async function syncOrganizationRoleTeamAssignments(
           );
         }
       }
+    }
+
+    if (addFailedForRole && assignment.delete_unmanaged) {
+      const message = `Skipped removing unmanaged teams from role "${assignment.role}" because one or more desired team assignments failed`;
+      core.warning(`  ⚠️  ${message}`);
+      subResults.push(createSubResult('organization-role-team-remove', SubResultStatus.WARNING, message));
+      continue;
     }
 
     if (assignment.delete_unmanaged) {
@@ -1522,7 +1531,7 @@ export function mergeOrgProfile(baseProfile, orgProfile) {
 /**
  * Parse the organizations YAML config file.
  * @param {string} filePath - Path to the YAML file
- * @returns {Array<{ org: string, customPropertiesFile?: string, customProperties?: Array, issueTypesFile?: string, issueTypes?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, deleteUnmanagedProperties?: boolean, deleteUnmanagedIssueTypes?: boolean, memberPrivileges?: Object, orgProfile?: Object, codeSecurityConfigurationsFile?: string, codeSecurityConfigurations?: Array, deleteUnmanagedCodeSecurityConfigurations?: boolean, actionsPolicy?: Object, actionsAllowListFile?: string }>}
+ * @returns {Array<{ org: string, customPropertiesFile?: string, customProperties?: Array, issueTypesFile?: string, issueTypes?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, deleteUnmanagedProperties?: boolean, deleteUnmanagedIssueTypes?: boolean, memberPrivileges?: Object, orgProfile?: Object, codeSecurityConfigurationsFile?: string, codeSecurityConfigurations?: Array, deleteUnmanagedCodeSecurityConfigurations?: boolean, actionsPolicy?: Object, actionsAllowListFile?: string, organizationRoleTeamAssignments?: Array, organizationRoleTeamAssignmentsFile?: string }>}
  */
 export function parseOrganizationsFile(filePath) {
   if (!fs.existsSync(filePath)) {
