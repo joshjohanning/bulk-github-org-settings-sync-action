@@ -3333,6 +3333,14 @@ orgs:
         normalizeOrganizationRoleTeamAssignments([{ role: 'security_manager', teams: ['security', 123] }])
       ).toThrow('expected team slugs to be strings');
     });
+
+    test('should warn on unknown keys like delete_unmanaged typo', () => {
+      normalizeOrganizationRoleTeamAssignments([
+        { role: 'security_manager', teams: ['security'], delete_unmanaged: true }
+      ]);
+
+      expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('Unknown key "delete_unmanaged"'));
+    });
   });
 
   describe('parseOrganizations with organization role team assignments', () => {
@@ -3456,6 +3464,31 @@ orgs:
       parseOrganizationsFile('/mock/orgs.yml');
 
       expect(mockCore.warning).not.toHaveBeenCalled();
+    });
+
+    test('should prefer inline assignments over file when both are specified per-org', () => {
+      const orgsYaml = `orgs:
+  - org: my-org
+    organization-role-team-assignments:
+      - role: security_manager
+        teams:
+          - inline-team
+    organization-role-team-assignments-file: /mock/org-role-team-assignments.yml
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+      setMockFileContent(
+        `
+- role: CI/CD Admin
+  teams: file-team
+`,
+        '/mock/org-role-team-assignments.yml'
+      );
+
+      const result = parseOrganizations('', '/mock/orgs.yml', '');
+
+      expect(result[0].organizationRoleTeamAssignments).toEqual([
+        { role: 'security_manager', teams: ['inline-team'], delete_unmanaged: false }
+      ]);
     });
   });
 

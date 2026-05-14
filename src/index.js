@@ -850,7 +850,7 @@ export function parseOrganizations(
         );
       }
 
-      if (orgConfig.organizationRoleTeamAssignmentsFile) {
+      if (orgConfig.organizationRoleTeamAssignmentsFile && orgConfig.organizationRoleTeamAssignments === undefined) {
         try {
           orgConfig.organizationRoleTeamAssignments = parseOrganizationRoleTeamAssignmentsFile(
             orgConfig.organizationRoleTeamAssignmentsFile
@@ -1082,6 +1082,8 @@ export function mergeMemberPrivileges(basePrivileges, orgPrivileges) {
 
 // ─── Organization Role Team Assignments Parsing & Sync ──────────────────────────
 
+const KNOWN_ORG_ROLE_TEAM_ASSIGNMENT_KEYS = new Set(['role', 'teams', 'delete-unmanaged']);
+
 const BUILT_IN_ORG_ROLE_ALIASES = new Map([
   ['all-repository read', 'all_repo_read'],
   ['all repository read', 'all_repo_read'],
@@ -1202,6 +1204,16 @@ export function normalizeOrganizationRoleTeamAssignments(assignments, context = 
       typeof assignment['delete-unmanaged'] !== 'boolean'
     ) {
       throw new Error(`Organization role team assignment for "${role}" has invalid delete-unmanaged value`);
+    }
+
+    // Validate known keys
+    for (const key of Object.keys(assignment)) {
+      if (!KNOWN_ORG_ROLE_TEAM_ASSIGNMENT_KEYS.has(key)) {
+        core.warning(
+          `⚠️  Unknown key "${key}" found for organization role team assignment "${role}". ` +
+            `This key may not exist or may have a typo.`
+        );
+      }
     }
 
     return {
