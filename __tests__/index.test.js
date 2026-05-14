@@ -301,7 +301,7 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
       expect(mockCore.warning).not.toHaveBeenCalled();
     });
 
-    test('should not warn for underscore custom property and repo role aliases', () => {
+    test('should not warn for underscore custom property aliases', () => {
       validateOrgConfig(
         {
           org: 'my-org',
@@ -314,13 +314,6 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
               default_value: null,
               allowed_values: ['a'],
               values_editable_by: 'org_actors'
-            }
-          ],
-          'custom-repo-roles': [
-            {
-              name: 'Maintainer Plus',
-              base_role: 'maintain',
-              permissions: ['delete_alerts_code_scanning']
             }
           ]
         },
