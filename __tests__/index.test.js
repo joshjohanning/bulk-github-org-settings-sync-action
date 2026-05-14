@@ -3489,6 +3489,7 @@ orgs:
       expect(result[0].organizationRoleTeamAssignments).toEqual([
         { role: 'security_manager', teams: ['inline-team'], delete_unmanaged: false }
       ]);
+      expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('Inline values take precedence'));
     });
   });
 

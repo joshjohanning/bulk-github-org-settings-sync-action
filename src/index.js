@@ -850,6 +850,12 @@ export function parseOrganizations(
         );
       }
 
+      if (orgConfig.organizationRoleTeamAssignmentsFile && orgConfig.organizationRoleTeamAssignments !== undefined) {
+        core.warning(
+          `Organization "${orgConfig.org}" specifies both inline "organization-role-team-assignments" and ` +
+            `"organization-role-team-assignments-file". Inline values take precedence; the file will be ignored.`
+        );
+      }
       if (orgConfig.organizationRoleTeamAssignmentsFile && orgConfig.organizationRoleTeamAssignments === undefined) {
         try {
           orgConfig.organizationRoleTeamAssignments = parseOrganizationRoleTeamAssignmentsFile(
