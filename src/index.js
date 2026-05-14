@@ -244,6 +244,8 @@ const ORG_CONFIG_TOP_LEVEL_KEYS = new Set([
   'issue-types',
   'issue-types-file',
   'delete-unmanaged-issue-types',
+  'security-manager-teams',
+  'delete-unmanaged-security-manager-teams',
   'rulesets-file',
   'delete-unmanaged-rulesets',
   'member-privileges',
@@ -513,6 +515,9 @@ const SYNC_KIND_LABELS = Object.freeze({
   'issue-type-delete': 'issue type (deleted)',
   'issue-type-fetch': 'issue type (fetch failed)',
   'member-privileges-update': 'member privileges (updated)',
+  'security-manager-team-add': 'security manager team (added)',
+  'security-manager-team-remove': 'security manager team (removed)',
+  'security-manager-team-fetch': 'security manager team (fetch failed)',
   'org-profile-update': 'organization profile (updated)',
   'ruleset-create': 'ruleset (created)',
   'ruleset-update': 'ruleset (updated)',
@@ -682,6 +687,8 @@ function formatSubResultStatus(status) {
  * @param {string} [actionsAllowListFile] - Path to actions allow list YAML file (base for all orgs)
  * @param {string} [dotGithubSourceDir] - Path to source directory for .github repo sync
  * @param {string} [dotGithubPrivateSourceDir] - Path to source directory for .github-private repo sync
+ * @param {string[]} [securityManagerTeamsFromInputs] - Security manager team slugs from action inputs (base for all orgs)
+ * @param {boolean} [deleteUnmanagedSecurityManagerTeams] - Whether to remove security manager teams not in config
  * @returns {Array<{ org: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, issueTypes?: Array, memberPrivileges?: Object, customOrgRoles?: Array, customRepoRoles?: Array, orgProfile?: Object, codeSecurityConfigurations?: Array, deleteUnmanagedCodeSecurityConfigurations?: boolean, actionsPolicy?: Object, actionsAllowList?: string[], dotGithubSourceDir?: string, dotGithubPrivateSourceDir?: string }>} Parsed org configs
  */
 export function parseOrganizations(
@@ -699,7 +706,9 @@ export function parseOrganizations(
   actionsPolicyFromInputs,
   actionsAllowListFile,
   dotGithubSourceDir,
-  dotGithubPrivateSourceDir
+  dotGithubPrivateSourceDir,
+  securityManagerTeamsFromInputs,
+  deleteUnmanagedSecurityManagerTeams
 ) {
   let resolvedCodeSecurityConfigurationsFile = codeSecurityConfigurationsFile;
   let resolvedActionsPolicyFromInputs = actionsPolicyFromInputs;
@@ -772,6 +781,10 @@ export function parseOrganizations(
     baseActionsAllowList = parseActionsAllowListFile(resolvedActionsAllowListFile);
   }
 
+  const baseSecurityManagerTeams = Array.isArray(securityManagerTeamsFromInputs)
+    ? [...securityManagerTeamsFromInputs]
+    : null;
+
   if (organizationsFile) {
     const orgConfigs = parseOrganizationsFile(organizationsFile);
 
@@ -834,6 +847,18 @@ export function parseOrganizations(
           baseMemberPrivileges || {},
           orgConfig.memberPrivileges || {}
         );
+      }
+
+      // Per-org security-manager-teams replaces the base desired set for this org.
+      if (orgConfig.securityManagerTeams === undefined && baseSecurityManagerTeams) {
+        orgConfig.securityManagerTeams = [...baseSecurityManagerTeams];
+      }
+
+      if (
+        orgConfig.deleteUnmanagedSecurityManagerTeams === undefined &&
+        deleteUnmanagedSecurityManagerTeams !== undefined
+      ) {
+        orgConfig.deleteUnmanagedSecurityManagerTeams = deleteUnmanagedSecurityManagerTeams;
       }
 
       // Per-org custom-org-roles-file overrides the base for this org
@@ -958,6 +983,8 @@ export function parseOrganizations(
     ...(rulesetsFiles && rulesetsFiles.length > 0 ? { rulesetsFiles } : {}),
     ...(deleteUnmanagedRulesets !== undefined ? { deleteUnmanagedRulesets } : {}),
     ...(baseMemberPrivileges ? { memberPrivileges: baseMemberPrivileges } : {}),
+    ...(baseSecurityManagerTeams ? { securityManagerTeams: [...baseSecurityManagerTeams] } : {}),
+    ...(deleteUnmanagedSecurityManagerTeams !== undefined ? { deleteUnmanagedSecurityManagerTeams } : {}),
     ...(baseCustomOrgRoles ? { customOrgRoles: baseCustomOrgRoles } : {}),
     ...(baseCustomRepoRoles ? { customRepoRoles: baseCustomRepoRoles } : {}),
     ...(baseOrgProfile ? { orgProfile: baseOrgProfile } : {}),
@@ -1035,6 +1062,143 @@ export function mergeCustomRoles(baseRoles, orgRoles) {
  */
 export function mergeMemberPrivileges(basePrivileges, orgPrivileges) {
   return { ...basePrivileges, ...orgPrivileges };
+}
+
+// ─── Security Manager Teams Parsing & Sync ──────────────────────────────────────
+
+/**
+ * Parse security manager team slugs from comma-separated input or YAML array.
+ * @param {string|string[]|null|undefined} value - Raw team slug value
+ * @param {string} [context] - Human-readable context for errors
+ * @returns {string[]} Normalized lowercase team slugs
+ */
+export function parseSecurityManagerTeams(value, context = 'security-manager-teams') {
+  if (value === undefined || value === null) {
+    return [];
+  }
+
+  const rawTeams =
+    typeof value === 'string'
+      ? value
+          .split(',')
+          .map(v => v.trim())
+          .filter(v => v.length > 0)
+      : value;
+
+  if (!Array.isArray(rawTeams)) {
+    throw new Error(`Invalid ${context}: expected a comma-separated string or array of team slugs`);
+  }
+
+  const seen = new Set();
+  const teams = [];
+  for (const entry of rawTeams) {
+    if (typeof entry !== 'string') {
+      throw new Error(`Invalid ${context}: expected team slugs to be strings`);
+    }
+
+    const slug = entry.trim().toLowerCase();
+    if (slug.length > 0 && !seen.has(slug)) {
+      teams.push(slug);
+      seen.add(slug);
+    }
+  }
+
+  return teams;
+}
+
+/**
+ * Sync security manager team assignments for an organization.
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} org - Organization name
+ * @param {string[]} desiredTeamSlugs - Desired security manager team slugs
+ * @param {boolean} deleteUnmanaged - Whether to remove teams not in config
+ * @param {boolean} dryRun - Preview mode
+ * @returns {Promise<Object>} Result object with subResults
+ */
+export async function syncSecurityManagerTeams(octokit, org, desiredTeamSlugs, deleteUnmanaged, dryRun) {
+  const subResults = [];
+  const wouldPrefix = dryRun ? 'Would ' : '';
+  let hasFailed = false;
+
+  let existingTeams;
+  try {
+    const { data } = await octokit.request('GET /orgs/{org}/security-managers', { org });
+    existingTeams = data;
+  } catch (error) {
+    if (isPermissionLikeFetchError(error)) {
+      const message = formatPermissionFetchWarning('security manager teams', org, error);
+      core.warning(`  ⚠️  ${message}`);
+      subResults.push(createSubResult('security-manager-team-fetch', SubResultStatus.WARNING, message));
+      return { subResults, failed: false };
+    }
+
+    throw error;
+  }
+
+  const existingSlugs = new Set(existingTeams.map(team => String(team.slug).toLowerCase()));
+  const desiredSlugs = new Set(desiredTeamSlugs);
+
+  for (const teamSlug of desiredTeamSlugs) {
+    if (existingSlugs.has(teamSlug)) {
+      core.info(`  ✅ Security manager team unchanged: ${teamSlug}`);
+      continue;
+    }
+
+    core.info(`  🆕 ${wouldPrefix}Add security manager team: ${teamSlug}`);
+    subResults.push(
+      createSubResult('security-manager-team-add', SubResultStatus.CHANGED, `${wouldPrefix}add "${teamSlug}"`)
+    );
+
+    if (!dryRun) {
+      try {
+        await octokit.request('PUT /orgs/{org}/security-managers/teams/{team_slug}', {
+          org,
+          team_slug: teamSlug
+        });
+      } catch (error) {
+        hasFailed = true;
+        core.warning(`  ⚠️  Failed to add security manager team "${teamSlug}": ${error.message}`);
+        subResults[subResults.length - 1] = createSubResult(
+          'security-manager-team-add',
+          SubResultStatus.WARNING,
+          `Failed to add "${teamSlug}": ${error.message}`
+        );
+      }
+    }
+  }
+
+  if (deleteUnmanaged) {
+    for (const team of existingTeams) {
+      const teamSlug = String(team.slug).toLowerCase();
+      if (desiredSlugs.has(teamSlug)) {
+        continue;
+      }
+
+      core.info(`  🗑️ ${wouldPrefix}Remove security manager team: ${teamSlug}`);
+      subResults.push(
+        createSubResult('security-manager-team-remove', SubResultStatus.CHANGED, `${wouldPrefix}remove "${teamSlug}"`)
+      );
+
+      if (!dryRun) {
+        try {
+          await octokit.request('DELETE /orgs/{org}/security-managers/teams/{team_slug}', {
+            org,
+            team_slug: teamSlug
+          });
+        } catch (error) {
+          hasFailed = true;
+          core.warning(`  ⚠️  Failed to remove security manager team "${teamSlug}": ${error.message}`);
+          subResults[subResults.length - 1] = createSubResult(
+            'security-manager-team-remove',
+            SubResultStatus.WARNING,
+            `Failed to remove "${teamSlug}": ${error.message}`
+          );
+        }
+      }
+    }
+  }
+
+  return { subResults, failed: hasFailed };
 }
 
 // ─── Actions Policy Parsing ─────────────────────────────────────────────────────
@@ -1279,6 +1443,23 @@ export function parseOrganizationsFile(filePath) {
 
     if (Object.prototype.hasOwnProperty.call(orgConfig, 'member-privileges')) {
       result.memberPrivileges = parseMemberPrivileges(orgConfig['member-privileges'], orgConfig.org);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'security-manager-teams')) {
+      result.securityManagerTeams = parseSecurityManagerTeams(
+        orgConfig['security-manager-teams'],
+        `security-manager-teams for org "${orgConfig.org}"`
+      );
+    }
+
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'delete-unmanaged-security-manager-teams')) {
+      const val = orgConfig['delete-unmanaged-security-manager-teams'];
+      if (typeof val !== 'boolean') {
+        throw new Error(
+          `Invalid "delete-unmanaged-security-manager-teams" for org "${orgConfig.org}": expected a boolean`
+        );
+      }
+      result.deleteUnmanagedSecurityManagerTeams = val;
     }
 
     if (Object.prototype.hasOwnProperty.call(orgConfig, 'custom-org-roles-file')) {
@@ -4709,6 +4890,11 @@ export async function run() {
     const dotGithubSourceDir = core.getInput('dot-github-source-dir') || '';
     const dotGithubPrivateSourceDir = core.getInput('dot-github-private-source-dir') || '';
     const memberPrivilegesFromInputs = getMemberPrivilegesFromInputs();
+    const securityManagerTeamsInput = core.getInput('security-manager-teams');
+    const securityManagerTeamsFromInputs = securityManagerTeamsInput
+      ? parseSecurityManagerTeams(securityManagerTeamsInput, 'security-manager-teams input')
+      : undefined;
+    const deleteUnmanagedSecurityManagerTeams = getBooleanInput('delete-unmanaged-security-manager-teams') ?? false;
     const customOrgRolesFile = core.getInput('custom-org-roles-file');
     const deleteUnmanagedOrgRoles = getBooleanInput('delete-unmanaged-org-roles') ?? false;
     const customRepoRolesFile = core.getInput('custom-repo-roles-file');
@@ -4747,7 +4933,9 @@ export async function run() {
       actionsPolicyFromInputs,
       actionsAllowListFile,
       dotGithubSourceDir,
-      dotGithubPrivateSourceDir
+      dotGithubPrivateSourceDir,
+      securityManagerTeamsFromInputs,
+      deleteUnmanagedSecurityManagerTeams
     );
 
     // Check that at least one setting type is specified
@@ -4755,6 +4943,12 @@ export async function run() {
     const hasRulesets = orgList.some(o => o.rulesetsFiles && o.rulesetsFiles.length > 0);
     const hasIssueTypes = orgList.some(o => o.issueTypes && o.issueTypes.length > 0);
     const hasMemberPrivileges = orgList.some(o => o.memberPrivileges && Object.keys(o.memberPrivileges).length > 0);
+    const hasSecurityManagerTeams = orgList.some(
+      o =>
+        o.securityManagerTeams &&
+        (o.securityManagerTeams.length > 0 ||
+          (o.deleteUnmanagedSecurityManagerTeams ?? deleteUnmanagedSecurityManagerTeams))
+    );
     const hasDotGithub = orgList.some(o => o.dotGithubSourceDir);
     const hasDotGithubPrivate = orgList.some(o => o.dotGithubPrivateSourceDir);
     const hasCustomOrgRoles = orgList.some(
@@ -4778,6 +4972,7 @@ export async function run() {
       !hasRulesets &&
       !hasIssueTypes &&
       !hasMemberPrivileges &&
+      !hasSecurityManagerTeams &&
       !hasDotGithub &&
       !hasDotGithubPrivate &&
       !hasCustomOrgRoles &&
@@ -4791,6 +4986,7 @@ export async function run() {
           '"organizations-file" or via "organizations" + "custom-properties-file" inputs, ' +
           'provide issue types via "issue-types-file", rulesets via "rulesets-file", ' +
           'member privileges via individual inputs (e.g., "default-repository-permission"), ' +
+          'security manager teams via "security-manager-teams", ' +
           'custom org roles via "custom-org-roles-file", custom repo roles via "custom-repo-roles-file", ' +
           'org profile via individual inputs (e.g., "org-name", "org-description"), ' +
           'code security configurations via "code-security-configurations-file", ' +
@@ -4817,6 +5013,12 @@ export async function run() {
 
     if (deleteUnmanagedIssueTypes) {
       core.info('⚠️  delete-unmanaged-issue-types is enabled: issue types not in config will be deleted');
+    }
+
+    if (deleteUnmanagedSecurityManagerTeams) {
+      core.info(
+        '⚠️  delete-unmanaged-security-manager-teams is enabled: security manager teams not in config will be removed'
+      );
     }
 
     if (deleteUnmanagedOrgRoles) {
@@ -4926,6 +5128,30 @@ export async function run() {
             result.error = result.error
               ? `${result.error}; Member privileges sync failed`
               : 'Member privileges sync failed';
+          }
+        }
+
+        // Sync security manager teams
+        if (
+          orgConfig.securityManagerTeams &&
+          (orgConfig.securityManagerTeams.length > 0 ||
+            (orgConfig.deleteUnmanagedSecurityManagerTeams ?? deleteUnmanagedSecurityManagerTeams))
+        ) {
+          core.info(`  🛡️  Syncing security manager teams (${orgConfig.securityManagerTeams.length} defined)...`);
+          const smtResult = await syncSecurityManagerTeams(
+            octokit,
+            org,
+            orgConfig.securityManagerTeams,
+            orgConfig.deleteUnmanagedSecurityManagerTeams ?? deleteUnmanagedSecurityManagerTeams,
+            dryRun
+          );
+          result.subResults.push(...smtResult.subResults);
+
+          if (smtResult.failed) {
+            result.success = false;
+            result.error = result.error
+              ? `${result.error}; Security manager teams sync failed`
+              : 'Security manager teams sync failed';
           }
         }
 

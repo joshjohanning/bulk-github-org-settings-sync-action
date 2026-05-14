@@ -208,6 +208,8 @@ const {
   syncOrgRulesets,
   mergeCustomProperties,
   mergeMemberPrivileges,
+  parseSecurityManagerTeams,
+  syncSecurityManagerTeams,
   mergeCustomRoles,
   parseMemberPrivileges,
   getMemberPrivilegesFromInputs,
@@ -3233,6 +3235,204 @@ orgs:
     test('should not include memberPrivileges when not specified', () => {
       const result = parseOrganizations('org1', '', '');
       expect(result[0].memberPrivileges).toBeUndefined();
+    });
+  });
+
+  // ─── security manager teams ───────────────────────────────────────────────
+
+  describe('parseSecurityManagerTeams', () => {
+    test('should parse comma-separated team slugs', () => {
+      expect(parseSecurityManagerTeams('Security-Team, platform-admins, Security-Team')).toEqual([
+        'security-team',
+        'platform-admins'
+      ]);
+    });
+
+    test('should parse YAML array team slugs', () => {
+      expect(parseSecurityManagerTeams(['Security-Team', 'platform-admins'])).toEqual([
+        'security-team',
+        'platform-admins'
+      ]);
+    });
+
+    test('should allow null as an explicit empty desired set', () => {
+      expect(parseSecurityManagerTeams(null)).toEqual([]);
+    });
+
+    test('should throw for invalid team entries', () => {
+      expect(() => parseSecurityManagerTeams(['security', 123])).toThrow('expected team slugs to be strings');
+    });
+  });
+
+  describe('parseOrganizations with security manager teams', () => {
+    test('should apply global security manager teams to organizations input', () => {
+      const result = parseOrganizations(
+        'org1,org2',
+        '',
+        '',
+        [],
+        false,
+        '',
+        null,
+        null,
+        null,
+        null,
+        '',
+        null,
+        '',
+        '',
+        '',
+        ['security-team'],
+        true
+      );
+
+      expect(result).toHaveLength(2);
+      expect(result[0].securityManagerTeams).toEqual(['security-team']);
+      expect(result[0].deleteUnmanagedSecurityManagerTeams).toBe(true);
+      expect(result[1].securityManagerTeams).toEqual(['security-team']);
+    });
+
+    test('should let per-org security manager teams override global teams', () => {
+      const orgsYaml = `orgs:
+  - org: my-org
+  - org: my-other-org
+    security-manager-teams:
+      - org-security
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+
+      const result = parseOrganizations(
+        '',
+        '/mock/orgs.yml',
+        '',
+        [],
+        false,
+        '',
+        null,
+        null,
+        null,
+        null,
+        '',
+        null,
+        '',
+        '',
+        '',
+        ['global-security'],
+        false
+      );
+
+      expect(result[0].securityManagerTeams).toEqual(['global-security']);
+      expect(result[1].securityManagerTeams).toEqual(['org-security']);
+    });
+
+    test('should support explicit empty per-org security manager teams for remove all', () => {
+      const orgsYaml = `orgs:
+  - org: my-org
+    security-manager-teams: []
+    delete-unmanaged-security-manager-teams: true
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+
+      const result = parseOrganizations('', '/mock/orgs.yml', '');
+
+      expect(result[0].securityManagerTeams).toEqual([]);
+      expect(result[0].deleteUnmanagedSecurityManagerTeams).toBe(true);
+    });
+  });
+
+  describe('syncSecurityManagerTeams', () => {
+    test('should add missing security manager teams', async () => {
+      mockRequest.mockResolvedValueOnce({ data: [{ slug: 'existing-security' }] });
+      mockRequest.mockResolvedValueOnce({ status: 204 });
+
+      const result = await syncSecurityManagerTeams(
+        mockOctokit,
+        'my-org',
+        ['existing-security', 'new-security'],
+        false,
+        false
+      );
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults).toEqual([
+        {
+          kind: 'security-manager-team-add',
+          status: 'changed',
+          message: 'add "new-security"'
+        }
+      ]);
+      expect(mockRequest).toHaveBeenCalledWith('PUT /orgs/{org}/security-managers/teams/{team_slug}', {
+        org: 'my-org',
+        team_slug: 'new-security'
+      });
+    });
+
+    test('should remove unmanaged security manager teams when enabled', async () => {
+      mockRequest.mockResolvedValueOnce({ data: [{ slug: 'keep-security' }, { slug: 'old-security' }] });
+      mockRequest.mockResolvedValueOnce({ status: 204 });
+
+      const result = await syncSecurityManagerTeams(mockOctokit, 'my-org', ['keep-security'], true, false);
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults).toEqual([
+        {
+          kind: 'security-manager-team-remove',
+          status: 'changed',
+          message: 'remove "old-security"'
+        }
+      ]);
+      expect(mockRequest).toHaveBeenCalledWith('DELETE /orgs/{org}/security-managers/teams/{team_slug}', {
+        org: 'my-org',
+        team_slug: 'old-security'
+      });
+    });
+
+    test('should dry-run add and remove security manager teams without API changes', async () => {
+      mockRequest.mockResolvedValueOnce({ data: [{ slug: 'old-security' }] });
+
+      const result = await syncSecurityManagerTeams(mockOctokit, 'my-org', ['new-security'], true, true);
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults).toEqual([
+        {
+          kind: 'security-manager-team-add',
+          status: 'changed',
+          message: 'Would add "new-security"'
+        },
+        {
+          kind: 'security-manager-team-remove',
+          status: 'changed',
+          message: 'Would remove "old-security"'
+        }
+      ]);
+      expect(mockRequest).toHaveBeenCalledTimes(1);
+    });
+
+    test('should skip with permission warning on 404 fetch', async () => {
+      const error404 = new Error('Not Found');
+      error404.status = 404;
+      mockRequest.mockRejectedValueOnce(error404);
+
+      const result = await syncSecurityManagerTeams(mockOctokit, 'my-org', ['security'], false, false);
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('security-manager-team-fetch');
+      expect(result.subResults[0].status).toBe('warning');
+      expect(result.subResults[0].message).toContain('proper permissions');
+    });
+
+    test('should mark add failures as failed warnings', async () => {
+      mockRequest.mockResolvedValueOnce({ data: [] });
+      mockRequest.mockRejectedValueOnce(new Error('Team not found'));
+
+      const result = await syncSecurityManagerTeams(mockOctokit, 'my-org', ['missing-team'], false, false);
+
+      expect(result.failed).toBe(true);
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('security-manager-team-add');
+      expect(result.subResults[0].status).toBe('warning');
+      expect(result.subResults[0].message).toContain('Failed to add');
     });
   });
 

@@ -71,7 +71,7 @@ For stronger security and higher rate limits, use a GitHub App:
 1. Create a GitHub App with the following permissions:
 
    **Organization permissions:**
-   - **Administration**: Read and write (required for managing organization settings and rulesets)
+   - **Administration**: Read and write (required for managing organization settings, rulesets, and security manager teams)
    - **Custom properties**: Admin (required for managing custom property definitions)
    - **Custom organization roles**: Write (required for managing custom organization roles)
    - **Custom repository roles**: Write (required for managing custom repository roles)
@@ -771,6 +771,52 @@ orgs:
 
 ---
 
+## Syncing Security Manager Teams
+
+Assign organization security manager access to teams by slug.
+
+> [!WARNING]
+> GitHub's security manager REST endpoints are scheduled for removal starting January 1, 2026. This action supports the current endpoints for now; GitHub recommends organization roles as the long-term replacement.
+
+```yml
+- name: Sync Organization Settings
+  uses: joshjohanning/bulk-github-org-settings-sync-action@v1
+  with:
+    github-token: ${{ secrets.ORG_ADMIN_TOKEN }}
+    organizations: 'my-org,my-other-org'
+    security-manager-teams: 'security-team,appsec'
+    delete-unmanaged-security-manager-teams: false
+```
+
+**Behavior:**
+
+- Adds configured team slugs that are not already security managers
+- Leaves existing security manager teams alone unless deletion is enabled
+- When `delete-unmanaged-security-manager-teams: true`, removes security manager teams not in the configured desired set
+- In dry-run mode, shows which teams would be added or removed without applying changes
+
+In `orgs.yml`, `security-manager-teams` can be a comma-separated string or YAML array. Per-org values replace the global `security-manager-teams` input for that org:
+
+```yaml
+orgs:
+  - org: my-org
+    security-manager-teams:
+      - security-team
+      - appsec
+    delete-unmanaged-security-manager-teams: true
+```
+
+To remove all security manager teams from a specific org, set an explicit empty list and enable deletion for that org:
+
+```yaml
+orgs:
+  - org: my-org
+    security-manager-teams: []
+    delete-unmanaged-security-manager-teams: true
+```
+
+---
+
 ## Syncing Member Privileges
 
 Sync organization-level member privilege settings (repository policies) across organizations. These control what members can do within the organization, such as creating repositories, forking private repos, and managing pages.
@@ -893,6 +939,8 @@ Per-org overrides can be set in `orgs.yml` using the `dot-github-source-dir` and
 | `readers-can-create-discussions`              | Whether users with read access can create discussions                               | No       |                         |
 | `members-can-view-dependency-insights`        | Whether members can view dependency insights                                        | No       |                         |
 | `display-commenter-full-name-setting-enabled` | Whether to display commenter full name in issues and PRs                            | No       |                         |
+| `security-manager-teams`                      | Comma-separated team slugs to assign as organization security managers              | No       |                         |
+| `delete-unmanaged-security-manager-teams`     | Remove security manager teams not defined in the configuration                      | No       | `false`                 |
 | `rulesets-file`                               | Comma-separated paths to JSON files, each with a single org ruleset config          | No       |                         |
 | `delete-unmanaged-rulesets`                   | Delete all other rulesets besides those being synced                                | No       | `false`                 |
 | `custom-org-roles-file`                       | Path to a YAML file defining custom organization role definitions (GHEC only)       | No       |                         |
@@ -902,7 +950,7 @@ Per-org overrides can be set in `orgs.yml` using the `dot-github-source-dir` and
 | `dry-run`                                     | Preview changes without applying them                                               | No       | `false`                 |
 
 > [!NOTE]
-> You must provide either `organizations` or `organizations-file`. The `custom-properties-file`, `issue-types-file`, `rulesets-file`, `custom-org-roles-file`, and `custom-repo-roles-file` inputs provide base settings for all orgs and can be combined with either approach. Member privilege settings can be provided as individual inputs (e.g., `default-repository-permission`). Per-org overrides in `organizations-file` layer on top of the base.
+> You must provide either `organizations` or `organizations-file`. The `custom-properties-file`, `issue-types-file`, `rulesets-file`, `custom-org-roles-file`, and `custom-repo-roles-file` inputs provide base settings for all orgs and can be combined with either approach. Member privilege settings can be provided as individual inputs (e.g., `default-repository-permission`). Security manager teams can be provided as a direct comma-separated input. Per-org overrides in `organizations-file` layer on top of the base.
 > Sync named code security configurations across organizations. These configurations define security feature enablement policies (e.g., Dependabot, secret scanning, code scanning) that can be applied to repositories.
 
 ### Basic Usage
@@ -1127,6 +1175,8 @@ orgs:
 | `readers-can-create-discussions`                          | Whether users with read access can create discussions                                | No       |                         |
 | `members-can-view-dependency-insights`                    | Whether members can view dependency insights                                         | No       |                         |
 | `display-commenter-full-name-setting-enabled`             | Whether to display commenter full name in issues and PRs                             | No       |                         |
+| `security-manager-teams`                                  | Comma-separated team slugs to assign as organization security managers               | No       |                         |
+| `delete-unmanaged-security-manager-teams`                 | Remove security manager teams not defined in the configuration                       | No       | `false`                 |
 | `rulesets-file`                                           | Comma-separated paths to JSON files, each with a single org ruleset config           | No       |                         |
 | `delete-unmanaged-rulesets`                               | Delete all other rulesets besides those being synced                                 | No       | `false`                 |
 | `custom-org-roles-file`                                   | Path to a YAML file defining custom organization role definitions (GHEC only)        | No       |                         |
@@ -1153,7 +1203,7 @@ orgs:
 | `dry-run`                                                 | Preview changes without applying them                                                | No       | `false`                 |
 
 > [!NOTE]
-> You must provide either `organizations` or `organizations-file`. The `custom-properties-file`, `issue-types-file`, `rulesets-file`, `custom-org-roles-file`, `custom-repo-roles-file`, `actions-allow-list-file`, and `code-security-configurations-file` inputs provide base settings for all orgs and can be combined with either approach. Member privilege settings can be provided as individual inputs (e.g., `default-repository-permission`). Actions policy settings can be provided as individual inputs (e.g., `actions-policy-allowed-actions`). Org profile settings can be provided as individual inputs (e.g., `org-name`). The `dot-github-source-dir` and `dot-github-private-source-dir` inputs sync a local directory to the respective special repositories via PR. Per-org overrides in `organizations-file` layer on top of the base.
+> You must provide either `organizations` or `organizations-file`. The `custom-properties-file`, `issue-types-file`, `rulesets-file`, `custom-org-roles-file`, `custom-repo-roles-file`, `actions-allow-list-file`, and `code-security-configurations-file` inputs provide base settings for all orgs and can be combined with either approach. Member privilege settings can be provided as individual inputs (e.g., `default-repository-permission`). Security manager teams can be provided as a direct comma-separated input. Actions policy settings can be provided as individual inputs (e.g., `actions-policy-allowed-actions`). Org profile settings can be provided as individual inputs (e.g., `org-name`). The `dot-github-source-dir` and `dot-github-private-source-dir` inputs sync a local directory to the respective special repositories via PR. Per-org overrides in `organizations-file` layer on top of the base.
 
 ## Action Outputs
 
