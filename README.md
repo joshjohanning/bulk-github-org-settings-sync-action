@@ -325,6 +325,11 @@ Each custom property supports these fields:
 | `allowed-values`     | List of allowed values (required for select types)  | Conditional |              |
 | `values-editable-by` | Who can edit: `org_actors` or `org_and_repo_actors` | No          | `org_actors` |
 
+> [!NOTE]
+> GitHub API-style underscore aliases are also accepted for custom property fields:
+> `value_type`, `default_value`, `allowed_values`, and `values_editable_by`.
+> Hyphenated fields remain supported in v1 for backward compatibility, but are planned to be removed in v2.
+
 ### Delete Unmanaged Properties
 
 By default, syncing custom properties will create or update the specified properties, but will not delete other properties that may exist in the organization. To delete all other properties not defined in the config, use `delete-unmanaged-properties`:
@@ -709,6 +714,10 @@ Then reference it in your workflow:
 - Updates roles that differ from the config (description, base role, or permissions)
 - Only applies changes when the role definition differs from what's already configured
 - In dry-run mode, shows what would be changed without applying
+
+> [!NOTE]
+> GitHub API-style `base_role` is also accepted in custom repository role files.
+> `base-role` remains supported in v1 for backward compatibility, but is planned to be removed in v2.
 
 ### `delete-unmanaged-repo-roles`
 

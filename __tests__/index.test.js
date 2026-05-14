@@ -301,6 +301,27 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
       expect(mockCore.warning).not.toHaveBeenCalled();
     });
 
+    test('should not warn for underscore custom property aliases', () => {
+      validateOrgConfig(
+        {
+          org: 'my-org',
+          'custom-properties': [
+            {
+              name: 'team',
+              value_type: 'single_select',
+              required: true,
+              description: 'Team',
+              default_value: null,
+              allowed_values: ['a'],
+              values_editable_by: 'org_actors'
+            }
+          ]
+        },
+        'my-org'
+      );
+      expect(mockCore.warning).not.toHaveBeenCalled();
+    });
+
     test('should handle null/non-object gracefully', () => {
       expect(() => validateOrgConfig(null, 'test')).not.toThrow();
       expect(() => validateOrgConfig('string', 'test')).not.toThrow();
@@ -457,30 +478,80 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
       expect(result[0].value_type).toBe('true_false');
     });
 
+    test('should normalize custom property underscore aliases from API-style YAML', () => {
+      const result = normalizeCustomProperties([
+        {
+          name: 'team',
+          value_type: 'single_select',
+          required: true,
+          description: 'Team ownership',
+          default_value: 'platform',
+          allowed_values: ['platform', 'frontend'],
+          values_editable_by: 'org_and_repo_actors'
+        }
+      ]);
+
+      expect(result).toEqual([
+        {
+          property_name: 'team',
+          value_type: 'single_select',
+          required: true,
+          description: 'Team ownership',
+          default_value: 'platform',
+          allowed_values: ['platform', 'frontend'],
+          values_editable_by: 'org_and_repo_actors'
+        }
+      ]);
+    });
+
+    test('should allow matching hyphen and underscore custom property aliases', () => {
+      const result = normalizeCustomProperties([
+        {
+          name: 'team',
+          'value-type': 'string',
+          value_type: 'string'
+        }
+      ]);
+
+      expect(result[0].value_type).toBe('string');
+    });
+
+    test('should throw when custom property aliases conflict', () => {
+      expect(() =>
+        normalizeCustomProperties([
+          {
+            name: 'team',
+            'value-type': 'string',
+            value_type: 'url'
+          }
+        ])
+      ).toThrow('defines both "value_type" and legacy "value-type" with different values');
+    });
+
     test('should throw for missing name', () => {
       expect(() => normalizeCustomProperties([{ 'value-type': 'string' }])).toThrow('must have a "name" field');
     });
 
     test('should throw for missing value-type', () => {
-      expect(() => normalizeCustomProperties([{ name: 'test' }])).toThrow('must have a "value-type" field');
+      expect(() => normalizeCustomProperties([{ name: 'test' }])).toThrow('must have a "value_type" field');
     });
 
     test('should throw for invalid value-type', () => {
       expect(() => normalizeCustomProperties([{ name: 'test', 'value-type': 'invalid' }])).toThrow(
-        'invalid value-type'
+        'invalid value_type'
       );
     });
 
     test('should throw for single_select without allowed-values', () => {
       expect(() => normalizeCustomProperties([{ name: 'test', 'value-type': 'single_select' }])).toThrow(
-        'must have a non-empty "allowed-values" array'
+        'must have a non-empty "allowed_values" array'
       );
     });
 
     test('should throw for invalid values-editable-by', () => {
       expect(() =>
         normalizeCustomProperties([{ name: 'test', 'value-type': 'string', 'values-editable-by': 'everyone' }])
-      ).toThrow('invalid values-editable-by');
+      ).toThrow('invalid values_editable_by');
     });
 
     test('should throw for single_select with default-value when required is false', () => {
@@ -494,7 +565,7 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
             'allowed-values': ['exercise', 'platform', 'unclassified']
           }
         ])
-      ).toThrow('cannot have a "default-value" when "required" is false');
+      ).toThrow('cannot have a "default_value" when "required" is false');
     });
 
     test('should allow single_select with default-value when required is true', () => {
@@ -522,7 +593,7 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
             'allowed-values': ['production', 'development']
           }
         ])
-      ).toThrow('not in allowed-values');
+      ).toThrow('not in allowed_values');
     });
 
     test('should throw for default-value entries not in allowed-values for multi_select', () => {
@@ -535,7 +606,7 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
             'allowed-values': ['production', 'development']
           }
         ])
-      ).toThrow('not in allowed-values');
+      ).toThrow('not in allowed_values');
     });
   });
 
@@ -3751,15 +3822,21 @@ orgs:
       expect(result[0].base_role).toBe('admin');
     });
 
+    test('should normalize API-style base_role alias', () => {
+      const result = normalizeCustomRepoRoles([{ name: 'Admin Plus', base_role: 'admin', permissions: ['x'] }]);
+
+      expect(result[0].base_role).toBe('admin');
+    });
+
     test('should throw if role has no base-role', () => {
       expect(() => normalizeCustomRepoRoles([{ name: 'Test', permissions: ['x'] }])).toThrow(
-        'must have a "base-role" field'
+        'must have a "base_role" field'
       );
     });
 
     test('should throw for invalid base-role', () => {
       expect(() => normalizeCustomRepoRoles([{ name: 'Test', 'base-role': 'superadmin', permissions: ['x'] }])).toThrow(
-        'invalid base-role "superadmin"'
+        'invalid base_role "superadmin"'
       );
     });
 
@@ -5774,6 +5851,48 @@ orgs:
       expect(result).toHaveLength(1);
       expect(result[0].name).toBe('Contractor');
       expect(result[0].base_role).toBe('write');
+    });
+
+    test('should parse custom repo role underscore base_role alias', () => {
+      const yamlContent = `- name: Contractor
+  description: 'Limited write'
+  base_role: write
+  permissions:
+    - delete_alerts_code_scanning
+`;
+      setMockFileContent(yamlContent, '/mock/custom-repo-roles.yml');
+
+      const result = parseCustomRepoRolesFile('/mock/custom-repo-roles.yml');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].base_role).toBe('write');
+      expect(mockCore.warning).not.toHaveBeenCalled();
+    });
+
+    test('should allow matching hyphen and underscore custom repo role aliases', () => {
+      const result = normalizeCustomRepoRoles([
+        {
+          name: 'Contractor',
+          'base-role': 'write',
+          base_role: 'write',
+          permissions: ['delete_alerts_code_scanning']
+        }
+      ]);
+
+      expect(result[0].base_role).toBe('write');
+    });
+
+    test('should throw when custom repo role aliases conflict', () => {
+      expect(() =>
+        normalizeCustomRepoRoles([
+          {
+            name: 'Contractor',
+            'base-role': 'write',
+            base_role: 'maintain',
+            permissions: ['delete_alerts_code_scanning']
+          }
+        ])
+      ).toThrow('defines both "base_role" and legacy "base-role" with different values');
     });
 
     test('should throw if file not found', () => {
