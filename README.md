@@ -283,7 +283,10 @@ For features that support both forms, precedence is:
 2. **File-based** per-org config (`*-file` under the org entry)
 3. **Base** input/file (lowest — applied to all orgs that don't override)
 
-If both inline and file-based per-org overrides are specified for the same org, the inline values take precedence and the file is ignored.
+When both inline and file-based per-org overrides are set for the same org:
+
+- For **replace-semantics** features (currently `organization-role-team-assignments`), inline takes precedence and the per-org file is ignored.
+- For **merge-by-name** features (`custom-properties`, `issue-types`, `custom-org-roles`, `custom-repo-roles`, `code-security-configurations`), the per-org file becomes that org's base and inline entries then merge on top by `name`.
 
 ### Merge vs replace
 
