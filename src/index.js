@@ -45,6 +45,7 @@ function getKnownOrgConfigKeys() {
   // 'org' is the organization identifier in YAML config
   // 'custom-properties' is inline property definitions (YAML-only, not an action input)
   // 'issue-types' is inline issue type definitions (YAML-only, not an action input)
+  // 'issue-fields' is inline issue field definitions (YAML-only, not an action input)
   // 'member-privileges' is inline member privilege overrides (YAML-only, not an action input)
   // 'custom-org-roles' is inline org role definitions (YAML-only, not an action input)
   // 'custom-repo-roles' is inline repo role definitions (YAML-only, not an action input)
@@ -55,6 +56,7 @@ function getKnownOrgConfigKeys() {
     'org',
     'custom-properties',
     'issue-types',
+    'issue-fields',
     'member-privileges',
     'custom-org-roles',
     'custom-repo-roles',
@@ -128,6 +130,11 @@ const KNOWN_CUSTOM_PROPERTY_KEYS = new Set([
  * Used to warn about typos or unknown keys.
  */
 const KNOWN_ISSUE_TYPE_KEYS = new Set(['name', 'description', 'color', 'is-enabled']);
+const KNOWN_ISSUE_FIELD_KEYS = new Set(['name', 'description', 'data-type', 'data_type', 'visibility', 'options']);
+const KNOWN_ISSUE_FIELD_OPTION_KEYS = new Set(['name', 'description', 'color', 'priority']);
+const ISSUE_FIELD_DATA_TYPES = new Set(['text', 'date', 'single_select', 'number']);
+const ISSUE_FIELD_VISIBILITIES = new Set(['organization_members_only', 'all']);
+const ISSUE_FIELD_OPTION_COLORS = new Set(['gray', 'blue', 'green', 'yellow', 'orange', 'red', 'pink', 'purple']);
 
 /**
  * Known keys for custom organization role definitions in the YAML file.
@@ -143,6 +150,7 @@ const KNOWN_CUSTOM_REPO_ROLE_KEYS = new Set(['name', 'description', 'base-role',
 
 // TODO(v2): remove legacy hyphenated aliases and require GitHub API-style underscore keys.
 const YAML_KEY_ALIASES = Object.freeze({
+  data_type: 'data-type',
   value_type: 'value-type',
   default_value: 'default-value',
   allowed_values: 'allowed-values',
@@ -245,6 +253,9 @@ const ORG_CONFIG_TOP_LEVEL_KEYS = new Set([
   'issue-types',
   'issue-types-file',
   'delete-unmanaged-issue-types',
+  'issue-fields',
+  'issue-fields-file',
+  'delete-unmanaged-issue-fields',
   'organization-role-team-assignments',
   'organization-role-team-assignments-file',
   'rulesets-file',
@@ -346,6 +357,37 @@ export function validateOrgConfig(orgConfig, orgName) {
     }
   }
 
+  // Validate issue field keys if present
+  if (Array.isArray(orgConfig['issue-fields'])) {
+    for (const issueField of orgConfig['issue-fields']) {
+      if (typeof issueField !== 'object' || issueField === null) continue;
+      const fieldName = issueField.name || '(unnamed)';
+      for (const key of Object.keys(issueField)) {
+        if (!KNOWN_ISSUE_FIELD_KEYS.has(key)) {
+          core.warning(
+            `⚠️  Unknown issue field key "${key}" found for issue field "${fieldName}" in organization "${orgName}". ` +
+              `This key may not exist or may have a typo.`
+          );
+        }
+      }
+
+      if (Array.isArray(issueField.options)) {
+        for (const option of issueField.options) {
+          if (typeof option !== 'object' || option === null) continue;
+          const optionName = option.name || '(unnamed)';
+          for (const key of Object.keys(option)) {
+            if (!KNOWN_ISSUE_FIELD_OPTION_KEYS.has(key)) {
+              core.warning(
+                `⚠️  Unknown issue field option key "${key}" found for option "${optionName}" in issue field "${fieldName}" for organization "${orgName}". ` +
+                  `This key may not exist or may have a typo.`
+              );
+            }
+          }
+        }
+      }
+    }
+  }
+
   // Validate delete-unmanaged-properties value if present
   if (Object.prototype.hasOwnProperty.call(orgConfig, 'delete-unmanaged-properties')) {
     const val = orgConfig['delete-unmanaged-properties'];
@@ -374,6 +416,17 @@ export function validateOrgConfig(orgConfig, orgName) {
     if (typeof val !== 'boolean') {
       core.warning(
         `⚠️  Invalid "delete-unmanaged-issue-types" value for organization "${orgName}": ` +
+          `expected true or false, got "${val}". This setting will be ignored.`
+      );
+    }
+  }
+
+  // Validate delete-unmanaged-issue-fields value if present
+  if (Object.prototype.hasOwnProperty.call(orgConfig, 'delete-unmanaged-issue-fields')) {
+    const val = orgConfig['delete-unmanaged-issue-fields'];
+    if (typeof val !== 'boolean') {
+      core.warning(
+        `⚠️  Invalid "delete-unmanaged-issue-fields" value for organization "${orgName}": ` +
           `expected true or false, got "${val}". This setting will be ignored.`
       );
     }
@@ -426,6 +479,7 @@ export function validateOrgConfig(orgConfig, orgName) {
 const FILE_PATH_CONFIG_KEYS = [
   'custom-properties-file',
   'issue-types-file',
+  'issue-fields-file',
   'rulesets-file',
   'custom-org-roles-file',
   'custom-repo-roles-file',
@@ -516,6 +570,10 @@ const SYNC_KIND_LABELS = Object.freeze({
   'issue-type-update': 'issue type (updated)',
   'issue-type-delete': 'issue type (deleted)',
   'issue-type-fetch': 'issue type (fetch failed)',
+  'issue-field-create': 'issue field (created)',
+  'issue-field-update': 'issue field (updated)',
+  'issue-field-delete': 'issue field (deleted)',
+  'issue-field-fetch': 'issue field (fetch failed)',
   'member-privileges-update': 'member privileges (updated)',
   'organization-role-team-add': 'organization role team assignment (added)',
   'organization-role-team-remove': 'organization role team assignment (removed)',
@@ -668,7 +726,7 @@ function formatSubResultStatus(status) {
  * Per-org properties override base properties with the same name; base properties
  * not overridden are preserved.
  *
- * Per-org custom-properties-file, issue-types-file, rulesets-file, or actions-allow-list-file in the
+ * Per-org custom-properties-file, issue-types-file, issue-fields-file, rulesets-file, or actions-allow-list-file in the
  * organizations file overrides the corresponding base file from the action input for that org.
  *
  * Modes:
@@ -690,7 +748,8 @@ function formatSubResultStatus(status) {
  * @param {string} [dotGithubSourceDir] - Path to source directory for .github repo sync
  * @param {string} [dotGithubPrivateSourceDir] - Path to source directory for .github-private repo sync
  * @param {string} [organizationRoleTeamAssignmentsFile] - Path to organization role team assignments YAML file (base for all orgs)
- * @returns {Array<{ org: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, issueTypes?: Array, memberPrivileges?: Object, customOrgRoles?: Array, customRepoRoles?: Array, organizationRoleTeamAssignments?: Array, orgProfile?: Object, codeSecurityConfigurations?: Array, deleteUnmanagedCodeSecurityConfigurations?: boolean, actionsPolicy?: Object, actionsAllowList?: string[], dotGithubSourceDir?: string, dotGithubPrivateSourceDir?: string }>} Parsed org configs
+ * @param {string} [issueFieldsFile] - Path to issue fields YAML file (base for all orgs)
+ * @returns {Array<{ org: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, issueTypes?: Array, issueFields?: Array, memberPrivileges?: Object, customOrgRoles?: Array, customRepoRoles?: Array, organizationRoleTeamAssignments?: Array, orgProfile?: Object, codeSecurityConfigurations?: Array, deleteUnmanagedCodeSecurityConfigurations?: boolean, actionsPolicy?: Object, actionsAllowList?: string[], dotGithubSourceDir?: string, dotGithubPrivateSourceDir?: string }>} Parsed org configs
  */
 export function parseOrganizations(
   organizationsInput,
@@ -708,7 +767,8 @@ export function parseOrganizations(
   actionsAllowListFile,
   dotGithubSourceDir,
   dotGithubPrivateSourceDir,
-  organizationRoleTeamAssignmentsFile
+  organizationRoleTeamAssignmentsFile,
+  issueFieldsFile
 ) {
   let resolvedCodeSecurityConfigurationsFile = codeSecurityConfigurationsFile;
   let resolvedActionsPolicyFromInputs = actionsPolicyFromInputs;
@@ -737,6 +797,12 @@ export function parseOrganizations(
   let baseIssueTypes = null;
   if (issueTypesFile) {
     baseIssueTypes = parseIssueTypesFile(issueTypesFile);
+  }
+
+  // Load base issue fields from separate file (applies to all orgs)
+  let baseIssueFields = null;
+  if (issueFieldsFile) {
+    baseIssueFields = parseIssueFieldsFile(issueFieldsFile);
   }
 
   // Load base member privileges from direct action inputs.
@@ -831,6 +897,27 @@ export function parseOrganizations(
 
       // Clean up the intermediate field
       delete orgConfig.issueTypesFile;
+
+      // Per-org issue-fields-file overrides the base for this org
+      let orgIssueFieldsBase = baseIssueFields;
+      if (orgConfig.issueFieldsFile) {
+        try {
+          orgIssueFieldsBase = parseIssueFieldsFile(orgConfig.issueFieldsFile);
+        } catch (error) {
+          throw new Error(
+            `Failed to parse issue fields file "${orgConfig.issueFieldsFile}" for organization "${orgConfig.org}": ${error.message}`,
+            { cause: error }
+          );
+        }
+      }
+
+      if (orgIssueFieldsBase) {
+        // Inline issue-fields layer on top of the base (per-org file or global file)
+        orgConfig.issueFields = mergeIssueFields(orgIssueFieldsBase, orgConfig.issueFields || []);
+      }
+
+      // Clean up the intermediate field
+      delete orgConfig.issueFieldsFile;
 
       // Per-org rulesets-file overrides the base for this org
       if (!orgConfig.rulesetsFiles && rulesetsFiles && rulesetsFiles.length > 0) {
@@ -996,6 +1083,7 @@ export function parseOrganizations(
     org,
     ...(baseCustomProperties ? { customProperties: baseCustomProperties } : {}),
     ...(baseIssueTypes ? { issueTypes: baseIssueTypes } : {}),
+    ...(baseIssueFields ? { issueFields: baseIssueFields } : {}),
     ...(rulesetsFiles && rulesetsFiles.length > 0 ? { rulesetsFiles } : {}),
     ...(deleteUnmanagedRulesets !== undefined ? { deleteUnmanagedRulesets } : {}),
     ...(baseMemberPrivileges ? { memberPrivileges: baseMemberPrivileges } : {}),
@@ -1051,6 +1139,24 @@ export function mergeIssueTypes(baseIssueTypes, orgIssueTypes) {
 
   for (const orgType of orgIssueTypes) {
     merged.set(orgType.name, { ...orgType });
+  }
+
+  return Array.from(merged.values());
+}
+
+/**
+ * Merge base issue fields with per-org overrides.
+ * Per-org issue fields override base issue fields with the same name.
+ * Base issue fields not overridden are preserved.
+ * @param {Array<Object>} baseIssueFields - Base issue field definitions
+ * @param {Array<Object>} orgIssueFields - Per-org issue field overrides
+ * @returns {Array<Object>} Merged issue fields
+ */
+export function mergeIssueFields(baseIssueFields, orgIssueFields) {
+  const merged = new Map(baseIssueFields.map(field => [field.name, { ...field }]));
+
+  for (const orgField of orgIssueFields) {
+    merged.set(orgField.name, { ...orgField });
   }
 
   return Array.from(merged.values());
@@ -1549,7 +1655,7 @@ export function mergeOrgProfile(baseProfile, orgProfile) {
 /**
  * Parse the organizations YAML config file.
  * @param {string} filePath - Path to the YAML file
- * @returns {Array<{ org: string, customPropertiesFile?: string, customProperties?: Array, issueTypesFile?: string, issueTypes?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, deleteUnmanagedProperties?: boolean, deleteUnmanagedIssueTypes?: boolean, memberPrivileges?: Object, orgProfile?: Object, codeSecurityConfigurationsFile?: string, codeSecurityConfigurations?: Array, deleteUnmanagedCodeSecurityConfigurations?: boolean, actionsPolicy?: Object, actionsAllowListFile?: string, organizationRoleTeamAssignments?: Array, organizationRoleTeamAssignmentsFile?: string }>}
+ * @returns {Array<{ org: string, customPropertiesFile?: string, customProperties?: Array, issueTypesFile?: string, issueTypes?: Array, issueFieldsFile?: string, issueFields?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, deleteUnmanagedProperties?: boolean, deleteUnmanagedIssueTypes?: boolean, deleteUnmanagedIssueFields?: boolean, memberPrivileges?: Object, orgProfile?: Object, codeSecurityConfigurationsFile?: string, codeSecurityConfigurations?: Array, deleteUnmanagedCodeSecurityConfigurations?: boolean, actionsPolicy?: Object, actionsAllowListFile?: string, organizationRoleTeamAssignments?: Array, organizationRoleTeamAssignmentsFile?: string }>}
  */
 export function parseOrganizationsFile(filePath) {
   if (!fs.existsSync(filePath)) {
@@ -1611,6 +1717,21 @@ export function parseOrganizationsFile(filePath) {
       result.issueTypes = normalizeIssueTypes(orgConfig['issue-types']);
     }
 
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'issue-fields-file')) {
+      const ifFile = orgConfig['issue-fields-file'];
+      if (typeof ifFile !== 'string' || ifFile.trim() === '') {
+        throw new Error(`Invalid "issue-fields-file" for org "${orgConfig.org}": expected a non-empty string`);
+      }
+      result.issueFieldsFile = ifFile.trim();
+    }
+
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'issue-fields')) {
+      if (!Array.isArray(orgConfig['issue-fields'])) {
+        throw new Error(`Invalid "issue-fields" for org "${orgConfig.org}": expected an array`);
+      }
+      result.issueFields = normalizeIssueFields(orgConfig['issue-fields']);
+    }
+
     if (Object.prototype.hasOwnProperty.call(orgConfig, 'rulesets-file')) {
       const rsFile = orgConfig['rulesets-file'];
       result.rulesetsFiles = parseRulesetsFileValue(rsFile, orgConfig.org);
@@ -1634,6 +1755,13 @@ export function parseOrganizationsFile(filePath) {
       const val = orgConfig['delete-unmanaged-issue-types'];
       if (typeof val === 'boolean') {
         result.deleteUnmanagedIssueTypes = val;
+      }
+    }
+
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'delete-unmanaged-issue-fields')) {
+      const val = orgConfig['delete-unmanaged-issue-fields'];
+      if (typeof val === 'boolean') {
+        result.deleteUnmanagedIssueFields = val;
       }
     }
 
@@ -2148,6 +2276,360 @@ export async function syncIssueTypes(octokit, org, desiredIssueTypes, deleteUnma
             core.warning(`  ⚠️  Failed to delete issue type "${existing.name}": ${error.message}`);
             subResults[subResults.length - 1] = createSubResult(
               'issue-type-delete',
+              SubResultStatus.WARNING,
+              `Failed to delete "${existing.name}": ${error.message}`
+            );
+          }
+        }
+      }
+    }
+  }
+
+  return { subResults, failed: hasFailed };
+}
+
+// ─── Issue Fields Parsing & Sync ────────────────────────────────────────────────
+
+/**
+ * Parse a standalone issue fields YAML file.
+ * @param {string} filePath - Path to the YAML file
+ * @returns {Array<Object>} Normalized issue field definitions
+ */
+export function parseIssueFieldsFile(filePath) {
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`Issue fields file not found: ${filePath}`);
+  }
+
+  const content = fs.readFileSync(filePath, 'utf8');
+  const issueFields = yaml.load(content);
+
+  if (!Array.isArray(issueFields)) {
+    throw new Error(`Invalid issue fields file format: expected an array in ${filePath}`);
+  }
+
+  return normalizeIssueFields(issueFields);
+}
+
+/**
+ * Normalize and validate a single issue field option definition.
+ * @param {Object} option - Issue field option from YAML
+ * @param {string} fieldName - Parent issue field name
+ * @param {number} optionIndex - Option index in the array
+ * @returns {Object} Normalized option
+ */
+function normalizeIssueFieldOption(option, fieldName, optionIndex) {
+  if (typeof option !== 'object' || option === null || Array.isArray(option)) {
+    throw new Error(`Issue field "${fieldName}" option at index ${optionIndex} must be a key-value map`);
+  }
+
+  if (typeof option.name !== 'string' || option.name.trim() === '') {
+    throw new Error(`Issue field "${fieldName}" option at index ${optionIndex} must have a non-empty "name"`);
+  }
+
+  if (typeof option.color !== 'string' || !ISSUE_FIELD_OPTION_COLORS.has(option.color.trim())) {
+    throw new Error(
+      `Issue field "${fieldName}" option "${option.name}" has invalid color: expected one of ${Array.from(
+        ISSUE_FIELD_OPTION_COLORS
+      ).join(', ')}`
+    );
+  }
+
+  if (option.priority !== undefined && (!Number.isInteger(option.priority) || option.priority < 1)) {
+    throw new Error(
+      `Issue field "${fieldName}" option "${option.name}" has invalid priority: expected an integer >= 1`
+    );
+  }
+
+  return {
+    name: option.name.trim(),
+    description: option.description == null ? null : String(option.description),
+    color: option.color.trim(),
+    priority: option.priority ?? optionIndex + 1
+  };
+}
+
+/**
+ * Normalize issue field definitions from YAML format to API format.
+ * @param {Array<Object>} issueFields - Issue field definitions from YAML
+ * @returns {Array<Object>} Normalized issue fields
+ */
+export function normalizeIssueFields(issueFields) {
+  const seenNames = new Set();
+
+  return issueFields.map((field, index) => {
+    if (typeof field !== 'object' || field === null || Array.isArray(field)) {
+      throw new Error(`Issue field entry at index ${index} must be a key-value map`);
+    }
+
+    if (typeof field.name !== 'string' || field.name.trim() === '') {
+      throw new Error(`Issue field entry at index ${index} must have a non-empty "name" field`);
+    }
+
+    const name = field.name.trim();
+    const nameKey = name.toLowerCase();
+    if (seenNames.has(nameKey)) {
+      throw new Error(`Duplicate issue field name "${name}"`);
+    }
+    seenNames.add(nameKey);
+
+    const dataTypeRaw = getAliasedYamlValue(field, 'data_type', `Issue field "${name}"`);
+    if (typeof dataTypeRaw !== 'string' || dataTypeRaw.trim() === '') {
+      throw new Error(`Issue field "${name}" must have a non-empty "data-type" field`);
+    }
+    const dataType = dataTypeRaw.trim();
+    if (!ISSUE_FIELD_DATA_TYPES.has(dataType)) {
+      throw new Error(
+        `Issue field "${name}" has invalid data-type "${dataType}": expected one of ${Array.from(
+          ISSUE_FIELD_DATA_TYPES
+        ).join(', ')}`
+      );
+    }
+
+    const visibilityRaw = field.visibility;
+    if (visibilityRaw != null) {
+      if (typeof visibilityRaw !== 'string' || !ISSUE_FIELD_VISIBILITIES.has(visibilityRaw.trim())) {
+        throw new Error(
+          `Issue field "${name}" has invalid visibility "${visibilityRaw}": expected one of ${Array.from(
+            ISSUE_FIELD_VISIBILITIES
+          ).join(', ')}`
+        );
+      }
+    }
+
+    const optionsRaw = field.options;
+    if (dataType === 'single_select') {
+      if (!Array.isArray(optionsRaw) || optionsRaw.length === 0) {
+        throw new Error(`Issue field "${name}" must have a non-empty "options" array for data-type "single_select"`);
+      }
+    } else if (optionsRaw != null) {
+      throw new Error(`Issue field "${name}" has "options" but data-type "${dataType}" does not support options`);
+    }
+
+    return {
+      name,
+      description: field.description == null ? null : String(field.description),
+      data_type: dataType,
+      visibility: visibilityRaw == null ? null : visibilityRaw.trim(),
+      options: Array.isArray(optionsRaw)
+        ? optionsRaw.map((option, optionIndex) => normalizeIssueFieldOption(option, name, optionIndex))
+        : null
+    };
+  });
+}
+
+/**
+ * Compare two issue field definitions to check if they differ.
+ * @param {Object} existing - Current issue field from API
+ * @param {Object} desired - Desired issue field from config
+ * @returns {{ changed: boolean, changes: Array<string>, incompatibleTypeChange: boolean }}
+ */
+export function compareIssueField(existing, desired) {
+  const changes = [];
+  let incompatibleTypeChange = false;
+
+  if (existing.data_type !== desired.data_type) {
+    incompatibleTypeChange = true;
+    changes.push(`data_type: ${existing.data_type} → ${desired.data_type} (requires recreation)`);
+  }
+
+  const existingDesc = existing.description || null;
+  const desiredDesc = desired.description || null;
+  if (existingDesc !== desiredDesc) {
+    changes.push('description updated');
+  }
+
+  if (desired.visibility != null) {
+    const existingVisibility = existing.visibility || 'organization_members_only';
+    if (existingVisibility !== desired.visibility) {
+      changes.push(`visibility: ${existingVisibility} → ${desired.visibility}`);
+    }
+  }
+
+  if (desired.data_type === 'single_select') {
+    const normalizeOptions = options =>
+      (options || [])
+        .map((option, optionIndex) => ({
+          name: option.name,
+          description: option.description || null,
+          color: option.color,
+          priority: option.priority ?? optionIndex + 1
+        }))
+        .sort((a, b) => a.priority - b.priority || a.name.localeCompare(b.name));
+
+    const existingOptions = normalizeOptions(existing.options);
+    const desiredOptions = normalizeOptions(desired.options);
+    if (JSON.stringify(existingOptions) !== JSON.stringify(desiredOptions)) {
+      changes.push('options updated');
+    }
+  }
+
+  return { changed: changes.length > 0, changes, incompatibleTypeChange };
+}
+
+/**
+ * Sync issue field definitions for an organization.
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} org - Organization name
+ * @param {Array<Object>} desiredIssueFields - Desired issue field definitions
+ * @param {boolean} deleteUnmanaged - Whether to delete issue fields not in config
+ * @param {boolean} dryRun - Preview mode
+ * @returns {Promise<Object>} Result object with subResults
+ */
+export async function syncIssueFields(octokit, org, desiredIssueFields, deleteUnmanaged, dryRun) {
+  const subResults = [];
+  const wouldPrefix = dryRun ? 'Would ' : '';
+  let hasFailed = false;
+
+  // Fetch current issue fields
+  let existingIssueFields;
+  try {
+    const { data } = await octokit.request('GET /orgs/{org}/issue-fields', { org });
+    existingIssueFields = data;
+  } catch (error) {
+    if (isPermissionLikeFetchError(error)) {
+      const message = formatPermissionFetchWarning('issue fields', org, error);
+      core.warning(`  ⚠️  ${message}`);
+      subResults.push(createSubResult('issue-field-fetch', SubResultStatus.WARNING, message));
+      return { subResults, failed: false };
+    }
+
+    throw error;
+  }
+
+  const existingMap = new Map(existingIssueFields.map(field => [field.name, field]));
+  const desiredMap = new Map(desiredIssueFields.map(field => [field.name, field]));
+
+  for (const desired of desiredIssueFields) {
+    const existing = existingMap.get(desired.name);
+
+    if (!existing) {
+      core.info(`  🆕 ${wouldPrefix}Create issue field: ${desired.name}`);
+      subResults.push(
+        createSubResult('issue-field-create', SubResultStatus.CHANGED, `${wouldPrefix}create "${desired.name}"`)
+      );
+
+      if (!dryRun) {
+        try {
+          await octokit.request('POST /orgs/{org}/issue-fields', {
+            org,
+            name: desired.name,
+            data_type: desired.data_type,
+            ...(desired.description != null ? { description: desired.description } : {}),
+            ...(desired.visibility != null ? { visibility: desired.visibility } : {}),
+            ...(desired.options ? { options: desired.options } : {})
+          });
+        } catch (error) {
+          hasFailed = true;
+          core.warning(`  ⚠️  Failed to create issue field "${desired.name}": ${error.message}`);
+          subResults[subResults.length - 1] = createSubResult(
+            'issue-field-create',
+            SubResultStatus.WARNING,
+            `Failed to create "${desired.name}": ${error.message}`
+          );
+        }
+      }
+      continue;
+    }
+
+    const { changed, changes, incompatibleTypeChange } = compareIssueField(existing, desired);
+    if (!changed) {
+      core.info(`  ✅ Issue field unchanged: ${desired.name}`);
+      continue;
+    }
+
+    core.info(`  📝 ${wouldPrefix}Update issue field: ${desired.name} (${changes.join(', ')})`);
+    subResults.push(
+      createSubResult(
+        'issue-field-update',
+        SubResultStatus.CHANGED,
+        `${wouldPrefix}update "${desired.name}" (${changes.join(', ')})`
+      )
+    );
+
+    if (incompatibleTypeChange) {
+      hasFailed = true;
+      const message = `Failed to update "${desired.name}": cannot change data_type from "${existing.data_type}" to "${desired.data_type}" (delete and recreate the field)`;
+      core.warning(`  ⚠️  ${message}`);
+      subResults[subResults.length - 1] = createSubResult('issue-field-update', SubResultStatus.WARNING, message);
+      continue;
+    }
+
+    if (!dryRun) {
+      try {
+        const payload = {
+          org,
+          issue_field_id: existing.id
+        };
+
+        if ((existing.description || null) !== (desired.description || null)) {
+          payload.description = desired.description;
+        }
+
+        if (desired.visibility != null && (existing.visibility || 'organization_members_only') !== desired.visibility) {
+          payload.visibility = desired.visibility;
+        }
+
+        if (desired.data_type === 'single_select') {
+          const existingOptionsByName = new Map((existing.options || []).map(option => [option.name, option]));
+          const normalizedExistingOptions = (existing.options || []).map((option, optionIndex) => ({
+            name: option.name,
+            description: option.description || null,
+            color: option.color,
+            priority: option.priority ?? optionIndex + 1
+          }));
+          const normalizedDesiredOptions = (desired.options || []).map(option => ({
+            name: option.name,
+            description: option.description || null,
+            color: option.color,
+            priority: option.priority
+          }));
+
+          if (JSON.stringify(normalizedExistingOptions) !== JSON.stringify(normalizedDesiredOptions)) {
+            payload.options = (desired.options || []).map(option => {
+              const existingOption = existingOptionsByName.get(option.name);
+              return {
+                ...(existingOption?.id ? { id: existingOption.id } : {}),
+                name: option.name,
+                description: option.description,
+                color: option.color,
+                priority: option.priority
+              };
+            });
+          }
+        }
+
+        await octokit.request('PATCH /orgs/{org}/issue-fields/{issue_field_id}', payload);
+      } catch (error) {
+        hasFailed = true;
+        core.warning(`  ⚠️  Failed to update issue field "${desired.name}": ${error.message}`);
+        subResults[subResults.length - 1] = createSubResult(
+          'issue-field-update',
+          SubResultStatus.WARNING,
+          `Failed to update "${desired.name}": ${error.message}`
+        );
+      }
+    }
+  }
+
+  if (deleteUnmanaged) {
+    for (const existing of existingIssueFields) {
+      if (!desiredMap.has(existing.name)) {
+        core.info(`  🗑️ ${wouldPrefix}Delete issue field: ${existing.name}`);
+        subResults.push(
+          createSubResult('issue-field-delete', SubResultStatus.CHANGED, `${wouldPrefix}delete "${existing.name}"`)
+        );
+
+        if (!dryRun) {
+          try {
+            await octokit.request('DELETE /orgs/{org}/issue-fields/{issue_field_id}', {
+              org,
+              issue_field_id: existing.id
+            });
+          } catch (error) {
+            hasFailed = true;
+            core.warning(`  ⚠️  Failed to delete issue field "${existing.name}": ${error.message}`);
+            subResults[subResults.length - 1] = createSubResult(
+              'issue-field-delete',
               SubResultStatus.WARNING,
               `Failed to delete "${existing.name}": ${error.message}`
             );
@@ -5083,6 +5565,8 @@ export async function run() {
     const deleteUnmanagedRulesets = getBooleanInput('delete-unmanaged-rulesets') ?? false;
     const issueTypesFile = core.getInput('issue-types-file');
     const deleteUnmanagedIssueTypes = getBooleanInput('delete-unmanaged-issue-types') ?? false;
+    const issueFieldsFile = core.getInput('issue-fields-file');
+    const deleteUnmanagedIssueFields = getBooleanInput('delete-unmanaged-issue-fields') ?? false;
     const dotGithubSourceDir = core.getInput('dot-github-source-dir') || '';
     const dotGithubPrivateSourceDir = core.getInput('dot-github-private-source-dir') || '';
     const memberPrivilegesFromInputs = getMemberPrivilegesFromInputs();
@@ -5126,13 +5610,15 @@ export async function run() {
       actionsAllowListFile,
       dotGithubSourceDir,
       dotGithubPrivateSourceDir,
-      organizationRoleTeamAssignmentsFile
+      organizationRoleTeamAssignmentsFile,
+      issueFieldsFile
     );
 
     // Check that at least one setting type is specified
     const hasCustomProperties = orgList.some(o => o.customProperties && o.customProperties.length > 0);
     const hasRulesets = orgList.some(o => o.rulesetsFiles && o.rulesetsFiles.length > 0);
     const hasIssueTypes = orgList.some(o => o.issueTypes && o.issueTypes.length > 0);
+    const hasIssueFields = orgList.some(o => o.issueFields && o.issueFields.length > 0);
     const hasMemberPrivileges = orgList.some(o => o.memberPrivileges && Object.keys(o.memberPrivileges).length > 0);
     const hasOrganizationRoleTeamAssignments = orgList.some(
       o => o.organizationRoleTeamAssignments && o.organizationRoleTeamAssignments.length > 0
@@ -5159,6 +5645,7 @@ export async function run() {
       !hasCustomProperties &&
       !hasRulesets &&
       !hasIssueTypes &&
+      !hasIssueFields &&
       !hasMemberPrivileges &&
       !hasOrganizationRoleTeamAssignments &&
       !hasDotGithub &&
@@ -5172,7 +5659,7 @@ export async function run() {
       throw new Error(
         'At least one setting must be specified. Provide custom properties via ' +
           '"organizations-file" or via "organizations" + "custom-properties-file" inputs, ' +
-          'provide issue types via "issue-types-file", rulesets via "rulesets-file", ' +
+          'provide issue types via "issue-types-file", issue fields via "issue-fields-file", rulesets via "rulesets-file", ' +
           'member privileges via individual inputs (e.g., "default-repository-permission"), ' +
           'organization role team assignments via "organization-role-team-assignments-file", ' +
           'custom org roles via "custom-org-roles-file", custom repo roles via "custom-repo-roles-file", ' +
@@ -5201,6 +5688,10 @@ export async function run() {
 
     if (deleteUnmanagedIssueTypes) {
       core.info('⚠️  delete-unmanaged-issue-types is enabled: issue types not in config will be deleted');
+    }
+
+    if (deleteUnmanagedIssueFields) {
+      core.info('⚠️  delete-unmanaged-issue-fields is enabled: issue fields not in config will be deleted');
     }
 
     if (deleteUnmanagedOrgRoles) {
@@ -5271,6 +5762,24 @@ export async function run() {
           if (itResult.failed) {
             result.success = false;
             result.error = result.error ? `${result.error}; Issue types sync failed` : 'Issue types sync failed';
+          }
+        }
+
+        // Sync issue fields
+        if (orgConfig.issueFields && orgConfig.issueFields.length > 0) {
+          core.info(`  🏷️  Syncing issue fields (${orgConfig.issueFields.length} defined)...`);
+          const ifResult = await syncIssueFields(
+            octokit,
+            org,
+            orgConfig.issueFields,
+            orgConfig.deleteUnmanagedIssueFields ?? deleteUnmanagedIssueFields,
+            dryRun
+          );
+          result.subResults.push(...ifResult.subResults);
+
+          if (ifResult.failed) {
+            result.success = false;
+            result.error = result.error ? `${result.error}; Issue fields sync failed` : 'Issue fields sync failed';
           }
         }
 

@@ -43,6 +43,10 @@ inputs:
     description: 'Issue types file'
   delete-unmanaged-issue-types:
     description: 'Delete unmanaged issue types'
+  issue-fields-file:
+    description: 'Issue fields file'
+  delete-unmanaged-issue-fields:
+    description: 'Delete unmanaged issue fields'
   default-repository-permission:
     description: 'Default permission level'
   members-can-create-repositories:
@@ -207,6 +211,11 @@ const {
   compareIssueType,
   syncIssueTypes,
   mergeIssueTypes,
+  parseIssueFieldsFile,
+  normalizeIssueFields,
+  compareIssueField,
+  syncIssueFields,
+  mergeIssueFields,
   syncOrgRulesets,
   mergeCustomProperties,
   mergeMemberPrivileges,
@@ -398,6 +407,34 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
               description: 'A bug',
               color: 'ff0000',
               'is-enabled': true
+            }
+          ]
+        },
+        'my-org'
+      );
+      expect(mockCore.warning).not.toHaveBeenCalled();
+    });
+
+    test('should warn for unknown issue field key', () => {
+      validateOrgConfig(
+        {
+          org: 'my-org',
+          'issue-fields': [{ name: 'Priority', 'data-type': 'single_select', optins: [] }]
+        },
+        'my-org'
+      );
+      expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('Unknown issue field key "optins"'));
+    });
+
+    test('should not warn for valid issue field keys', () => {
+      validateOrgConfig(
+        {
+          org: 'my-org',
+          'issue-fields': [
+            {
+              name: 'Priority',
+              'data-type': 'single_select',
+              options: [{ name: 'High', color: 'red', priority: 1 }]
             }
           ]
         },
@@ -1018,6 +1055,101 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
       const bugType = result[1].issueTypes.find(t => t.name === 'Bug');
       expect(bugType.description).toBe('A serious bug');
       expect(bugType.color).toBe('0000ff');
+    });
+
+    test('should parse organizations with issue-fields-file', () => {
+      const ifYaml = `- name: Priority
+  data-type: single_select
+  options:
+    - name: High
+      color: red
+      priority: 1
+    - name: Medium
+      color: yellow
+      priority: 2
+`;
+      setMockFileContent(ifYaml, '/mock/issue-fields.yml');
+      const result = parseOrganizations(
+        'my-org',
+        '',
+        '',
+        [],
+        false,
+        '',
+        null,
+        '',
+        '',
+        null,
+        '',
+        null,
+        '',
+        '',
+        '',
+        '',
+        '/mock/issue-fields.yml'
+      );
+
+      expect(result).toHaveLength(1);
+      expect(result[0].org).toBe('my-org');
+      expect(result[0].issueFields).toBeDefined();
+      expect(result[0].issueFields.length).toBe(1);
+      expect(result[0].issueFields[0].name).toBe('Priority');
+    });
+
+    test('should merge base issue-fields-file with per-org overrides in organizations-file', () => {
+      const orgsYaml = `orgs:
+  - org: my-org
+  - org: my-other-org
+    issue-fields:
+      - name: Priority
+        data-type: single_select
+        options:
+          - name: Critical
+            color: red
+            priority: 1
+          - name: Normal
+            color: yellow
+            priority: 2
+`;
+      const ifYaml = `- name: Priority
+  data-type: single_select
+  options:
+    - name: High
+      color: red
+      priority: 1
+    - name: Medium
+      color: yellow
+      priority: 2
+- name: Target date
+  data-type: date
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+      setMockFileContent(ifYaml, '/mock/issue-fields.yml');
+      const result = parseOrganizations(
+        '',
+        '/mock/orgs.yml',
+        '',
+        [],
+        false,
+        '',
+        null,
+        '',
+        '',
+        null,
+        '',
+        null,
+        '',
+        '',
+        '',
+        '',
+        '/mock/issue-fields.yml'
+      );
+
+      expect(result).toHaveLength(2);
+      expect(result[0].issueFields.length).toBe(2);
+      expect(result[1].issueFields.length).toBe(2);
+      const priorityField = result[1].issueFields.find(field => field.name === 'Priority');
+      expect(priorityField.options[0].name).toBe('Critical');
     });
   });
 
@@ -1844,6 +1976,243 @@ orgs:
     });
   });
 
+  // ─── normalizeIssueFields ────────────────────────────────────────────────
+
+  describe('normalizeIssueFields', () => {
+    test('should normalize a single_select issue field', () => {
+      const result = normalizeIssueFields([
+        {
+          name: 'Priority',
+          'data-type': 'single_select',
+          description: 'Priority level',
+          visibility: 'all',
+          options: [
+            { name: 'High', color: 'red', priority: 1 },
+            { name: 'Medium', color: 'yellow', priority: 2 }
+          ]
+        }
+      ]);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].name).toBe('Priority');
+      expect(result[0].data_type).toBe('single_select');
+      expect(result[0].options).toHaveLength(2);
+      expect(result[0].visibility).toBe('all');
+    });
+
+    test('should throw when data-type is missing', () => {
+      expect(() => normalizeIssueFields([{ name: 'Priority' }])).toThrow('must have a non-empty "data-type" field');
+    });
+
+    test('should throw for invalid option color', () => {
+      expect(() =>
+        normalizeIssueFields([
+          {
+            name: 'Priority',
+            'data-type': 'single_select',
+            options: [{ name: 'High', color: 'black' }]
+          }
+        ])
+      ).toThrow('has invalid color');
+    });
+  });
+
+  // ─── compareIssueField ──────────────────────────────────────────────────
+
+  describe('compareIssueField', () => {
+    test('should detect no changes for identical issue fields', () => {
+      const existing = {
+        name: 'Priority',
+        description: 'Priority level',
+        data_type: 'single_select',
+        visibility: 'organization_members_only',
+        options: [
+          { name: 'High', description: null, color: 'red', priority: 1 },
+          { name: 'Medium', description: null, color: 'yellow', priority: 2 }
+        ]
+      };
+
+      const desired = {
+        name: 'Priority',
+        description: 'Priority level',
+        data_type: 'single_select',
+        visibility: 'organization_members_only',
+        options: [
+          { name: 'High', description: null, color: 'red', priority: 1 },
+          { name: 'Medium', description: null, color: 'yellow', priority: 2 }
+        ]
+      };
+
+      const { changed, incompatibleTypeChange } = compareIssueField(existing, desired);
+      expect(changed).toBe(false);
+      expect(incompatibleTypeChange).toBe(false);
+    });
+
+    test('should detect data_type changes as incompatible', () => {
+      const existing = { name: 'Priority', description: null, data_type: 'text' };
+      const desired = { name: 'Priority', description: null, data_type: 'single_select', options: [] };
+
+      const { changed, incompatibleTypeChange } = compareIssueField(existing, desired);
+      expect(changed).toBe(true);
+      expect(incompatibleTypeChange).toBe(true);
+    });
+  });
+
+  // ─── parseIssueFieldsFile ───────────────────────────────────────────────
+
+  describe('parseIssueFieldsFile', () => {
+    test('should throw for missing file', () => {
+      expect(() => parseIssueFieldsFile('/nonexistent/file.yml')).toThrow('not found');
+    });
+
+    test('should parse the issue fields file', () => {
+      const ifYaml = `- name: Priority
+  data-type: single_select
+  options:
+    - name: High
+      color: red
+      priority: 1
+    - name: Medium
+      color: yellow
+      priority: 2
+- name: Target date
+  data-type: date
+`;
+      setMockFileContent(ifYaml, '/mock/issue-fields.yml');
+      const result = parseIssueFieldsFile('/mock/issue-fields.yml');
+
+      expect(result).toHaveLength(2);
+      expect(result[0].name).toBe('Priority');
+      expect(result[0].data_type).toBe('single_select');
+      expect(result[1].data_type).toBe('date');
+    });
+  });
+
+  // ─── mergeIssueFields ───────────────────────────────────────────────────
+
+  describe('mergeIssueFields', () => {
+    test('should merge and override by name', () => {
+      const base = [{ name: 'Priority', data_type: 'text', description: null, visibility: null, options: null }];
+      const overrides = [
+        {
+          name: 'Priority',
+          data_type: 'single_select',
+          description: null,
+          visibility: null,
+          options: [{ name: 'High', description: null, color: 'red', priority: 1 }]
+        }
+      ];
+
+      const result = mergeIssueFields(base, overrides);
+      expect(result).toHaveLength(1);
+      expect(result[0].data_type).toBe('single_select');
+    });
+  });
+
+  // ─── syncIssueFields ────────────────────────────────────────────────────
+
+  describe('syncIssueFields', () => {
+    const desiredIssueFields = [
+      {
+        name: 'Priority',
+        description: 'Priority level',
+        data_type: 'single_select',
+        visibility: 'organization_members_only',
+        options: [
+          { name: 'High', description: null, color: 'red', priority: 1 },
+          { name: 'Medium', description: null, color: 'yellow', priority: 2 }
+        ]
+      }
+    ];
+
+    test('should create a new issue field when none exist', async () => {
+      mockRequest.mockResolvedValueOnce({ data: [] });
+      mockRequest.mockResolvedValueOnce({ data: { id: 1, name: 'Priority' } });
+
+      const result = await syncIssueFields(mockOctokit, 'my-org', desiredIssueFields, false, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('issue-field-create');
+      expect(mockRequest).toHaveBeenCalledWith(
+        'POST /orgs/{org}/issue-fields',
+        expect.objectContaining({ org: 'my-org', name: 'Priority', data_type: 'single_select' })
+      );
+    });
+
+    test('should preserve option ids when updating single_select options', async () => {
+      mockRequest.mockResolvedValueOnce({
+        data: [
+          {
+            id: 1,
+            name: 'Priority',
+            description: 'Priority level',
+            data_type: 'single_select',
+            visibility: 'organization_members_only',
+            options: [
+              { id: 11, name: 'High', description: null, color: 'red', priority: 1 },
+              { id: 12, name: 'Medium', description: null, color: 'yellow', priority: 2 }
+            ]
+          }
+        ]
+      });
+      mockRequest.mockResolvedValueOnce({ data: {} });
+
+      const desired = [
+        {
+          ...desiredIssueFields[0],
+          options: [
+            { name: 'High', description: null, color: 'orange', priority: 1 },
+            { name: 'Medium', description: null, color: 'yellow', priority: 2 }
+          ]
+        }
+      ];
+      await syncIssueFields(mockOctokit, 'my-org', desired, false, false);
+
+      expect(mockRequest).toHaveBeenCalledWith(
+        'PATCH /orgs/{org}/issue-fields/{issue_field_id}',
+        expect.objectContaining({
+          org: 'my-org',
+          issue_field_id: 1,
+          options: [
+            expect.objectContaining({ id: 11, name: 'High', color: 'orange', priority: 1 }),
+            expect.objectContaining({ id: 12, name: 'Medium', color: 'yellow', priority: 2 })
+          ]
+        })
+      );
+    });
+
+    test('should skip issue fields with permission warning on 404 GET', async () => {
+      const error404 = new Error('Not Found');
+      error404.status = 404;
+      mockRequest.mockRejectedValueOnce(error404);
+
+      const result = await syncIssueFields(mockOctokit, 'my-org', desiredIssueFields, false, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('issue-field-fetch');
+      expect(result.subResults[0].status).toBe('warning');
+      expect(result.failed).toBe(false);
+      expect(mockRequest).toHaveBeenCalledTimes(1);
+    });
+
+    test('should fail update when data_type changes', async () => {
+      mockRequest.mockResolvedValueOnce({
+        data: [{ id: 1, name: 'Priority', description: null, data_type: 'text' }]
+      });
+      const desired = [
+        { name: 'Priority', description: null, data_type: 'single_select', visibility: null, options: [] }
+      ];
+
+      const result = await syncIssueFields(mockOctokit, 'my-org', desired, false, false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('issue-field-update');
+      expect(result.subResults[0].status).toBe('warning');
+      expect(result.failed).toBe(true);
+      expect(mockRequest).toHaveBeenCalledTimes(1);
+    });
+  });
+
   // ─── syncCustomProperties ──────────────────────────────────────────────
 
   describe('syncCustomProperties', () => {
@@ -2501,6 +2870,54 @@ orgs:
       });
 
       // Mock: no existing issue types
+      mockRequest.mockResolvedValueOnce({ data: [] });
+
+      await run();
+
+      expect(mockCore.setFailed).not.toHaveBeenCalled();
+      expect(mockCore.setOutput).toHaveBeenCalledWith('updated-organizations', '1');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-organizations', '1');
+    });
+
+    test('should process organizations with issue-fields-file input', async () => {
+      const ifYaml = `- name: Priority
+  data-type: single_select
+  options:
+    - name: High
+      color: red
+      priority: 1
+    - name: Medium
+      color: yellow
+      priority: 2
+`;
+      setMockFileContent(ifYaml, '/mock/issue-fields.yml');
+
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          'github-api-url': 'https://api.github.com',
+          organizations: 'my-org',
+          'organizations-file': '',
+          'custom-properties-file': '',
+          'issue-fields-file': '/mock/issue-fields.yml',
+          'issue-types-file': '',
+          'rulesets-file': '',
+          'delete-unmanaged-properties': 'false',
+          'delete-unmanaged-issue-fields': 'false',
+          'delete-unmanaged-rulesets': 'false',
+          'dry-run': 'true'
+        };
+        return inputs[name] ?? '';
+      });
+      mockCore.getBooleanInput.mockImplementation(name => {
+        if (name === 'dry-run') return true;
+        if (name === 'delete-unmanaged-properties') return false;
+        if (name === 'delete-unmanaged-issue-fields') return false;
+        if (name === 'delete-unmanaged-rulesets') return false;
+        return false;
+      });
+
+      // Mock: no existing issue fields
       mockRequest.mockResolvedValueOnce({ data: [] });
 
       await run();

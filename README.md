@@ -18,6 +18,7 @@ Please refer to the [release page](https://github.com/joshjohanning/bulk-github-
 - 🏷️ Sync custom property definitions across organizations
 - 📋 Sync organization-level rulesets across organizations
 - 🏷️ Sync issue type definitions across organizations
+- 🧩 Sync issue field definitions across organizations
 - 🔧 Sync member privileges and repository policies across organizations
 - 📁 Sync `.github` and `.github-private` repository files across organizations (via PR)
 - 🔒 Sync code security configurations across organizations
@@ -76,6 +77,7 @@ For stronger security and higher rate limits, use a GitHub App:
    - **Custom organization roles**: Write (required for managing custom organization roles)
    - **Custom repository roles**: Write (required for managing custom repository roles)
    - **Issue types**: Write (required for managing issue type definitions)
+   - **Issue fields**: Write (required for managing issue field definitions)
 
    **Repository permissions** _(only required for `.github`/`.github-private` repo sync)_:
    - **Contents**: Read and write
@@ -189,7 +191,7 @@ orgs:
 
 **Optional: `base-path`**
 
-Use the `base-path` top-level property to avoid repeating a common directory prefix for all file-path settings (`custom-properties-file`, `issue-types-file`, `rulesets-file`). Relative paths in per-org overrides are resolved relative to `base-path`. Absolute paths are left unchanged.
+Use the `base-path` top-level property to avoid repeating a common directory prefix for all file-path settings (`custom-properties-file`, `issue-types-file`, `issue-fields-file`, `rulesets-file`). Relative paths in per-org overrides are resolved relative to `base-path`. Absolute paths are left unchanged.
 
 ```yaml
 base-path: './config/'
@@ -265,6 +267,7 @@ The file-based form lets you keep per-org config in separate files while still u
 | ---------------------------------- | ------------------------------------ | ----------------------------------------- | -------------------------- |
 | Custom properties                  | `custom-properties`                  | `custom-properties-file`                  | Merge by `name` with base  |
 | Issue types                        | `issue-types`                        | `issue-types-file`                        | Merge by `name` with base  |
+| Issue fields                       | `issue-fields`                       | `issue-fields-file`                       | Merge by `name` with base  |
 | Custom organization roles          | `custom-org-roles`                   | `custom-org-roles-file`                   | Merge by `name` with base  |
 | Custom repository roles            | `custom-repo-roles`                  | `custom-repo-roles-file`                  | Merge by `name` with base  |
 | Code security configurations       | `code-security-configurations`       | `code-security-configurations-file`       | Merge by `name` with base  |
@@ -286,7 +289,7 @@ For features that support both forms, precedence is:
 When both inline and file-based per-org overrides are set for the same org:
 
 - For **replace-semantics** features (currently `organization-role-team-assignments`), inline takes precedence and the per-org file is ignored.
-- For **merge-by-name** features (`custom-properties`, `issue-types`, `custom-org-roles`, `custom-repo-roles`, `code-security-configurations`), the per-org file becomes that org's base and inline entries then merge on top by `name`.
+- For **merge-by-name** features (`custom-properties`, `issue-types`, `issue-fields`, `custom-org-roles`, `custom-repo-roles`, `code-security-configurations`), the per-org file becomes that org's base and inline entries then merge on top by `name`.
 
 ### Merge vs replace
 
@@ -659,6 +662,111 @@ By default, syncing issue types will create or update the specified types, but w
 - Updates issue types that differ from the config
 - **Deletes all other issue types not defined in the config**
 - In dry-run mode, shows which issue types would be deleted without actually deleting them
+
+---
+
+## Syncing Issue Fields
+
+Sync organization-level issue field definitions across organizations. Issue fields let you add structured metadata (for example priority, effort, target date) to issues.
+
+> [!TIP]
+> 📄 **See full example:** [sample-configuration/issue-fields.yml](sample-configuration/issue-fields.yml)
+
+Create an `issue-fields.yml` file:
+
+```yaml
+- name: Priority
+  description: 'Issue priority'
+  data-type: single_select
+  visibility: organization_members_only
+  options:
+    - name: Urgent
+      color: red
+      priority: 1
+    - name: High
+      color: orange
+      priority: 2
+    - name: Medium
+      color: yellow
+      priority: 3
+    - name: Low
+      color: green
+      priority: 4
+
+- name: Target date
+  description: 'Target completion date'
+  data-type: date
+```
+
+Use in workflow:
+
+```yml
+- name: Sync Organization Settings
+  uses: joshjohanning/bulk-github-org-settings-sync-action@v1
+  with:
+    github-token: ${{ secrets.ORG_ADMIN_TOKEN }}
+    organizations: 'my-org'
+    issue-fields-file: './issue-fields.yml'
+```
+
+**Behavior:**
+
+- If an issue field with the same name doesn't exist, it is created
+- If it exists but differs from the config, it is updated
+- If content is identical, no changes are made
+- With `delete-unmanaged-issue-fields: true`, issue fields not in the config are deleted
+
+### Issue Field Fields
+
+Each issue field supports these fields:
+
+| Field         | Description                                                                        | Required    | Default     |
+| ------------- | ---------------------------------------------------------------------------------- | ----------- | ----------- |
+| `name`        | Issue field name                                                                   | Yes         |             |
+| `description` | Human-readable description                                                         | No          |             |
+| `data-type`   | Field type: `text`, `date`, `single_select`, `number`                              | Yes         |             |
+| `visibility`  | Field visibility: `organization_members_only` or `all`                             | No          | API default |
+| `options`     | Required for `single_select`; list of options with `name`, `color`, and `priority` | Conditional |             |
+
+### Per-Org Issue Fields Override
+
+In `orgs.yml`, override issue fields per org either inline or by pointing at a different file. Per-org issue fields are merged with the base by `name`; see [Per-Org Overrides: Inline vs File-Based](#per-org-overrides-inline-vs-file-based) for precedence and merge rules.
+
+```yaml
+orgs:
+  - org: my-org
+    # inherits base issue-fields-file from action input
+
+  - org: inline-org
+    issue-fields: # inline override (merges with base by name)
+      - name: Priority
+        data-type: single_select
+        options:
+          - name: Critical
+            color: red
+            priority: 1
+          - name: Normal
+            color: yellow
+            priority: 2
+    delete-unmanaged-issue-fields: true
+
+  - org: file-based-org
+    issue-fields-file: './config/issue-fields/file-based-org.yml' # file-based override
+```
+
+### Delete Unmanaged Issue Fields
+
+By default, syncing issue fields will create or update the specified fields, but will not delete other issue fields that may exist in the organization. To delete all other issue fields not defined in the config, use `delete-unmanaged-issue-fields`:
+
+```yml
+- name: Sync Organization Settings
+  uses: joshjohanning/bulk-github-org-settings-sync-action@v1
+  with:
+    github-token: ${{ secrets.ORG_ADMIN_TOKEN }}
+    organizations: 'my-org'
+    issue-fields-file: './issue-fields.yml'
+    delete-unmanaged-issue-fields: true
+```
 
 ---
 
@@ -1220,6 +1328,8 @@ orgs:
 | `delete-unmanaged-properties`                             | Delete custom properties not defined in the configuration file                       | No       | `false`                 |
 | `issue-types-file`                                        | Path to a YAML file defining issue type definitions                                  | No       |                         |
 | `delete-unmanaged-issue-types`                            | Delete issue types not defined in the configuration file                             | No       | `false`                 |
+| `issue-fields-file`                                       | Path to a YAML file defining issue field definitions                                 | No       |                         |
+| `delete-unmanaged-issue-fields`                           | Delete issue fields not defined in the configuration file                            | No       | `false`                 |
 | `default-repository-permission`                           | Default permission for org members: `read`, `write`, `admin`, `none`                 | No       |                         |
 | `members-can-create-repositories`                         | Whether members can create repositories                                              | No       |                         |
 | `members-can-create-public-repositories`                  | Whether members can create public repositories                                       | No       |                         |
@@ -1267,7 +1377,7 @@ orgs:
 | `dry-run`                                                 | Preview changes without applying them                                                | No       | `false`                 |
 
 > [!NOTE]
-> You must provide either `organizations` or `organizations-file`. The `custom-properties-file`, `issue-types-file`, `rulesets-file`, `custom-org-roles-file`, `custom-repo-roles-file`, `actions-allow-list-file`, `code-security-configurations-file`, and `organization-role-team-assignments-file` inputs provide base settings for all orgs and can be combined with either approach. Member privilege settings can be provided as individual inputs (e.g., `default-repository-permission`). Actions policy settings can be provided as individual inputs (e.g., `actions-policy-allowed-actions`). Org profile settings can be provided as individual inputs (e.g., `org-name`). The `dot-github-source-dir` and `dot-github-private-source-dir` inputs sync a local directory to the respective special repositories via PR. Per-org overrides in `organizations-file` layer on top of the base unless otherwise noted — see [Per-Org Overrides: Inline vs File-Based](#per-org-overrides-inline-vs-file-based) for which features support inline vs file-path overrides and their precedence and merge semantics.
+> You must provide either `organizations` or `organizations-file`. The `custom-properties-file`, `issue-types-file`, `issue-fields-file`, `rulesets-file`, `custom-org-roles-file`, `custom-repo-roles-file`, `actions-allow-list-file`, `code-security-configurations-file`, and `organization-role-team-assignments-file` inputs provide base settings for all orgs and can be combined with either approach. Member privilege settings can be provided as individual inputs (e.g., `default-repository-permission`). Actions policy settings can be provided as individual inputs (e.g., `actions-policy-allowed-actions`). Org profile settings can be provided as individual inputs (e.g., `org-name`). The `dot-github-source-dir` and `dot-github-private-source-dir` inputs sync a local directory to the respective special repositories via PR. Per-org overrides in `organizations-file` layer on top of the base unless otherwise noted — see [Per-Org Overrides: Inline vs File-Based](#per-org-overrides-inline-vs-file-based) for which features support inline vs file-path overrides and their precedence and merge semantics.
 
 ## Action Outputs
 

@@ -1,0 +1,25 @@
+- name: Priority
+  description: 'Issue priority level'
+  data-type: single_select
+  visibility: organization_members_only
+  options:
+    - name: Urgent
+      color: red
+      priority: 1
+    - name: High
+      color: orange
+      priority: 2
+    - name: Medium
+      color: yellow
+      priority: 3
+    - name: Low
+      color: green
+      priority: 4
+
+- name: Effort
+  description: 'Estimated effort'
+  data-type: number
+
+- name: Target date
+  description: 'Target completion date'
+  data-type: date
