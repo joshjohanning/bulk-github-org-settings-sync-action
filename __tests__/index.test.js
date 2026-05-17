@@ -4830,6 +4830,18 @@ orgs:
       expect(mockRequest).toHaveBeenCalledTimes(1);
       expect(mockRequest).toHaveBeenCalledWith('GET /orgs/{org}', { org: 'test-org' });
     });
+
+    test('should use org-url as the canonical key in blog change messages', async () => {
+      mockRequest.mockResolvedValueOnce({
+        data: { blog: 'https://old.example.com' }
+      });
+
+      const result = await syncOrgProfile(mockOctokit, 'test-org', { blog: 'https://new.example.com' }, true);
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].message).toContain('org-url: https://old.example.com → https://new.example.com');
+    });
   });
 
   describe('parseOrganizations with org profile inputs', () => {
@@ -4925,6 +4937,11 @@ orgs:
   describe('validateOrgConfig with org-profile', () => {
     test('should not warn for valid org-profile key', () => {
       validateOrgConfig({ org: 'my-org', 'org-profile': { 'org-name': 'Test' } }, 'my-org');
+      expect(mockCore.warning).not.toHaveBeenCalled();
+    });
+
+    test('should not warn for top-level org-url alias', () => {
+      validateOrgConfig({ org: 'my-org', 'org-url': 'https://example.com' }, 'my-org');
       expect(mockCore.warning).not.toHaveBeenCalled();
     });
   });

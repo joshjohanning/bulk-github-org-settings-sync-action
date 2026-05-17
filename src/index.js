@@ -265,7 +265,8 @@ const ORG_CONFIG_TOP_LEVEL_KEYS = new Set([
   'actions-policy',
   'actions-allow-list-file',
   'dot-github-source-dir',
-  'dot-github-private-source-dir'
+  'dot-github-private-source-dir',
+  ...ORG_PROFILE_SETTINGS.keys()
 ]);
 
 /**
@@ -3052,7 +3053,9 @@ export async function syncMemberPrivileges(octokit, org, desiredSettings, dryRun
 function buildProfileApiToYamlKeyMap() {
   const map = new Map();
   for (const [yamlKey, setting] of ORG_PROFILE_SETTINGS) {
-    map.set(setting.apiKey, yamlKey);
+    if (!map.has(setting.apiKey)) {
+      map.set(setting.apiKey, yamlKey);
+    }
   }
   return map;
 }
