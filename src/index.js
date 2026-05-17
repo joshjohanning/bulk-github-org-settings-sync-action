@@ -196,6 +196,8 @@ export const ORG_PROFILE_SETTINGS = new Map([
   ['org-location', { apiKey: 'location' }],
   ['org-email', { apiKey: 'email' }],
   ['org-twitter-username', { apiKey: 'twitter_username' }],
+  ['org-url', { apiKey: 'blog' }],
+  // TODO: Remove org-blog input support in next major version.
   ['org-blog', { apiKey: 'blog' }]
 ]);
 
@@ -2719,6 +2721,7 @@ export function parseOrgProfile(config, context) {
 
   const normalized = {};
   const label = context ? ` for org "${context}"` : '';
+  const hasOrgUrl = Object.prototype.hasOwnProperty.call(config, 'org-url');
 
   for (const [yamlKey, value] of Object.entries(config)) {
     const setting = ORG_PROFILE_SETTINGS.get(yamlKey);
@@ -2736,6 +2739,11 @@ export function parseOrgProfile(config, context) {
     normalized[setting.apiKey] = value.trim();
   }
 
+  // org-url supersedes legacy org-blog when both are provided.
+  if (hasOrgUrl) {
+    normalized.blog = config['org-url'].trim();
+  }
+
   return normalized;
 }
 
@@ -2749,10 +2757,20 @@ export function getOrgProfileFromInputs() {
   const result = {};
 
   for (const [yamlKey, setting] of ORG_PROFILE_SETTINGS) {
+    if (yamlKey === 'org-url' || yamlKey === 'org-blog') continue;
     const raw = core.getInput(yamlKey);
     const trimmed = raw.trim();
     if (trimmed === '') continue;
     result[setting.apiKey] = trimmed;
+  }
+
+  const orgBlog = core.getInput('org-blog').trim();
+  const orgUrl = core.getInput('org-url').trim();
+  if (orgBlog !== '') {
+    result.blog = orgBlog;
+  }
+  if (orgUrl !== '') {
+    result.blog = orgUrl;
   }
 
   return Object.keys(result).length > 0 ? result : null;

@@ -106,6 +106,7 @@ orgs:
     org-profile:
       org-name: 'My Other Org'
       org-description: 'Custom description for this org'
+      org-url: 'https://my-other-org.example.com'
     # Per-org code security configuration overrides (layers on top of base code-security-configurations-file)
     # delete-unmanaged-code-security-configurations: true
     code-security-configurations:

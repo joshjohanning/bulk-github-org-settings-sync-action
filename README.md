@@ -664,8 +664,11 @@ Set organization profile fields directly as action inputs:
     org-location: 'San Francisco, CA'
     org-email: 'contact@myorg.com'
     org-twitter-username: 'myorg'
-    org-blog: 'https://myorg.com'
+    org-url: 'https://myorg.com'
 ```
+
+> [!NOTE]
+> `org-blog` is deprecated and still supported for backward compatibility. If both `org-url` and `org-blog` are set, `org-url` takes precedence.
 
 ---
 
@@ -1211,7 +1214,8 @@ orgs:
 | `org-location`                                            | Location                                                                             | No       |                         |
 | `org-email`                                               | Publicly visible email                                                               | No       |                         |
 | `org-twitter-username`                                    | Twitter/X username                                                                   | No       |                         |
-| `org-blog`                                                | Blog/website URL                                                                     | No       |                         |
+| `org-url`                                                 | Website URL                                                                          | No       |                         |
+| `org-blog`                                                | Blog/website URL (deprecated; use `org-url`)                                         | No       |                         |
 | `code-security-configurations-file`                       | Path to a YAML file defining code security configurations to sync                    | No       |                         |
 | `delete-unmanaged-code-security-configurations`           | Delete code security configurations not defined in the configuration file            | No       | `false`                 |
 | `dry-run`                                                 | Preview changes without applying them                                                | No       | `false`                 |
