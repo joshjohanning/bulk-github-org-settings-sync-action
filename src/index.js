@@ -128,6 +128,9 @@ const KNOWN_CUSTOM_PROPERTY_KEYS = new Set([
  * Used to warn about typos or unknown keys.
  */
 const KNOWN_ISSUE_TYPE_KEYS = new Set(['name', 'description', 'color', 'is-enabled']);
+const ISSUE_TYPE_NAMED_COLORS = ['gray', 'blue', 'green', 'yellow', 'orange', 'red', 'pink', 'purple'];
+const ISSUE_TYPE_NAMED_COLOR_SET = new Set(ISSUE_TYPE_NAMED_COLORS);
+const ISSUE_TYPE_HEX_COLOR_REGEX = /^[0-9a-f]{6}$/;
 
 /**
  * Known keys for custom organization role definitions in the YAML file.
@@ -1985,17 +1988,13 @@ export function normalizeIssueTypes(issueTypes) {
     if (Object.prototype.hasOwnProperty.call(it, 'is-enabled') && typeof it['is-enabled'] !== 'boolean') {
       throw new Error(`Issue type "${it.name}" has invalid is-enabled value: expected a boolean`);
     }
-    if (Object.prototype.hasOwnProperty.call(it, 'color') && it.color != null) {
-      if (typeof it.color !== 'string' || !/^[0-9a-fA-F]{6}$/.test(it.color.trim())) {
-        throw new Error(`Issue type "${it.name}" has invalid color: expected a 6-character hex string`);
-      }
-    }
+    const normalizedColor = normalizeConfiguredIssueTypeColor(it.name, it.color);
 
     const normalized = {
       name: it.name,
       is_enabled: it['is-enabled'] ?? true,
       description: it.description || null,
-      color: it.color == null ? null : it.color.trim().toLowerCase()
+      color: normalizedColor
     };
 
     return normalized;
@@ -2017,8 +2016,8 @@ export function compareIssueType(existing, desired) {
   if (existingDesc !== desiredDesc) {
     changes.push(`description updated`);
   }
-  const existingColor = existing.color || null;
-  const desiredColor = desired.color || null;
+  const existingColor = canonicalizeIssueTypeColor(existing.color);
+  const desiredColor = canonicalizeIssueTypeColor(desired.color);
   if (existingColor !== desiredColor) {
     changes.push(`color: ${existingColor || 'none'} → ${desiredColor || 'none'}`);
   }
@@ -2027,6 +2026,50 @@ export function compareIssueType(existing, desired) {
   }
 
   return { changed: changes.length > 0, changes };
+}
+
+/**
+ * Validate and normalize configured issue type colors.
+ * @param {string} issueTypeName - Issue type name
+ * @param {unknown} color - Raw color value
+ * @returns {string | null} Normalized color or null
+ */
+function normalizeConfiguredIssueTypeColor(issueTypeName, color) {
+  if (color == null) {
+    return null;
+  }
+
+  if (typeof color !== 'string') {
+    throw new Error(
+      `Issue type "${issueTypeName}" has invalid color: expected one of ${ISSUE_TYPE_NAMED_COLORS.join(', ')} or a 6-character hex string`
+    );
+  }
+
+  const normalizedColor = color.trim().toLowerCase();
+  if (ISSUE_TYPE_NAMED_COLOR_SET.has(normalizedColor) || ISSUE_TYPE_HEX_COLOR_REGEX.test(normalizedColor)) {
+    return normalizedColor;
+  }
+
+  throw new Error(
+    `Issue type "${issueTypeName}" has invalid color: expected one of ${ISSUE_TYPE_NAMED_COLORS.join(', ')} or a 6-character hex string`
+  );
+}
+
+/**
+ * Canonicalize issue type colors for comparison to avoid case-only drift.
+ * @param {unknown} color - Raw color value
+ * @returns {unknown} Canonicalized color
+ */
+function canonicalizeIssueTypeColor(color) {
+  if (color == null) {
+    return null;
+  }
+
+  if (typeof color !== 'string') {
+    return color;
+  }
+
+  return color.trim().toLowerCase();
 }
 
 /**
