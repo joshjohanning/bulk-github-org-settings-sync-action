@@ -612,12 +612,14 @@ Use in workflow:
 
 Each issue type supports these fields:
 
-| Field         | Description                              | Required | Default |
-| ------------- | ---------------------------------------- | -------- | ------- |
-| `name`        | Issue type name                          | Yes      |         |
-| `description` | Human-readable description               | No       |         |
-| `color`       | 6-character hex color code (without `#`) | No       |         |
-| `is-enabled`  | Whether the issue type is enabled        | No       | `true`  |
+| Field         | Description                                                                                                         | Required | Default |
+| ------------- | ------------------------------------------------------------------------------------------------------------------- | -------- | ------- |
+| `name`        | Issue type name                                                                                                     | Yes      |         |
+| `description` | Human-readable description                                                                                          | No       |         |
+| `color`       | Named color (`gray`, `blue`, `green`, `yellow`, `orange`, `red`, `pink`, `purple`) or 6-character hex (without `#`) | No       |         |
+| `is-enabled`  | Whether the issue type is enabled                                                                                   | No       | `true`  |
+
+Color values are normalized case-insensitively before comparison to avoid unnecessary updates when only letter casing differs.
 
 ### Per-Org Issue Types Override
 

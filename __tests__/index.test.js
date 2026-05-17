@@ -1488,9 +1488,20 @@ orgs:
       expect(result[0].color).toBe('ff0000');
     });
 
+    test('should accept named issue type colors', () => {
+      const result = normalizeIssueTypes([{ name: 'Task', color: ' Blue ' }]);
+      expect(result[0].color).toBe('blue');
+    });
+
     test('should throw for non-string color values', () => {
       expect(() => normalizeIssueTypes([{ name: 'Bug', color: 123456 }])).toThrow(
-        'Issue type "Bug" has invalid color: expected a 6-character hex string'
+        'Issue type "Bug" has invalid color: expected one of gray, blue, green, yellow, orange, red, pink, purple or a 6-character hex string'
+      );
+    });
+
+    test('should throw for invalid string color values', () => {
+      expect(() => normalizeIssueTypes([{ name: 'Bug', color: 'not-a-color' }])).toThrow(
+        'Issue type "Bug" has invalid color: expected one of gray, blue, green, yellow, orange, red, pink, purple or a 6-character hex string'
       );
     });
   });
@@ -1527,6 +1538,15 @@ orgs:
       const { changed, changes } = compareIssueType(existing, desired);
       expect(changed).toBe(true);
       expect(changes).toContain('color: ff0000 → 00ff00');
+    });
+
+    test('should ignore case-only color differences', () => {
+      const existing = { name: 'Task', description: null, color: 'Blue', is_enabled: true };
+      const desired = { ...existing, color: 'blue' };
+
+      const { changed, changes } = compareIssueType(existing, desired);
+      expect(changed).toBe(false);
+      expect(changes).toHaveLength(0);
     });
 
     test('should detect is_enabled change', () => {
