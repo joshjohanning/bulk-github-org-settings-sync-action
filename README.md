@@ -250,6 +250,52 @@ orgs:
 
 ---
 
+## Per-Org Overrides: Inline vs File-Based
+
+Most features that accept a base configuration file (e.g. `custom-properties-file`) also support **per-org overrides** in `orgs.yml`. For each of these features you can override per org in one of two equivalent ways:
+
+- **Inline** — embed the config directly under the org entry (e.g. `custom-properties: [...]`)
+- **File-based** — point the org at a different file (e.g. `custom-properties-file: './config/other-org.yml'`)
+
+The file-based form lets you keep per-org config in separate files while still using a single `orgs.yml` to map orgs. Use whichever form is more convenient for each org — you can mix and match across orgs in the same `orgs.yml`.
+
+### Supported features
+
+| Feature                            | Inline key                           | File-path key                             | Per-org semantics          |
+| ---------------------------------- | ------------------------------------ | ----------------------------------------- | -------------------------- |
+| Custom properties                  | `custom-properties`                  | `custom-properties-file`                  | Merge by `name` with base  |
+| Issue types                        | `issue-types`                        | `issue-types-file`                        | Merge by `name` with base  |
+| Custom organization roles          | `custom-org-roles`                   | `custom-org-roles-file`                   | Merge by `name` with base  |
+| Custom repository roles            | `custom-repo-roles`                  | `custom-repo-roles-file`                  | Merge by `name` with base  |
+| Code security configurations       | `code-security-configurations`       | `code-security-configurations-file`       | Merge by `name` with base  |
+| Organization role team assignments | `organization-role-team-assignments` | `organization-role-team-assignments-file` | Replaces base for that org |
+| Member privileges                  | `member-privileges`                  | _(direct action inputs serve as base)_    | Per-key override of base   |
+| Organization profile               | `org-profile`                        | _(direct action inputs serve as base)_    | Per-key override of base   |
+| Actions policy                     | `actions-policy`                     | _(direct action inputs serve as base)_    | Per-key override of base   |
+| Rulesets                           | _(file only — no inline form)_       | `rulesets-file` (string or YAML array)    | Replaces base for that org |
+| Actions allow list                 | _(file only — no inline form)_       | `actions-allow-list-file`                 | Replaces base for that org |
+
+### Precedence
+
+For features that support both forms, precedence is:
+
+1. **Inline** per-org config (highest)
+2. **File-based** per-org config (`*-file` under the org entry)
+3. **Base** input/file (lowest — applied to all orgs that don't override)
+
+If both inline and file-based per-org overrides are specified for the same org, the inline values take precedence and the file is ignored.
+
+### Merge vs replace
+
+- **Merge by `name`** — per-org list items with the same `name` override the base item; other base items are preserved.
+- **Replaces base for that org** — the entire per-org value replaces the base (no merge).
+- **Per-key override of base** — keys present in the per-org block override base values for those keys only; other base keys are preserved.
+
+> [!TIP]
+> 📄 **See full example:** [sample-configuration/orgs.yml](sample-configuration/orgs.yml)
+
+---
+
 ## Syncing Custom Properties
 
 Sync custom property definitions (schemas) to organizations. Properties define the metadata that can be set on repositories within the organization.
@@ -331,6 +377,28 @@ Each custom property supports these fields:
 > GitHub API-style underscore aliases are also accepted for custom property fields:
 > `value_type`, `default_value`, `allowed_values`, and `values_editable_by`.
 > Hyphenated fields remain supported in v1 for backward compatibility, but are planned to be removed in v2.
+
+### Per-Org Custom Properties Overrides
+
+In `orgs.yml`, override custom properties per org either inline or by pointing at a different file. Per-org properties are merged with the base by `name`; see [Per-Org Overrides: Inline vs File-Based](#per-org-overrides-inline-vs-file-based) for precedence and merge rules.
+
+```yaml
+orgs:
+  - org: my-org
+    # inherits base custom-properties-file as-is
+
+  - org: inline-org
+    custom-properties: # inline override (merges with base by name)
+      - name: team
+        value-type: single_select
+        required: true
+        allowed-values: [platform, frontend, backend, data-science]
+        values-editable-by: org_actors
+    delete-unmanaged-properties: true
+
+  - org: file-based-org
+    custom-properties-file: './config/custom-properties/file-based-org.yml' # file-based override
+```
 
 ### Delete Unmanaged Properties
 
@@ -461,7 +529,7 @@ Sync both rulesets using comma-separated paths:
 
 ### Per-Org Rulesets Override
 
-In `orgs.yml`, use a YAML array to override rulesets for a specific org:
+Rulesets are **file-only** — there is no inline form. Override per org by pointing `rulesets-file` at a different set of JSON files. Per-org rulesets replace the base for that org. See [Per-Org Overrides: Inline vs File-Based](#per-org-overrides-inline-vs-file-based) for precedence.
 
 ```yaml
 orgs:
@@ -469,7 +537,7 @@ orgs:
     # inherits base rulesets-file from action input
 
   - org: my-other-org
-    rulesets-file:
+    rulesets-file: # YAML array of JSON file paths (replaces base for this org)
       - './config/rulesets/branch-protection.json'
       - './config/rulesets/tag-protection.json'
     delete-unmanaged-rulesets: true
@@ -550,20 +618,22 @@ Each issue type supports these fields:
 
 ### Per-Org Issue Types Override
 
-In `orgs.yml`, you can define issue types per-org or use a separate file:
+In `orgs.yml`, override issue types per org either inline or by pointing at a different file. Per-org issue types are merged with the base by `name`; see [Per-Org Overrides: Inline vs File-Based](#per-org-overrides-inline-vs-file-based) for precedence and merge rules.
 
 ```yaml
 orgs:
   - org: my-org
     # inherits base issue-types-file from action input
 
-  - org: my-other-org
-    issue-types-file: './config/issue-types/other-org.yml'
-    delete-unmanaged-issue-types: true
-    issue-types:
+  - org: inline-org
+    issue-types: # inline override (merges with base by name)
       - name: Bug
-        description: 'Critical bug'
+        description: 'Critical bug for this org'
         color: 'ff0000'
+    delete-unmanaged-issue-types: true
+
+  - org: file-based-org
+    issue-types-file: './config/issue-types/file-based-org.yml' # file-based override
 ```
 
 ### Delete Unmanaged Issue Types
@@ -644,6 +714,27 @@ When `delete-unmanaged-org-roles: true`:
 - **Deletes all other custom org roles not defined in the config**
 - In dry-run mode, shows which roles would be deleted without actually deleting them
 
+### Per-Org Custom Org Roles Overrides
+
+In `orgs.yml`, override custom org roles per org either inline or by pointing at a different file. Per-org roles are merged with the base by `name`; see [Per-Org Overrides: Inline vs File-Based](#per-org-overrides-inline-vs-file-based) for precedence and merge rules.
+
+```yaml
+orgs:
+  - org: my-org
+    # inherits base custom-org-roles-file as-is
+
+  - org: inline-org
+    custom-org-roles: # inline override (merges with base by name)
+      - name: Security Auditor
+        description: 'Override for this org'
+        permissions:
+          - read_audit_log
+    delete-unmanaged-org-roles: true
+
+  - org: file-based-org
+    custom-org-roles-file: './config/custom-org-roles/file-based-org.yml' # file-based override
+```
+
 ---
 
 ## Syncing Organization Profile
@@ -665,6 +756,21 @@ Set organization profile fields directly as action inputs:
     org-email: 'contact@myorg.com'
     org-twitter-username: 'myorg'
     org-blog: 'https://myorg.com'
+```
+
+### Per-Org Organization Profile Overrides
+
+In `orgs.yml`, use `org-profile` to override specific profile fields for an org. Per-org keys override base action inputs for those keys only; see [Per-Org Overrides: Inline vs File-Based](#per-org-overrides-inline-vs-file-based).
+
+```yaml
+orgs:
+  - org: my-org
+    # inherits base org profile action inputs
+
+  - org: my-other-org
+    org-profile:
+      org-name: 'Different Name' # override base
+      org-description: 'Custom description for this org'
 ```
 
 ---
@@ -729,44 +835,26 @@ When `delete-unmanaged-repo-roles: true`:
 - **Deletes all other custom repo roles not defined in the config**
 - In dry-run mode, shows which roles would be deleted without actually deleting them
 
-### Per-Org Custom Role Overrides
+### Per-Org Custom Repo Roles Overrides
 
-In `orgs.yml`, you can override custom roles per organization using inline definitions or per-org files:
-
-- Only fields included in the config are managed — omitted fields remain unchanged
-- If all managed fields already match the config, no update/PATCH call is made
-- Fields are applied via a single `PATCH /orgs/{org}` call per organization
-
-### Per-Org Organization Profile Overrides
-
-In `orgs.yml`, use `org-profile` to override specific fields for an org:
+In `orgs.yml`, override custom repository roles per org either inline or by pointing at a different file. Per-org roles are merged with the base by `name`; see [Per-Org Overrides: Inline vs File-Based](#per-org-overrides-inline-vs-file-based) for precedence and merge rules.
 
 ```yaml
 orgs:
   - org: my-org
-    # inherits base roles from custom-org-roles-file / custom-repo-roles-file
+    # inherits base custom-repo-roles-file as-is
 
-  - org: my-other-org
-    custom-org-roles-file: './config/other-org-roles.yml' # Use different file for this org
-    custom-org-roles:
-      - name: Security Auditor
-        description: 'Override for this org'
-        permissions:
-          - read_audit_log
-    custom-repo-roles:
+  - org: inline-org
+    custom-repo-roles: # inline override (merges with base by name)
       - name: Contractor
         description: 'Override for this org'
         base-role: write
         permissions:
           - delete_alerts_code_scanning
-    delete-unmanaged-org-roles: true
     delete-unmanaged-repo-roles: true
-    # inherits base org profile action inputs
 
-  - org: my-other-org
-    org-profile:
-      org-name: 'Different Name' # override base
-      org-description: 'Custom description for this org'
+  - org: file-based-org
+    custom-repo-roles-file: './config/custom-repo-roles/file-based-org.yml' # file-based override
 ```
 
 ---
@@ -807,25 +895,20 @@ This uses GitHub's organization roles APIs and supports built-in roles such as `
 - When `delete-unmanaged: true`, removes teams assigned to that role that are not in the configured desired set
 - In dry-run mode, shows which teams would be added or removed without applying changes
 
-In `orgs.yml`, `organization-role-team-assignments` can be configured inline. Per-org values replace the global `organization-role-team-assignments-file` input for that org:
+In `orgs.yml`, override organization role team assignments per org either inline or by pointing at a different file. Per-org assignments **replace** the base for that org (no merge); see [Per-Org Overrides: Inline vs File-Based](#per-org-overrides-inline-vs-file-based) for precedence.
 
 ```yaml
 orgs:
-  - org: my-org
-    organization-role-team-assignments:
+  - org: inline-org
+    organization-role-team-assignments: # inline override (replaces base for this org)
       - role: security_manager
         teams:
           - security-team
           - appsec
         delete-unmanaged: true
-```
 
-You can also point a specific organization at a different assignments file:
-
-```yaml
-orgs:
-  - org: my-org
-    organization-role-team-assignments-file: './config/my-org-role-team-assignments.yml'
+  - org: file-based-org
+    organization-role-team-assignments-file: './config/org-role-team-assignments/file-based-org.yml' # file-based override
 ```
 
 > [!NOTE]
@@ -887,7 +970,7 @@ Set member privilege settings directly as action inputs:
 
 ### Per-Org Member Privilege Overrides
 
-In `orgs.yml`, use `member-privileges` to override specific settings for an org:
+In `orgs.yml`, use `member-privileges` to override specific settings for an org (per-key override of base inputs). See [Per-Org Overrides: Inline vs File-Based](#per-org-overrides-inline-vs-file-based) for precedence.
 
 ```yaml
 orgs:
@@ -925,48 +1008,7 @@ Per-org overrides can be set in `orgs.yml` using the `dot-github-source-dir` and
 
 ## Syncing Code Security Configurations
 
-| Input                                         | Description                                                                         | Required | Default                 |
-| --------------------------------------------- | ----------------------------------------------------------------------------------- | -------- | ----------------------- |
-| `github-token`                                | GitHub token for API access (requires `admin:org` scope)                            | Yes      |                         |
-| `github-api-url`                              | GitHub API URL (e.g., `https://api.github.com` or `https://ghes.domain.com/api/v3`) | No       | `${{ github.api_url }}` |
-| `organizations`                               | Comma-separated list of organization names                                          | No       |                         |
-| `organizations-file`                          | Path to YAML file containing organization settings configuration                    | No       |                         |
-| `custom-properties-file`                      | Path to a YAML file defining custom property schemas                                | No       |                         |
-| `delete-unmanaged-properties`                 | Delete custom properties not defined in the configuration file                      | No       | `false`                 |
-| `issue-types-file`                            | Path to a YAML file defining issue type definitions                                 | No       |                         |
-| `delete-unmanaged-issue-types`                | Delete issue types not defined in the configuration file                            | No       | `false`                 |
-| `default-repository-permission`               | Default permission for org members: `read`, `write`, `admin`, `none`                | No       |                         |
-| `members-can-create-repositories`             | Whether members can create repositories                                             | No       |                         |
-| `members-can-create-public-repositories`      | Whether members can create public repositories                                      | No       |                         |
-| `members-can-create-private-repositories`     | Whether members can create private repositories                                     | No       |                         |
-| `members-can-create-internal-repositories`    | Whether members can create internal repositories (GHEC/GHES only)                   | No       |                         |
-| `members-can-fork-private-repositories`       | Whether members can fork private repositories                                       | No       |                         |
-| `web-commit-signoff-required`                 | Whether web UI commits require signoff                                              | No       |                         |
-| `members-can-create-pages`                    | Whether members can create GitHub Pages sites                                       | No       |                         |
-| `members-can-create-public-pages`             | Whether members can create public GitHub Pages sites                                | No       |                         |
-| `members-can-create-private-pages`            | Whether members can create private GitHub Pages sites                               | No       |                         |
-| `members-can-invite-outside-collaborators`    | Whether members can invite outside collaborators                                    | No       |                         |
-| `members-can-create-teams`                    | Whether members can create teams                                                    | No       |                         |
-| `members-can-delete-repositories`             | Whether members can delete repositories                                             | No       |                         |
-| `members-can-change-repo-visibility`          | Whether members can change repository visibility                                    | No       |                         |
-| `members-can-delete-issues`                   | Whether members can delete issues                                                   | No       |                         |
-| `default-repository-branch`                   | Default branch name for new repositories                                            | No       |                         |
-| `deploy-keys-enabled-for-repositories`        | Whether deploy keys can be added to repositories                                    | No       |                         |
-| `readers-can-create-discussions`              | Whether users with read access can create discussions                               | No       |                         |
-| `members-can-view-dependency-insights`        | Whether members can view dependency insights                                        | No       |                         |
-| `display-commenter-full-name-setting-enabled` | Whether to display commenter full name in issues and PRs                            | No       |                         |
-| `organization-role-team-assignments-file`     | Path to a YAML file defining organization role team assignments                     | No       |                         |
-| `rulesets-file`                               | Comma-separated paths to JSON files, each with a single org ruleset config          | No       |                         |
-| `delete-unmanaged-rulesets`                   | Delete all other rulesets besides those being synced                                | No       | `false`                 |
-| `custom-org-roles-file`                       | Path to a YAML file defining custom organization role definitions (GHEC only)       | No       |                         |
-| `delete-unmanaged-org-roles`                  | Delete custom org roles not defined in the configuration file                       | No       | `false`                 |
-| `custom-repo-roles-file`                      | Path to a YAML file defining custom repository role definitions (GHEC only)         | No       |                         |
-| `delete-unmanaged-repo-roles`                 | Delete custom repo roles not defined in the configuration file                      | No       | `false`                 |
-| `dry-run`                                     | Preview changes without applying them                                               | No       | `false`                 |
-
-> [!NOTE]
-> You must provide either `organizations` or `organizations-file`. The `custom-properties-file`, `issue-types-file`, `rulesets-file`, `custom-org-roles-file`, `custom-repo-roles-file`, and `organization-role-team-assignments-file` inputs provide base settings for all orgs and can be combined with either approach. Member privilege settings can be provided as individual inputs (e.g., `default-repository-permission`). Per-org overrides in `organizations-file` layer on top of the base unless otherwise noted.
-> Sync named code security configurations across organizations. These configurations define security feature enablement policies (e.g., Dependabot, secret scanning, code scanning) that can be applied to repositories.
+Sync named code security configurations across organizations. These configurations define security feature enablement policies (e.g., Dependabot, secret scanning, code scanning) that can be applied to repositories.
 
 ### Basic Usage
 
@@ -1061,16 +1103,15 @@ For `default-for-new-repos`, values must not conflict:
 
 ### Per-Org Code Security Configuration Overrides
 
-In `orgs.yml`, use `code-security-configurations` to override specific configurations for an org:
+In `orgs.yml`, override code security configurations per org either inline or by pointing at a different file. Per-org configurations are merged with the base by `name`; see [Per-Org Overrides: Inline vs File-Based](#per-org-overrides-inline-vs-file-based) for precedence and merge rules.
 
 ```yaml
 orgs:
   - org: my-org
     # inherits base code-security-configurations-file as-is
 
-  - org: my-other-org
-    # code-security-configurations-file: './other-org-configs.yml' # use a different base file
-    code-security-configurations:
+  - org: inline-org
+    code-security-configurations: # inline override (merges with base by name)
       - name: High risk settings
         description: Stricter settings for this org
         advanced_security: enabled
@@ -1079,6 +1120,10 @@ orgs:
         enforcement: enforced
         attach-scope: all_without_configurations
         default-for-new-repos: private_and_internal
+    delete-unmanaged-code-security-configurations: true
+
+  - org: file-based-org
+    code-security-configurations-file: './config/code-security/file-based-org.yml' # file-based override
 ```
 
 ### Delete Unmanaged Configurations
@@ -1143,7 +1188,7 @@ actions:
 
 ### Per-Org Actions Policy Overrides
 
-In `orgs.yml`, use `actions-policy` to override specific settings for an org:
+In `orgs.yml`, use `actions-policy` to override individual actions policy settings for an org (per-key override of base inputs). The `actions-allow-list-file` is **file-only** — there is no inline form; point it at a different file to override. See [Per-Org Overrides: Inline vs File-Based](#per-org-overrides-inline-vs-file-based) for precedence.
 
 ```yaml
 orgs:
@@ -1152,8 +1197,10 @@ orgs:
 
   - org: my-other-org
     actions-policy:
-      allowed-actions: all # override base
-    # actions-allow-list-file: './config/other-org-allow-list.yml' # override allow list
+      allowed-actions: selected # override base
+      github-owned-allowed: true
+      verified-allowed: true
+    actions-allow-list-file: './config/actions-allow-list/other-org.yml' # file-only override
 ```
 
 ---
@@ -1217,7 +1264,7 @@ orgs:
 | `dry-run`                                                 | Preview changes without applying them                                                | No       | `false`                 |
 
 > [!NOTE]
-> You must provide either `organizations` or `organizations-file`. The `custom-properties-file`, `issue-types-file`, `rulesets-file`, `custom-org-roles-file`, `custom-repo-roles-file`, `actions-allow-list-file`, `code-security-configurations-file`, and `organization-role-team-assignments-file` inputs provide base settings for all orgs and can be combined with either approach. Member privilege settings can be provided as individual inputs (e.g., `default-repository-permission`). Actions policy settings can be provided as individual inputs (e.g., `actions-policy-allowed-actions`). Org profile settings can be provided as individual inputs (e.g., `org-name`). The `dot-github-source-dir` and `dot-github-private-source-dir` inputs sync a local directory to the respective special repositories via PR. Per-org overrides in `organizations-file` layer on top of the base unless otherwise noted.
+> You must provide either `organizations` or `organizations-file`. The `custom-properties-file`, `issue-types-file`, `rulesets-file`, `custom-org-roles-file`, `custom-repo-roles-file`, `actions-allow-list-file`, `code-security-configurations-file`, and `organization-role-team-assignments-file` inputs provide base settings for all orgs and can be combined with either approach. Member privilege settings can be provided as individual inputs (e.g., `default-repository-permission`). Actions policy settings can be provided as individual inputs (e.g., `actions-policy-allowed-actions`). Org profile settings can be provided as individual inputs (e.g., `org-name`). The `dot-github-source-dir` and `dot-github-private-source-dir` inputs sync a local directory to the respective special repositories via PR. Per-org overrides in `organizations-file` layer on top of the base unless otherwise noted — see [Per-Org Overrides: Inline vs File-Based](#per-org-overrides-inline-vs-file-based) for which features support inline vs file-path overrides and their precedence and merge semantics.
 
 ## Action Outputs
 
