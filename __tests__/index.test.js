@@ -83,6 +83,10 @@ inputs:
     description: 'Members can view dependency insights'
   display-commenter-full-name-setting-enabled:
     description: 'Display commenter full name'
+  org-url:
+    description: 'Organization URL'
+  org-blog:
+    description: 'Organization blog URL'
   organization-role-team-assignments-file:
     description: 'Organization role team assignments file'
   rulesets-file:
@@ -4614,16 +4618,22 @@ orgs:
   // ─── Organization Profile ──────────────────────────────────────────────
 
   describe('ORG_PROFILE_SETTINGS', () => {
-    test('should have 7 settings defined', () => {
-      expect(ORG_PROFILE_SETTINGS.size).toBe(7);
+    test('should have 8 settings defined', () => {
+      expect(ORG_PROFILE_SETTINGS.size).toBe(8);
     });
 
-    test('should have unique API keys', () => {
-      const apiKeys = new Set();
+    test('should only duplicate the blog API key for the org-blog/org-url aliases', () => {
+      const apiKeyCounts = new Map();
       for (const [, setting] of ORG_PROFILE_SETTINGS) {
-        expect(apiKeys.has(setting.apiKey)).toBe(false);
-        apiKeys.add(setting.apiKey);
+        apiKeyCounts.set(setting.apiKey, (apiKeyCounts.get(setting.apiKey) || 0) + 1);
       }
+      const duplicated = Array.from(apiKeyCounts.entries()).filter(([, count]) => count > 1);
+      expect(duplicated).toEqual([['blog', 2]]);
+    });
+
+    test('should map both org-url and org-blog to blog', () => {
+      expect(ORG_PROFILE_SETTINGS.get('org-url')).toEqual({ apiKey: 'blog' });
+      expect(ORG_PROFILE_SETTINGS.get('org-blog')).toEqual({ apiKey: 'blog' });
     });
   });
 
@@ -4632,12 +4642,22 @@ orgs:
       const result = parseOrgProfile({
         'org-name': 'My Org',
         'org-description': 'A test org',
-        'org-blog': 'https://example.com'
+        'org-url': 'https://example.com'
       });
       expect(result).toEqual({
         name: 'My Org',
         description: 'A test org',
         blog: 'https://example.com'
+      });
+    });
+
+    test('should prefer org-url when both org-url and org-blog are set', () => {
+      const result = parseOrgProfile({
+        'org-url': 'https://preferred.example.com',
+        'org-blog': 'https://deprecated.example.com'
+      });
+      expect(result).toEqual({
+        blog: 'https://preferred.example.com'
       });
     });
 
@@ -4690,6 +4710,18 @@ orgs:
       expect(result).toEqual({
         name: 'My Org',
         email: 'org@example.com'
+      });
+    });
+
+    test('should prefer org-url over org-blog when both inputs are set', () => {
+      mockCore.getInput.mockImplementation(name => {
+        if (name === 'org-blog') return 'https://deprecated.example.com';
+        if (name === 'org-url') return 'https://preferred.example.com';
+        return '';
+      });
+      const result = getOrgProfileFromInputs();
+      expect(result).toEqual({
+        blog: 'https://preferred.example.com'
       });
     });
   });
@@ -4798,6 +4830,18 @@ orgs:
       expect(mockRequest).toHaveBeenCalledTimes(1);
       expect(mockRequest).toHaveBeenCalledWith('GET /orgs/{org}', { org: 'test-org' });
     });
+
+    test('should use org-url as the canonical key in blog change messages', async () => {
+      mockRequest.mockResolvedValueOnce({
+        data: { blog: 'https://old.example.com' }
+      });
+
+      const result = await syncOrgProfile(mockOctokit, 'test-org', { blog: 'https://new.example.com' }, true);
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].message).toContain('org-url: https://old.example.com → https://new.example.com');
+    });
   });
 
   describe('parseOrganizations with org profile inputs', () => {
@@ -4854,6 +4898,22 @@ orgs:
       });
     });
 
+    test('should prefer top-level org-url over org-blog in orgs file', () => {
+      const orgsYaml = `orgs:
+  - org: my-org
+    org-url: 'https://preferred.example.com'
+    org-blog: 'https://deprecated.example.com'
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+
+      const result = parseOrganizations('', '/mock/orgs.yml');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].orgProfile).toEqual({
+        blog: 'https://preferred.example.com'
+      });
+    });
+
     test('should let nested org-profile override top-level aliases', () => {
       const orgsYaml = `orgs:
   - org: my-org
@@ -4877,6 +4937,11 @@ orgs:
   describe('validateOrgConfig with org-profile', () => {
     test('should not warn for valid org-profile key', () => {
       validateOrgConfig({ org: 'my-org', 'org-profile': { 'org-name': 'Test' } }, 'my-org');
+      expect(mockCore.warning).not.toHaveBeenCalled();
+    });
+
+    test('should not warn for top-level org-url alias', () => {
+      validateOrgConfig({ org: 'my-org', 'org-url': 'https://example.com' }, 'my-org');
       expect(mockCore.warning).not.toHaveBeenCalled();
     });
   });
