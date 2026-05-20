@@ -280,6 +280,9 @@ const ORG_CONFIG_TOP_LEVEL_KEYS = new Set([
   'actions-allow-list-file',
   'dot-github-source-dir',
   'dot-github-private-source-dir',
+  'create-missing-dot-github-repos',
+  'dot-github-repo-visibility',
+  'dot-github-private-repo-visibility',
   ...ORG_PROFILE_SETTINGS.keys()
 ]);
 
@@ -608,7 +611,9 @@ const SYNC_KIND_LABELS = Object.freeze({
   'actions-policy-selected-actions-update': 'actions policy (selected actions updated)',
   'actions-policy-allow-list-update': 'actions policy (allow list updated)',
   'dot-github-sync': '.github repo (synced)',
-  'dot-github-private-sync': '.github-private repo (synced)'
+  'dot-github-private-sync': '.github-private repo (synced)',
+  'dot-github-create': '.github repo (created)',
+  'dot-github-private-create': '.github-private repo (created)'
 });
 
 /**
@@ -629,6 +634,38 @@ function createSubResult(kind, status, message) {
  */
 function isPermissionLikeFetchError(error) {
   return error.status === 403 || error.status === 404;
+}
+
+/**
+ * Allowed visibility values when creating a .github / .github-private repository.
+ */
+const DOT_GITHUB_VISIBILITIES = Object.freeze(['public', 'private', 'internal']);
+
+/**
+ * Validate and normalize a dot-github visibility value.
+ * @param {*} value - Raw value (from action input or YAML)
+ * @param {string} fieldName - Field/input name for error messages
+ * @param {string} [context] - Optional context (e.g., org name) for error messages
+ * @returns {string|undefined} Normalized visibility ('public' | 'private' | 'internal'), or undefined for empty values
+ */
+function validateDotGithubVisibility(value, fieldName, context) {
+  if (value === undefined || value === null || value === '') {
+    return undefined;
+  }
+  if (typeof value !== 'string') {
+    const where = context ? ` for org "${context}"` : '';
+    throw new Error(
+      `Invalid "${fieldName}"${where}: expected one of ${DOT_GITHUB_VISIBILITIES.join(', ')}, got ${typeof value}`
+    );
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!DOT_GITHUB_VISIBILITIES.includes(normalized)) {
+    const where = context ? ` for org "${context}"` : '';
+    throw new Error(
+      `Invalid "${fieldName}"${where}: expected one of ${DOT_GITHUB_VISIBILITIES.join(', ')}, got "${value}"`
+    );
+  }
+  return normalized;
 }
 
 /**
@@ -753,9 +790,11 @@ function formatSubResultStatus(status) {
  * @param {string} [actionsAllowListFile] - Path to actions allow list YAML file (base for all orgs)
  * @param {string} [dotGithubSourceDir] - Path to source directory for .github repo sync
  * @param {string} [dotGithubPrivateSourceDir] - Path to source directory for .github-private repo sync
- * @param {string} [organizationRoleTeamAssignmentsFile] - Path to organization role team assignments YAML file (base for all orgs)
+ * @param {boolean} [createMissingDotGithubRepos] - Whether to create missing .github / .github-private repos before syncing
+ * @param {string} [dotGithubRepoVisibility] - Visibility used when creating the .github repo
+ * @param {string} [dotGithubPrivateRepoVisibility] - Visibility used when creating the .github-private repo
  * @param {string} [issueFieldsFile] - Path to issue fields YAML file (base for all orgs)
- * @returns {Array<{ org: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, issueTypes?: Array, issueFields?: Array, memberPrivileges?: Object, customOrgRoles?: Array, customRepoRoles?: Array, organizationRoleTeamAssignments?: Array, orgProfile?: Object, codeSecurityConfigurations?: Array, deleteUnmanagedCodeSecurityConfigurations?: boolean, actionsPolicy?: Object, actionsAllowList?: string[], dotGithubSourceDir?: string, dotGithubPrivateSourceDir?: string }>} Parsed org configs
+ * @returns {Array<{ org: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, issueTypes?: Array, issueFields?: Array, memberPrivileges?: Object, customOrgRoles?: Array, customRepoRoles?: Array, organizationRoleTeamAssignments?: Array, orgProfile?: Object, codeSecurityConfigurations?: Array, deleteUnmanagedCodeSecurityConfigurations?: boolean, actionsPolicy?: Object, actionsAllowList?: string[], dotGithubSourceDir?: string, dotGithubPrivateSourceDir?: string, createMissingDotGithubRepos?: boolean, dotGithubRepoVisibility?: string, dotGithubPrivateRepoVisibility?: string }>} Parsed org configs
  */
 export function parseOrganizations(
   organizationsInput,
@@ -774,8 +813,21 @@ export function parseOrganizations(
   dotGithubSourceDir,
   dotGithubPrivateSourceDir,
   organizationRoleTeamAssignmentsFile,
+  createMissingDotGithubRepos,
+  dotGithubRepoVisibility,
+  dotGithubPrivateRepoVisibility,
   issueFieldsFile
 ) {
+  if (
+    issueFieldsFile === undefined &&
+    typeof createMissingDotGithubRepos === 'string' &&
+    dotGithubRepoVisibility === undefined &&
+    dotGithubPrivateRepoVisibility === undefined
+  ) {
+    issueFieldsFile = createMissingDotGithubRepos;
+    createMissingDotGithubRepos = undefined;
+  }
+
   let resolvedCodeSecurityConfigurationsFile = codeSecurityConfigurationsFile;
   let resolvedActionsPolicyFromInputs = actionsPolicyFromInputs;
   let resolvedActionsAllowListFile = actionsAllowListFile;
@@ -1067,6 +1119,21 @@ export function parseOrganizations(
       if (!orgConfig.dotGithubPrivateSourceDir && dotGithubPrivateSourceDir) {
         orgConfig.dotGithubPrivateSourceDir = dotGithubPrivateSourceDir;
       }
+
+      // Per-org createMissingDotGithubRepos (falls back to base input)
+      if (orgConfig.createMissingDotGithubRepos === undefined && createMissingDotGithubRepos !== undefined) {
+        orgConfig.createMissingDotGithubRepos = createMissingDotGithubRepos;
+      }
+
+      // Per-org dot-github-repo-visibility (falls back to base input)
+      if (!orgConfig.dotGithubRepoVisibility && dotGithubRepoVisibility) {
+        orgConfig.dotGithubRepoVisibility = dotGithubRepoVisibility;
+      }
+
+      // Per-org dot-github-private-repo-visibility (falls back to base input)
+      if (!orgConfig.dotGithubPrivateRepoVisibility && dotGithubPrivateRepoVisibility) {
+        orgConfig.dotGithubPrivateRepoVisibility = dotGithubPrivateRepoVisibility;
+      }
     }
 
     return orgConfigs;
@@ -1108,7 +1175,10 @@ export function parseOrganizations(
     ...(baseActionsPolicy ? { actionsPolicy: baseActionsPolicy } : {}),
     ...(baseActionsAllowList ? { actionsAllowList: baseActionsAllowList } : {}),
     ...(dotGithubSourceDir ? { dotGithubSourceDir } : {}),
-    ...(dotGithubPrivateSourceDir ? { dotGithubPrivateSourceDir } : {})
+    ...(dotGithubPrivateSourceDir ? { dotGithubPrivateSourceDir } : {}),
+    ...(createMissingDotGithubRepos !== undefined ? { createMissingDotGithubRepos } : {}),
+    ...(dotGithubRepoVisibility ? { dotGithubRepoVisibility } : {}),
+    ...(dotGithubPrivateRepoVisibility ? { dotGithubPrivateRepoVisibility } : {})
   }));
 }
 
@@ -1908,6 +1978,30 @@ export function parseOrganizationsFile(filePath) {
         );
       }
       result.dotGithubPrivateSourceDir = val.trim();
+    }
+
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'create-missing-dot-github-repos')) {
+      const val = orgConfig['create-missing-dot-github-repos'];
+      if (typeof val !== 'boolean') {
+        throw new Error(`Invalid "create-missing-dot-github-repos" for org "${orgConfig.org}": expected a boolean`);
+      }
+      result.createMissingDotGithubRepos = val;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'dot-github-repo-visibility')) {
+      result.dotGithubRepoVisibility = validateDotGithubVisibility(
+        orgConfig['dot-github-repo-visibility'],
+        'dot-github-repo-visibility',
+        orgConfig.org
+      );
+    }
+
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'dot-github-private-repo-visibility')) {
+      result.dotGithubPrivateRepoVisibility = validateDotGithubVisibility(
+        orgConfig['dot-github-private-repo-visibility'],
+        'dot-github-private-repo-visibility',
+        orgConfig.org
+      );
     }
 
     return result;
@@ -4436,13 +4530,18 @@ function formatChangedFilesSummary(changedFiles, limit = 10) {
  * @param {string} sourceDir - Path to the local source directory
  * @param {string} repoName - Target repo name ('.github' or '.github-private')
  * @param {boolean} dryRun - Preview mode
+ * @param {Object} [options] - Optional creation behavior
+ * @param {boolean} [options.createIfMissing=false] - Create the repo on a true 404 before syncing
+ * @param {string} [options.visibility='public'] - Visibility used when creating the repo ('public' | 'private' | 'internal')
  * @returns {Promise<Object>} Result object with subResults
  */
-export async function syncDotGithubRepo(octokit, org, sourceDir, repoName, dryRun) {
+export async function syncDotGithubRepo(octokit, org, sourceDir, repoName, dryRun, options = {}) {
+  const { createIfMissing = false, visibility = repoName === '.github-private' ? 'private' : 'public' } = options;
   const subResults = [];
   const wouldPrefix = dryRun ? 'Would ' : '';
   let hasFailed = false;
   const kindLabel = repoName === '.github-private' ? 'dot-github-private-sync' : 'dot-github-sync';
+  const createKindLabel = repoName === '.github-private' ? 'dot-github-private-create' : 'dot-github-create';
 
   // List local files
   let localFiles;
@@ -4468,15 +4567,59 @@ export async function syncDotGithubRepo(octokit, org, sourceDir, repoName, dryRu
     });
     defaultBranch = repoData.default_branch;
   } catch (error) {
-    if (isPermissionLikeFetchError(error)) {
+    if (error.status === 404 && createIfMissing) {
+      const visibilityFieldName =
+        repoName === '.github-private' ? 'dot-github-private-repo-visibility' : 'dot-github-repo-visibility';
+      const fallbackVisibility = repoName === '.github-private' ? 'private' : 'public';
+      const normalizedVisibility =
+        validateDotGithubVisibility(visibility, visibilityFieldName, org) ?? fallbackVisibility;
+
+      if (dryRun) {
+        const message = `Would create repo ${org}/${repoName} (visibility: ${normalizedVisibility})`;
+        core.info(`  🆕 ${message}`);
+        subResults.push(createSubResult(createKindLabel, SubResultStatus.CHANGED, message));
+        return { subResults, failed: false };
+      }
+
+      core.info(`  🆕 Creating repo ${org}/${repoName} (visibility: ${normalizedVisibility})...`);
+      try {
+        const { data: createdRepo } = await octokit.request('POST /orgs/{org}/repos', {
+          org,
+          name: repoName,
+          visibility: normalizedVisibility,
+          auto_init: true
+        });
+        defaultBranch = createdRepo.default_branch;
+        const message = `Created repo ${org}/${repoName} (visibility: ${normalizedVisibility})`;
+        core.info(`  ✅ ${message}`);
+        subResults.push(createSubResult(createKindLabel, SubResultStatus.CHANGED, message));
+      } catch (createError) {
+        if (createError.status === 422 && normalizedVisibility === 'public') {
+          const message =
+            `Failed to create ${org}/${repoName}: organization "${org}" does not allow public repositories ` +
+            `(likely Enterprise Managed Users or restricted GHEC). ` +
+            `Set "${visibilityFieldName}: internal" (or "private") to override.`;
+          core.warning(`  ⚠️  ${message}`);
+          subResults.push(createSubResult(createKindLabel, SubResultStatus.WARNING, message));
+          return { subResults, failed: true };
+        }
+        const message =
+          `Failed to create repo ${org}/${repoName} (status ${createError.status ?? 'unknown'}): ${createError.message}. ` +
+          `If using a GitHub App, ensure it has "administration: write" at the org level.`;
+        core.warning(`  ⚠️  ${message}`);
+        subResults.push(createSubResult(createKindLabel, SubResultStatus.WARNING, message));
+        return { subResults, failed: true };
+      }
+    } else if (isPermissionLikeFetchError(error)) {
       const message =
         `Repository "${org}/${repoName}" not found or token lacks access (status ${error.status}). ` +
         `If you expect this repository to exist and are using a GitHub App, verify it has the proper permissions and has been installed or re-approved if permissions were recently modified.`;
       core.warning(`  ⚠️  ${message}`);
       subResults.push(createSubResult(kindLabel, SubResultStatus.WARNING, message));
       return { subResults, failed: false };
+    } else {
+      throw error;
     }
-    throw error;
   }
 
   // Fetch the default branch tree once to compare all local files without one Contents API call per file.
@@ -5633,6 +5776,15 @@ export async function run() {
     const deleteUnmanagedIssueFields = getBooleanInput('delete-unmanaged-issue-fields') ?? false;
     const dotGithubSourceDir = core.getInput('dot-github-source-dir') || '';
     const dotGithubPrivateSourceDir = core.getInput('dot-github-private-source-dir') || '';
+    const createMissingDotGithubRepos = getBooleanInput('create-missing-dot-github-repos') ?? false;
+    const dotGithubRepoVisibility = validateDotGithubVisibility(
+      core.getInput('dot-github-repo-visibility') || 'public',
+      'dot-github-repo-visibility'
+    );
+    const dotGithubPrivateRepoVisibility = validateDotGithubVisibility(
+      core.getInput('dot-github-private-repo-visibility') || 'private',
+      'dot-github-private-repo-visibility'
+    );
     const memberPrivilegesFromInputs = getMemberPrivilegesFromInputs();
     const organizationRoleTeamAssignmentsFile = core.getInput('organization-role-team-assignments-file');
     const customOrgRolesFile = core.getInput('custom-org-roles-file');
@@ -5675,6 +5827,9 @@ export async function run() {
       dotGithubSourceDir,
       dotGithubPrivateSourceDir,
       organizationRoleTeamAssignmentsFile,
+      createMissingDotGithubRepos,
+      dotGithubRepoVisibility,
+      dotGithubPrivateRepoVisibility,
       issueFieldsFile
     );
 
@@ -5889,7 +6044,10 @@ export async function run() {
         // Sync .github repo
         if (orgConfig.dotGithubSourceDir) {
           core.info(`  📁 Syncing .github repo from "${orgConfig.dotGithubSourceDir}"...`);
-          const dgResult = await syncDotGithubRepo(octokit, org, orgConfig.dotGithubSourceDir, '.github', dryRun);
+          const dgResult = await syncDotGithubRepo(octokit, org, orgConfig.dotGithubSourceDir, '.github', dryRun, {
+            createIfMissing: orgConfig.createMissingDotGithubRepos ?? createMissingDotGithubRepos,
+            visibility: orgConfig.dotGithubRepoVisibility ?? dotGithubRepoVisibility
+          });
           result.subResults.push(...dgResult.subResults);
 
           if (dgResult.failed) {
@@ -5906,7 +6064,11 @@ export async function run() {
             org,
             orgConfig.dotGithubPrivateSourceDir,
             '.github-private',
-            dryRun
+            dryRun,
+            {
+              createIfMissing: orgConfig.createMissingDotGithubRepos ?? createMissingDotGithubRepos,
+              visibility: orgConfig.dotGithubPrivateRepoVisibility ?? dotGithubPrivateRepoVisibility
+            }
           );
           result.subResults.push(...dgpResult.subResults);
 

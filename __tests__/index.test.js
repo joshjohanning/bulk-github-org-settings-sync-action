@@ -4590,6 +4590,226 @@ orgs:
       expect(result.subResults).toHaveLength(1);
       expect(result.subResults[0].kind).toBe('dot-github-private-sync');
     });
+
+    test('should NOT create repo when createIfMissing is not opted in (default)', async () => {
+      mockFs.readdirSync.mockReturnValue([{ name: 'file.txt', isDirectory: () => false, isFile: () => true }]);
+      mockFs.readFileSync.mockImplementation((filePath, _encoding) => {
+        if (filePath === '/source/file.txt') return Buffer.from('content');
+        if (typeof filePath === 'string' && filePath.endsWith('action.yml')) return mockActionYmlContent;
+        throw new Error(`ENOENT: ${filePath}`);
+      });
+
+      const notFoundError = new Error('Not Found');
+      notFoundError.status = 404;
+      mockRequest.mockRejectedValueOnce(notFoundError);
+
+      const result = await syncDotGithubRepo(mockOctokit, 'my-org', '/source', '.github', false);
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('dot-github-sync');
+      expect(result.subResults[0].status).toBe('warning');
+      // No POST call should have been made
+      expect(mockRequest).toHaveBeenCalledTimes(1);
+    });
+
+    test('should still warn on 403 even when createIfMissing is true (not a 404)', async () => {
+      mockFs.readdirSync.mockReturnValue([{ name: 'file.txt', isDirectory: () => false, isFile: () => true }]);
+      mockFs.readFileSync.mockImplementation((filePath, _encoding) => {
+        if (filePath === '/source/file.txt') return Buffer.from('content');
+        if (typeof filePath === 'string' && filePath.endsWith('action.yml')) return mockActionYmlContent;
+        throw new Error(`ENOENT: ${filePath}`);
+      });
+
+      const forbiddenError = new Error('Forbidden');
+      forbiddenError.status = 403;
+      mockRequest.mockRejectedValueOnce(forbiddenError);
+
+      const result = await syncDotGithubRepo(mockOctokit, 'my-org', '/source', '.github', false, {
+        createIfMissing: true,
+        visibility: 'public'
+      });
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('dot-github-sync');
+      expect(result.subResults[0].status).toBe('warning');
+      expect(result.subResults[0].message).toContain('not found or token lacks access');
+      // No create call attempted
+      expect(mockRequest).toHaveBeenCalledTimes(1);
+    });
+
+    test('should create missing repo on 404 + opt-in and continue sync', async () => {
+      mockFs.readdirSync.mockReturnValue([{ name: 'file.txt', isDirectory: () => false, isFile: () => true }]);
+      mockFs.readFileSync.mockImplementation((filePath, _encoding) => {
+        if (filePath === '/source/file.txt') return Buffer.from('content');
+        if (typeof filePath === 'string' && filePath.endsWith('action.yml')) return mockActionYmlContent;
+        throw new Error(`ENOENT: ${filePath}`);
+      });
+
+      const notFoundError = new Error('Not Found');
+      notFoundError.status = 404;
+
+      mockRequest
+        // GET /repos -> 404
+        .mockRejectedValueOnce(notFoundError)
+        // POST /orgs/{org}/repos -> created
+        .mockResolvedValueOnce({ data: { default_branch: 'main' } })
+        // GET ref
+        .mockResolvedValueOnce({ data: { object: { sha: 'base-sha' } } })
+        // GET commit
+        .mockResolvedValueOnce({ data: { tree: { sha: 'base-tree-sha' } } })
+        // GET tree (empty)
+        .mockResolvedValueOnce({ data: { tree: [] } })
+        // POST blob
+        .mockResolvedValueOnce({ data: { sha: 'new-blob-sha' } })
+        // POST tree
+        .mockResolvedValueOnce({ data: { sha: 'new-tree-sha' } })
+        // POST commit
+        .mockResolvedValueOnce({ data: { sha: 'new-commit-sha' } })
+        // POST ref
+        .mockResolvedValueOnce({ data: {} })
+        // GET pulls
+        .mockResolvedValueOnce({ data: [] })
+        // POST PR
+        .mockResolvedValueOnce({ data: { number: 7, html_url: 'https://github.com/my-org/.github/pull/7' } });
+
+      const result = await syncDotGithubRepo(mockOctokit, 'my-org', '/source', '.github', false, {
+        createIfMissing: true,
+        visibility: 'public'
+      });
+
+      expect(mockRequest).toHaveBeenCalledWith('POST /orgs/{org}/repos', {
+        org: 'my-org',
+        name: '.github',
+        visibility: 'public',
+        auto_init: true
+      });
+
+      const kinds = result.subResults.map(r => r.kind);
+      expect(kinds).toContain('dot-github-create');
+      expect(kinds).toContain('dot-github-sync');
+      const createResult = result.subResults.find(r => r.kind === 'dot-github-create');
+      expect(createResult.status).toBe('changed');
+      expect(createResult.message).toContain('Created repo my-org/.github');
+      expect(result.failed).toBe(false);
+    });
+
+    test('should emit friendly EMU error on 422 when creating with public visibility', async () => {
+      mockFs.readdirSync.mockReturnValue([{ name: 'file.txt', isDirectory: () => false, isFile: () => true }]);
+      mockFs.readFileSync.mockImplementation((filePath, _encoding) => {
+        if (filePath === '/source/file.txt') return Buffer.from('content');
+        if (typeof filePath === 'string' && filePath.endsWith('action.yml')) return mockActionYmlContent;
+        throw new Error(`ENOENT: ${filePath}`);
+      });
+
+      const notFoundError = new Error('Not Found');
+      notFoundError.status = 404;
+      const validationError = new Error(`Visibility can't be public`);
+      validationError.status = 422;
+
+      mockRequest.mockRejectedValueOnce(notFoundError).mockRejectedValueOnce(validationError);
+
+      const result = await syncDotGithubRepo(mockOctokit, 'my-org', '/source', '.github', false, {
+        createIfMissing: true,
+        visibility: 'public'
+      });
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('dot-github-create');
+      expect(result.subResults[0].status).toBe('warning');
+      expect(result.subResults[0].message).toContain('does not allow public repositories');
+      expect(result.subResults[0].message).toContain('dot-github-repo-visibility: internal');
+      expect(result.failed).toBe(true);
+    });
+
+    test('should log "Would create" and skip sync in dry-run when repo missing + opt-in', async () => {
+      mockFs.readdirSync.mockReturnValue([{ name: 'file.txt', isDirectory: () => false, isFile: () => true }]);
+      mockFs.readFileSync.mockImplementation((filePath, _encoding) => {
+        if (filePath === '/source/file.txt') return Buffer.from('content');
+        if (typeof filePath === 'string' && filePath.endsWith('action.yml')) return mockActionYmlContent;
+        throw new Error(`ENOENT: ${filePath}`);
+      });
+
+      const notFoundError = new Error('Not Found');
+      notFoundError.status = 404;
+      mockRequest.mockRejectedValueOnce(notFoundError);
+
+      const result = await syncDotGithubRepo(mockOctokit, 'my-org', '/source', '.github', true, {
+        createIfMissing: true,
+        visibility: 'internal'
+      });
+
+      expect(result.subResults).toHaveLength(1);
+      expect(result.subResults[0].kind).toBe('dot-github-create');
+      expect(result.subResults[0].status).toBe('changed');
+      expect(result.subResults[0].message).toContain('Would create repo my-org/.github');
+      expect(result.subResults[0].message).toContain('visibility: internal');
+      // Only the failed GET; no POST create call in dry-run
+      expect(mockRequest).toHaveBeenCalledTimes(1);
+      expect(result.failed).toBe(false);
+    });
+
+    test('should use dot-github-private-create kind when creating .github-private', async () => {
+      mockFs.readdirSync.mockReturnValue([{ name: 'file.md', isDirectory: () => false, isFile: () => true }]);
+      mockFs.readFileSync.mockImplementation((filePath, _encoding) => {
+        if (filePath === '/source/file.md') return Buffer.from('content');
+        if (typeof filePath === 'string' && filePath.endsWith('action.yml')) return mockActionYmlContent;
+        throw new Error(`ENOENT: ${filePath}`);
+      });
+
+      const notFoundError = new Error('Not Found');
+      notFoundError.status = 404;
+      mockRequest.mockRejectedValueOnce(notFoundError);
+
+      const result = await syncDotGithubRepo(mockOctokit, 'my-org', '/source', '.github-private', true, {
+        createIfMissing: true,
+        visibility: 'private'
+      });
+
+      expect(result.subResults[0].kind).toBe('dot-github-private-create');
+      expect(result.subResults[0].message).toContain('visibility: private');
+    });
+
+    test('should fall back to repo-specific default visibility when visibility option is empty', async () => {
+      mockFs.readdirSync.mockReturnValue([{ name: 'file.md', isDirectory: () => false, isFile: () => true }]);
+      mockFs.readFileSync.mockImplementation((filePath, _encoding) => {
+        if (filePath === '/source/file.md') return Buffer.from('content');
+        if (typeof filePath === 'string' && filePath.endsWith('action.yml')) return mockActionYmlContent;
+        throw new Error(`ENOENT: ${filePath}`);
+      });
+
+      const notFoundError = new Error('Not Found');
+      notFoundError.status = 404;
+      mockRequest.mockRejectedValueOnce(notFoundError);
+
+      const result = await syncDotGithubRepo(mockOctokit, 'my-org', '/source', '.github-private', true, {
+        createIfMissing: true,
+        visibility: ''
+      });
+
+      expect(result.subResults[0].kind).toBe('dot-github-private-create');
+      expect(result.subResults[0].message).toContain('visibility: private');
+      expect(result.subResults[0].message).not.toContain('undefined');
+    });
+
+    test('should reject invalid visibility value when creating', async () => {
+      mockFs.readdirSync.mockReturnValue([{ name: 'file.txt', isDirectory: () => false, isFile: () => true }]);
+      mockFs.readFileSync.mockImplementation((filePath, _encoding) => {
+        if (filePath === '/source/file.txt') return Buffer.from('content');
+        if (typeof filePath === 'string' && filePath.endsWith('action.yml')) return mockActionYmlContent;
+        throw new Error(`ENOENT: ${filePath}`);
+      });
+
+      const notFoundError = new Error('Not Found');
+      notFoundError.status = 404;
+      mockRequest.mockRejectedValueOnce(notFoundError);
+
+      await expect(
+        syncDotGithubRepo(mockOctokit, 'my-org', '/source', '.github', false, {
+          createIfMissing: true,
+          visibility: 'secret'
+        })
+      ).rejects.toThrow(/Invalid "dot-github-repo-visibility"/);
+    });
   });
 
   // ─── parseOrganizations with dot-github inputs ────────────────────────
@@ -4682,6 +4902,103 @@ orgs:
 
       expect(() => parseOrganizations('', '/mock/orgs.yml')).toThrow(
         'Invalid "dot-github-private-source-dir" for org "org1": expected a non-empty string'
+      );
+    });
+
+    test('should propagate createMissingDotGithubRepos and visibility from base inputs', () => {
+      const result = parseOrganizations(
+        'org1,org2',
+        '',
+        '',
+        [],
+        false,
+        '',
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        '/source',
+        '/private-source',
+        null,
+        true,
+        'internal',
+        'private'
+      );
+
+      expect(result).toHaveLength(2);
+      expect(result[0].createMissingDotGithubRepos).toBe(true);
+      expect(result[0].dotGithubRepoVisibility).toBe('internal');
+      expect(result[0].dotGithubPrivateRepoVisibility).toBe('private');
+      expect(result[1].createMissingDotGithubRepos).toBe(true);
+      expect(result[1].dotGithubRepoVisibility).toBe('internal');
+    });
+
+    test('should allow per-org override of dot-github visibility in orgs file', () => {
+      setMockFileContent(
+        `
+orgs:
+  - org: org1
+    dot-github-repo-visibility: internal
+  - org: org2
+`,
+        '/mock/orgs.yml'
+      );
+
+      const result = parseOrganizations(
+        '',
+        '/mock/orgs.yml',
+        '',
+        [],
+        false,
+        '',
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        '/source',
+        '',
+        null,
+        true,
+        'public',
+        'private'
+      );
+
+      expect(result).toHaveLength(2);
+      expect(result[0].dotGithubRepoVisibility).toBe('internal');
+      expect(result[1].dotGithubRepoVisibility).toBe('public');
+    });
+
+    test('should reject invalid per-org dot-github-repo-visibility', () => {
+      setMockFileContent(
+        `
+orgs:
+  - org: org1
+    dot-github-repo-visibility: secret
+`,
+        '/mock/orgs.yml'
+      );
+
+      expect(() => parseOrganizations('', '/mock/orgs.yml')).toThrow(/Invalid "dot-github-repo-visibility".*org1/);
+    });
+
+    test('should reject non-boolean per-org create-missing-dot-github-repos', () => {
+      setMockFileContent(
+        `
+orgs:
+  - org: org1
+    create-missing-dot-github-repos: 'yes'
+`,
+        '/mock/orgs.yml'
+      );
+
+      expect(() => parseOrganizations('', '/mock/orgs.yml')).toThrow(
+        'Invalid "create-missing-dot-github-repos" for org "org1": expected a boolean'
       );
     });
   });
