@@ -588,11 +588,11 @@ const DOT_GITHUB_VISIBILITIES = Object.freeze(['public', 'private', 'internal'])
  * @param {*} value - Raw value (from action input or YAML)
  * @param {string} fieldName - Field/input name for error messages
  * @param {string} [context] - Optional context (e.g., org name) for error messages
- * @returns {string} Normalized visibility ('public' | 'private' | 'internal')
+ * @returns {string|undefined} Normalized visibility ('public' | 'private' | 'internal'), or undefined for empty values
  */
 function validateDotGithubVisibility(value, fieldName, context) {
   if (value === undefined || value === null || value === '') {
-    return value;
+    return undefined;
   }
   if (typeof value !== 'string') {
     const where = context ? ` for org "${context}"` : '';
@@ -4077,11 +4077,9 @@ export async function syncDotGithubRepo(octokit, org, sourceDir, repoName, dryRu
     defaultBranch = repoData.default_branch;
   } catch (error) {
     if (error.status === 404 && createIfMissing) {
-      const normalizedVisibility = validateDotGithubVisibility(
-        visibility,
-        repoName === '.github-private' ? 'dot-github-private-repo-visibility' : 'dot-github-repo-visibility',
-        org
-      );
+      const visibilityFieldName =
+        repoName === '.github-private' ? 'dot-github-private-repo-visibility' : 'dot-github-repo-visibility';
+      const normalizedVisibility = validateDotGithubVisibility(visibility, visibilityFieldName, org);
 
       if (dryRun) {
         const message = `Would create repo ${org}/${repoName} (visibility: ${normalizedVisibility})`;
@@ -4107,7 +4105,7 @@ export async function syncDotGithubRepo(octokit, org, sourceDir, repoName, dryRu
           const message =
             `Failed to create ${org}/${repoName}: organization "${org}" does not allow public repositories ` +
             `(likely Enterprise Managed Users or restricted GHEC). ` +
-            `Set "dot-github-repo-visibility: internal" (or "private") to override.`;
+            `Set "${visibilityFieldName}: internal" (or "private") to override.`;
           core.warning(`  ⚠️  ${message}`);
           subResults.push(createSubResult(createKindLabel, SubResultStatus.WARNING, message));
           return { subResults, failed: true };

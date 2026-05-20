@@ -158,7 +158,7 @@ inputs:
     description: 'Path to a local directory whose contents should be synced to the .github-private repository in each target organization (creates a PR with changes)'
     required: false
   create-missing-dot-github-repos:
-    description: 'Whether to create missing .github / .github-private repositories before syncing (only applies to repos with a configured source-dir). Requires administration:write on the GitHub App at the org level.'
+    description: 'Whether to create missing .github / .github-private repositories before syncing (only applies to repos with a configured source-dir). Requires administration: write on the GitHub App at the org level.'
     required: false
     default: 'false'
   dot-github-repo-visibility:
