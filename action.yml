@@ -41,6 +41,15 @@ inputs:
     required: false
     default: 'false'
 
+  # === Issue Fields ===
+  issue-fields-file:
+    description: 'Path to a YAML file defining issue field definitions to sync to target organizations'
+    required: false
+  delete-unmanaged-issue-fields:
+    description: 'Delete issue fields not defined in the configuration file'
+    required: false
+    default: 'false'
+
   # === Organization Profile ===
   org-name:
     description: 'Organization display name'
