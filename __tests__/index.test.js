@@ -4352,6 +4352,28 @@ orgs:
       expect(result.subResults[0].message).toContain('visibility: private');
     });
 
+    test('should fall back to repo-specific default visibility when visibility option is empty', async () => {
+      mockFs.readdirSync.mockReturnValue([{ name: 'file.md', isDirectory: () => false, isFile: () => true }]);
+      mockFs.readFileSync.mockImplementation((filePath, _encoding) => {
+        if (filePath === '/source/file.md') return Buffer.from('content');
+        if (typeof filePath === 'string' && filePath.endsWith('action.yml')) return mockActionYmlContent;
+        throw new Error(`ENOENT: ${filePath}`);
+      });
+
+      const notFoundError = new Error('Not Found');
+      notFoundError.status = 404;
+      mockRequest.mockRejectedValueOnce(notFoundError);
+
+      const result = await syncDotGithubRepo(mockOctokit, 'my-org', '/source', '.github-private', true, {
+        createIfMissing: true,
+        visibility: ''
+      });
+
+      expect(result.subResults[0].kind).toBe('dot-github-private-create');
+      expect(result.subResults[0].message).toContain('visibility: private');
+      expect(result.subResults[0].message).not.toContain('undefined');
+    });
+
     test('should reject invalid visibility value when creating', async () => {
       mockFs.readdirSync.mockReturnValue([{ name: 'file.txt', isDirectory: () => false, isFile: () => true }]);
       mockFs.readFileSync.mockImplementation((filePath, _encoding) => {

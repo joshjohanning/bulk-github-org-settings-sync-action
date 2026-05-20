@@ -4079,7 +4079,9 @@ export async function syncDotGithubRepo(octokit, org, sourceDir, repoName, dryRu
     if (error.status === 404 && createIfMissing) {
       const visibilityFieldName =
         repoName === '.github-private' ? 'dot-github-private-repo-visibility' : 'dot-github-repo-visibility';
-      const normalizedVisibility = validateDotGithubVisibility(visibility, visibilityFieldName, org);
+      const fallbackVisibility = repoName === '.github-private' ? 'private' : 'public';
+      const normalizedVisibility =
+        validateDotGithubVisibility(visibility, visibilityFieldName, org) ?? fallbackVisibility;
 
       if (dryRun) {
         const message = `Would create repo ${org}/${repoName} (visibility: ${normalizedVisibility})`;

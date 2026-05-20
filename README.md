@@ -1034,7 +1034,7 @@ By default, if the target `.github` or `.github-private` repository doesn't exis
 All three settings (`create-missing-dot-github-repos`, `dot-github-repo-visibility`, `dot-github-private-repo-visibility`) can also be set per-org in `orgs.yml`. Allowed visibility values: `public`, `private`, `internal`.
 
 > [!IMPORTANT]
-> Creating repositories requires `administration: write` on the GitHub App at the organization level, in addition to the existing `contents: write`. If `public` is rejected by the organization (e.g. Enterprise Managed Users or a restricted GHEC org), the action emits an actionable warning suggesting `dot-github-repo-visibility: internal`.
+> Creating repositories requires `administration: write` on the GitHub App at the organization level, in addition to the existing `contents: write`. If `public` is rejected by the organization (e.g. Enterprise Managed Users or a restricted GHEC org), the action emits an actionable warning suggesting the appropriate repo-specific visibility setting: `dot-github-repo-visibility: internal` for `.github`, or `dot-github-private-repo-visibility: internal` for `.github-private`.
 
 ---
 
