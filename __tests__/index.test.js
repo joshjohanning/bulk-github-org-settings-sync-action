@@ -2080,6 +2080,34 @@ orgs:
       expect(changed).toBe(true);
       expect(incompatibleTypeChange).toBe(true);
     });
+
+    test('should ignore single_select option ordering when options are semantically identical', () => {
+      const existing = {
+        name: 'Priority',
+        description: 'Priority level',
+        data_type: 'single_select',
+        visibility: 'organization_members_only',
+        options: [
+          { name: 'Medium', description: null, color: 'yellow', priority: 2 },
+          { name: 'High', description: null, color: 'red', priority: 1 }
+        ]
+      };
+
+      const desired = {
+        name: 'Priority',
+        description: 'Priority level',
+        data_type: 'single_select',
+        visibility: 'organization_members_only',
+        options: [
+          { name: 'High', description: null, color: 'red', priority: 1 },
+          { name: 'Medium', description: null, color: 'yellow', priority: 2 }
+        ]
+      };
+
+      const { changed, incompatibleTypeChange } = compareIssueField(existing, desired);
+      expect(changed).toBe(false);
+      expect(incompatibleTypeChange).toBe(false);
+    });
   });
 
   // ─── parseIssueFieldsFile ───────────────────────────────────────────────
@@ -2234,6 +2262,38 @@ orgs:
       expect(result.subResults[0].status).toBe('warning');
       expect(result.failed).toBe(true);
       expect(mockRequest).toHaveBeenCalledTimes(1);
+    });
+
+    test('should not send options when only non-option fields change', async () => {
+      mockRequest.mockResolvedValueOnce({
+        data: [
+          {
+            id: 1,
+            name: 'Priority',
+            description: 'Old description',
+            data_type: 'single_select',
+            visibility: 'organization_members_only',
+            options: [
+              { id: 12, name: 'Medium', description: null, color: 'yellow', priority: 2 },
+              { id: 11, name: 'High', description: null, color: 'red', priority: 1 }
+            ]
+          }
+        ]
+      });
+      mockRequest.mockResolvedValueOnce({ data: {} });
+
+      const desired = [{ ...desiredIssueFields[0], description: 'New description' }];
+      await syncIssueFields(mockOctokit, 'my-org', desired, false, false);
+
+      expect(mockRequest).toHaveBeenCalledWith(
+        'PATCH /orgs/{org}/issue-fields/{issue_field_id}',
+        expect.objectContaining({
+          org: 'my-org',
+          issue_field_id: 1,
+          description: 'New description'
+        })
+      );
+      expect(mockRequest.mock.calls[1][1]).not.toHaveProperty('options');
     });
   });
 

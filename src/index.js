@@ -2557,6 +2557,17 @@ export function normalizeIssueFields(issueFields) {
   });
 }
 
+function normalizeIssueFieldOptionsForComparison(options) {
+  return (options || [])
+    .map((option, optionIndex) => ({
+      name: option.name,
+      description: option.description || null,
+      color: option.color,
+      priority: option.priority ?? optionIndex + 1
+    }))
+    .sort((a, b) => a.priority - b.priority || a.name.localeCompare(b.name));
+}
+
 /**
  * Compare two issue field definitions to check if they differ.
  * @param {Object} existing - Current issue field from API
@@ -2586,18 +2597,8 @@ export function compareIssueField(existing, desired) {
   }
 
   if (desired.data_type === 'single_select') {
-    const normalizeOptions = options =>
-      (options || [])
-        .map((option, optionIndex) => ({
-          name: option.name,
-          description: option.description || null,
-          color: option.color,
-          priority: option.priority ?? optionIndex + 1
-        }))
-        .sort((a, b) => a.priority - b.priority || a.name.localeCompare(b.name));
-
-    const existingOptions = normalizeOptions(existing.options);
-    const desiredOptions = normalizeOptions(desired.options);
+    const existingOptions = normalizeIssueFieldOptionsForComparison(existing.options);
+    const desiredOptions = normalizeIssueFieldOptionsForComparison(desired.options);
     if (JSON.stringify(existingOptions) !== JSON.stringify(desiredOptions)) {
       changes.push('options updated');
     }
@@ -2711,18 +2712,8 @@ export async function syncIssueFields(octokit, org, desiredIssueFields, deleteUn
 
         if (desired.data_type === 'single_select') {
           const existingOptionsByName = new Map((existing.options || []).map(option => [option.name, option]));
-          const normalizedExistingOptions = (existing.options || []).map((option, optionIndex) => ({
-            name: option.name,
-            description: option.description || null,
-            color: option.color,
-            priority: option.priority ?? optionIndex + 1
-          }));
-          const normalizedDesiredOptions = (desired.options || []).map(option => ({
-            name: option.name,
-            description: option.description || null,
-            color: option.color,
-            priority: option.priority
-          }));
+          const normalizedExistingOptions = normalizeIssueFieldOptionsForComparison(existing.options);
+          const normalizedDesiredOptions = normalizeIssueFieldOptionsForComparison(desired.options);
 
           if (JSON.stringify(normalizedExistingOptions) !== JSON.stringify(normalizedDesiredOptions)) {
             payload.options = (desired.options || []).map(option => {
