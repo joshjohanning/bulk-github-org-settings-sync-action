@@ -615,12 +615,14 @@ Use in workflow:
 
 Each issue type supports these fields:
 
-| Field         | Description                              | Required | Default |
-| ------------- | ---------------------------------------- | -------- | ------- |
-| `name`        | Issue type name                          | Yes      |         |
-| `description` | Human-readable description               | No       |         |
-| `color`       | 6-character hex color code (without `#`) | No       |         |
-| `is-enabled`  | Whether the issue type is enabled        | No       | `true`  |
+| Field         | Description                                                                                                         | Required | Default |
+| ------------- | ------------------------------------------------------------------------------------------------------------------- | -------- | ------- |
+| `name`        | Issue type name                                                                                                     | Yes      |         |
+| `description` | Human-readable description                                                                                          | No       |         |
+| `color`       | Named color (`gray`, `blue`, `green`, `yellow`, `orange`, `red`, `pink`, `purple`) or 6-character hex (without `#`) | No       |         |
+| `is-enabled`  | Whether the issue type is enabled                                                                                   | No       | `true`  |
+
+Color values are normalized case-insensitively before comparison to avoid unnecessary updates when only letter casing differs.
 
 ### Per-Org Issue Types Override
 
@@ -866,8 +868,11 @@ Set organization profile fields directly as action inputs:
     org-location: 'San Francisco, CA'
     org-email: 'contact@myorg.com'
     org-twitter-username: 'myorg'
-    org-blog: 'https://myorg.com'
+    org-url: 'https://myorg.com'
 ```
+
+> [!NOTE]
+> `org-blog` is deprecated and still supported for backward compatibility. If both `org-url` and `org-blog` are set, `org-url` takes precedence.
 
 ### Per-Org Organization Profile Overrides
 
@@ -1371,7 +1376,8 @@ orgs:
 | `org-location`                                            | Location                                                                             | No       |                         |
 | `org-email`                                               | Publicly visible email                                                               | No       |                         |
 | `org-twitter-username`                                    | Twitter/X username                                                                   | No       |                         |
-| `org-blog`                                                | Blog/website URL                                                                     | No       |                         |
+| `org-url`                                                 | Website URL                                                                          | No       |                         |
+| `org-blog`                                                | Blog/website URL (deprecated; use `org-url`)                                         | No       |                         |
 | `code-security-configurations-file`                       | Path to a YAML file defining code security configurations to sync                    | No       |                         |
 | `delete-unmanaged-code-security-configurations`           | Delete code security configurations not defined in the configuration file            | No       | `false`                 |
 | `dry-run`                                                 | Preview changes without applying them                                                | No       | `false`                 |

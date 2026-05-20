@@ -69,8 +69,11 @@ inputs:
   org-twitter-username:
     description: 'Twitter/X username'
     required: false
+  org-url:
+    description: 'Website URL'
+    required: false
   org-blog:
-    description: 'Blog/website URL'
+    description: 'Blog/website URL (deprecated: use org-url)'
     required: false
 
   # === Member Privileges ===

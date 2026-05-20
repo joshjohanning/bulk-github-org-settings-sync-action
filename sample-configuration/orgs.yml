@@ -110,6 +110,7 @@ orgs:
     org-profile:
       org-name: 'My Inline Org'
       org-description: 'Custom description for this org'
+      org-url: 'https://my-inline-org.example.com'
     actions-policy:
       allowed-actions: selected # Override the base actions policy for this org
       github-owned-allowed: true

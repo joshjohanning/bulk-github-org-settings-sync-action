@@ -135,6 +135,9 @@ const KNOWN_ISSUE_FIELD_OPTION_KEYS = new Set(['name', 'description', 'color', '
 const ISSUE_FIELD_DATA_TYPES = new Set(['text', 'date', 'single_select', 'number']);
 const ISSUE_FIELD_VISIBILITIES = new Set(['organization_members_only', 'all']);
 const ISSUE_FIELD_OPTION_COLORS = new Set(['gray', 'blue', 'green', 'yellow', 'orange', 'red', 'pink', 'purple']);
+const ISSUE_TYPE_NAMED_COLORS = ['gray', 'blue', 'green', 'yellow', 'orange', 'red', 'pink', 'purple'];
+const ISSUE_TYPE_NAMED_COLOR_SET = new Set(ISSUE_TYPE_NAMED_COLORS);
+const ISSUE_TYPE_HEX_COLOR_REGEX = /^[0-9a-f]{6}$/;
 
 /**
  * Known keys for custom organization role definitions in the YAML file.
@@ -204,6 +207,8 @@ export const ORG_PROFILE_SETTINGS = new Map([
   ['org-location', { apiKey: 'location' }],
   ['org-email', { apiKey: 'email' }],
   ['org-twitter-username', { apiKey: 'twitter_username' }],
+  ['org-url', { apiKey: 'blog' }],
+  // TODO: Remove org-blog input support in next major version.
   ['org-blog', { apiKey: 'blog' }]
 ]);
 
@@ -274,7 +279,8 @@ const ORG_CONFIG_TOP_LEVEL_KEYS = new Set([
   'actions-policy',
   'actions-allow-list-file',
   'dot-github-source-dir',
-  'dot-github-private-source-dir'
+  'dot-github-private-source-dir',
+  ...ORG_PROFILE_SETTINGS.keys()
 ]);
 
 /**
@@ -2110,17 +2116,13 @@ export function normalizeIssueTypes(issueTypes) {
     if (Object.prototype.hasOwnProperty.call(it, 'is-enabled') && typeof it['is-enabled'] !== 'boolean') {
       throw new Error(`Issue type "${it.name}" has invalid is-enabled value: expected a boolean`);
     }
-    if (Object.prototype.hasOwnProperty.call(it, 'color') && it.color != null) {
-      if (typeof it.color !== 'string' || !/^[0-9a-fA-F]{6}$/.test(it.color.trim())) {
-        throw new Error(`Issue type "${it.name}" has invalid color: expected a 6-character hex string`);
-      }
-    }
+    const normalizedColor = normalizeConfiguredIssueTypeColor(it.name, it.color);
 
     const normalized = {
       name: it.name,
       is_enabled: it['is-enabled'] ?? true,
       description: it.description || null,
-      color: it.color == null ? null : it.color.trim().toLowerCase()
+      color: normalizedColor
     };
 
     return normalized;
@@ -2142,8 +2144,8 @@ export function compareIssueType(existing, desired) {
   if (existingDesc !== desiredDesc) {
     changes.push(`description updated`);
   }
-  const existingColor = existing.color || null;
-  const desiredColor = desired.color || null;
+  const existingColor = canonicalizeIssueTypeColor(existing.color);
+  const desiredColor = canonicalizeIssueTypeColor(desired.color);
   if (existingColor !== desiredColor) {
     changes.push(`color: ${existingColor || 'none'} → ${desiredColor || 'none'}`);
   }
@@ -2152,6 +2154,50 @@ export function compareIssueType(existing, desired) {
   }
 
   return { changed: changes.length > 0, changes };
+}
+
+/**
+ * Validate and normalize configured issue type colors.
+ * @param {string} issueTypeName - Issue type name
+ * @param {unknown} color - Raw color value
+ * @returns {string | null} Normalized color or null
+ */
+function normalizeConfiguredIssueTypeColor(issueTypeName, color) {
+  if (color == null) {
+    return null;
+  }
+
+  if (typeof color !== 'string') {
+    throw new Error(
+      `Issue type "${issueTypeName}" has invalid color: expected one of ${ISSUE_TYPE_NAMED_COLORS.join(', ')} or a 6-character hex string`
+    );
+  }
+
+  const normalizedColor = color.trim().toLowerCase();
+  if (ISSUE_TYPE_NAMED_COLOR_SET.has(normalizedColor) || ISSUE_TYPE_HEX_COLOR_REGEX.test(normalizedColor)) {
+    return normalizedColor;
+  }
+
+  throw new Error(
+    `Issue type "${issueTypeName}" has invalid color: expected one of ${ISSUE_TYPE_NAMED_COLORS.join(', ')} or a 6-character hex string`
+  );
+}
+
+/**
+ * Canonicalize issue type colors for comparison to avoid case-only drift.
+ * @param {unknown} color - Raw color value
+ * @returns {unknown} Canonicalized color
+ */
+function canonicalizeIssueTypeColor(color) {
+  if (color == null) {
+    return null;
+  }
+
+  if (typeof color !== 'string') {
+    return color;
+  }
+
+  return color.trim().toLowerCase();
 }
 
 /**
@@ -3201,6 +3247,7 @@ export function parseOrgProfile(config, context) {
 
   const normalized = {};
   const label = context ? ` for org "${context}"` : '';
+  const hasOrgUrl = Object.prototype.hasOwnProperty.call(config, 'org-url');
 
   for (const [yamlKey, value] of Object.entries(config)) {
     const setting = ORG_PROFILE_SETTINGS.get(yamlKey);
@@ -3218,6 +3265,11 @@ export function parseOrgProfile(config, context) {
     normalized[setting.apiKey] = value.trim();
   }
 
+  // org-url supersedes legacy org-blog when both are provided.
+  if (hasOrgUrl) {
+    normalized.blog = config['org-url'].trim();
+  }
+
   return normalized;
 }
 
@@ -3231,10 +3283,20 @@ export function getOrgProfileFromInputs() {
   const result = {};
 
   for (const [yamlKey, setting] of ORG_PROFILE_SETTINGS) {
+    if (yamlKey === 'org-url' || yamlKey === 'org-blog') continue;
     const raw = core.getInput(yamlKey);
     const trimmed = raw.trim();
     if (trimmed === '') continue;
     result[setting.apiKey] = trimmed;
+  }
+
+  const orgBlog = core.getInput('org-blog').trim();
+  const orgUrl = core.getInput('org-url').trim();
+  if (orgBlog !== '') {
+    result.blog = orgBlog;
+  }
+  if (orgUrl !== '') {
+    result.blog = orgUrl;
   }
 
   return Object.keys(result).length > 0 ? result : null;
@@ -3516,7 +3578,9 @@ export async function syncMemberPrivileges(octokit, org, desiredSettings, dryRun
 function buildProfileApiToYamlKeyMap() {
   const map = new Map();
   for (const [yamlKey, setting] of ORG_PROFILE_SETTINGS) {
-    map.set(setting.apiKey, yamlKey);
+    if (!map.has(setting.apiKey)) {
+      map.set(setting.apiKey, yamlKey);
+    }
   }
   return map;
 }
