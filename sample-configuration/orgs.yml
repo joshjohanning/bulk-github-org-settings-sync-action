@@ -13,6 +13,8 @@
 # merge with the base by `name`; some replace the base for that org. Two
 # features are file-only (no inline form): `rulesets-file` and
 # `actions-allow-list-file`.
+# Custom property values are ordered rules: per-org files replace the base file,
+# and inline rules append after file rules so later rules can override earlier ones.
 #
 # See the README "Per-Org Overrides: Inline vs File-Based" section for the
 # full feature matrix, precedence rules, and merge vs replace semantics:
@@ -48,6 +50,11 @@ orgs:
           - backend
           - data-science
         values-editable-by: org_actors
+    custom-property-values:
+      - repositories:
+          names: [special-service]
+        properties:
+          team: platform
     issue-types:
       - name: Bug
         description: 'Something is broken'
@@ -121,6 +128,7 @@ orgs:
   # Org with per-org FILE-BASED overrides (point to a different config file for this org)
   - org: my-file-based-org
     custom-properties-file: './config/custom-properties/file-based-org.yml'
+    custom-property-values-file: './config/custom-property-values/file-based-org.yml'
     issue-types-file: './config/issue-types/file-based-org.yml'
     issue-fields-file: './config/issue-fields/file-based-org.yml'
     custom-org-roles-file: './config/custom-org-roles/file-based-org.yml'

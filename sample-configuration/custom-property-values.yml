@@ -1,0 +1,24 @@
+# Standalone custom property values file for use with custom-property-values-file input
+# Use with: custom-property-values-file: './custom-property-values.yml'
+#
+# Properties must already exist in the organization custom property schema.
+# Pair this with custom-properties-file when you want this action to manage both
+# the schema and selected repository values.
+
+- repositories:
+    names:
+      - api
+      - web
+    names-file: teams/platform-repos.yml
+    query: 'topic:platform archived:false'
+  properties:
+    team: platform
+    environment:
+      - production
+      - staging
+
+- repositories:
+    names-file: teams/infra-repos.yml
+  properties:
+    team: devops
+    cost-center: CC-1234

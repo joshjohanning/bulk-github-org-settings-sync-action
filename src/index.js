@@ -126,6 +126,13 @@ const KNOWN_CUSTOM_PROPERTY_KEYS = new Set([
 ]);
 
 /**
+ * Known keys for custom property value rules in the YAML file.
+ * Used to warn about typos or unknown keys.
+ */
+const KNOWN_CUSTOM_PROPERTY_VALUE_RULE_KEYS = new Set(['repositories', 'properties']);
+const KNOWN_CUSTOM_PROPERTY_VALUE_REPOSITORIES_KEYS = new Set(['names', 'names-file', 'query']);
+
+/**
  * Known keys for issue type definitions in the YAML file.
  * Used to warn about typos or unknown keys.
  */
@@ -253,6 +260,8 @@ export const ACTIONS_POLICY_SETTINGS = new Map([
 const ORG_CONFIG_TOP_LEVEL_KEYS = new Set([
   'org',
   'custom-properties',
+  'custom-property-values',
+  'custom-property-values-file',
   'custom-properties-file',
   'delete-unmanaged-properties',
   'issue-types',
@@ -345,6 +354,31 @@ export function validateOrgConfig(orgConfig, orgName) {
             `⚠️  Unknown custom property key "${key}" found for property "${propName}" in organization "${orgName}". ` +
               `This key may not exist or may have a typo.`
           );
+        }
+      }
+    }
+  }
+
+  if (Array.isArray(orgConfig['custom-property-values'])) {
+    for (const [index, rule] of orgConfig['custom-property-values'].entries()) {
+      if (typeof rule !== 'object' || rule === null) continue;
+      for (const key of Object.keys(rule)) {
+        if (!KNOWN_CUSTOM_PROPERTY_VALUE_RULE_KEYS.has(key)) {
+          core.warning(
+            `⚠️  Unknown custom property value rule key "${key}" found for rule ${index + 1} in organization "${orgName}". ` +
+              `This key may not exist or may have a typo.`
+          );
+        }
+      }
+
+      if (typeof rule.repositories === 'object' && rule.repositories !== null) {
+        for (const key of Object.keys(rule.repositories)) {
+          if (!KNOWN_CUSTOM_PROPERTY_VALUE_REPOSITORIES_KEYS.has(key)) {
+            core.warning(
+              `⚠️  Unknown custom property value repository selector key "${key}" found for rule ${index + 1} in organization "${orgName}". ` +
+                `This key may not exist or may have a typo.`
+            );
+          }
         }
       }
     }
@@ -487,6 +521,7 @@ export function validateOrgConfig(orgConfig, orgName) {
  */
 const FILE_PATH_CONFIG_KEYS = [
   'custom-properties-file',
+  'custom-property-values-file',
   'issue-types-file',
   'issue-fields-file',
   'rulesets-file',
@@ -575,6 +610,10 @@ const SYNC_KIND_LABELS = Object.freeze({
   'custom-property-update': 'custom property (updated)',
   'custom-property-delete': 'custom property (deleted)',
   'custom-property-fetch': 'custom property (fetch failed)',
+  'custom-property-value-update': 'custom property value (updated)',
+  'custom-property-value-select': 'custom property value (selection warning)',
+  'custom-property-value-conflict': 'custom property value (conflict)',
+  'custom-property-value-fetch': 'custom property value (fetch failed)',
   'issue-type-create': 'issue type (created)',
   'issue-type-update': 'issue type (updated)',
   'issue-type-delete': 'issue type (deleted)',
@@ -794,7 +833,8 @@ function formatSubResultStatus(status) {
  * @param {string} [dotGithubRepoVisibility] - Visibility used when creating the .github repo
  * @param {string} [dotGithubPrivateRepoVisibility] - Visibility used when creating the .github-private repo
  * @param {string} [issueFieldsFile] - Path to issue fields YAML file (base for all orgs)
- * @returns {Array<{ org: string, customProperties?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, issueTypes?: Array, issueFields?: Array, memberPrivileges?: Object, customOrgRoles?: Array, customRepoRoles?: Array, organizationRoleTeamAssignments?: Array, orgProfile?: Object, codeSecurityConfigurations?: Array, deleteUnmanagedCodeSecurityConfigurations?: boolean, actionsPolicy?: Object, actionsAllowList?: string[], dotGithubSourceDir?: string, dotGithubPrivateSourceDir?: string, createMissingDotGithubRepos?: boolean, dotGithubRepoVisibility?: string, dotGithubPrivateRepoVisibility?: string }>} Parsed org configs
+ * @param {string} [customPropertyValuesFile] - Path to custom property values YAML file (base for all orgs)
+ * @returns {Array<{ org: string, customProperties?: Array, customPropertyValues?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, issueTypes?: Array, issueFields?: Array, memberPrivileges?: Object, customOrgRoles?: Array, customRepoRoles?: Array, organizationRoleTeamAssignments?: Array, orgProfile?: Object, codeSecurityConfigurations?: Array, deleteUnmanagedCodeSecurityConfigurations?: boolean, actionsPolicy?: Object, actionsAllowList?: string[], dotGithubSourceDir?: string, dotGithubPrivateSourceDir?: string, createMissingDotGithubRepos?: boolean, dotGithubRepoVisibility?: string, dotGithubPrivateRepoVisibility?: string }>} Parsed org configs
  */
 export function parseOrganizations(
   organizationsInput,
@@ -816,7 +856,8 @@ export function parseOrganizations(
   createMissingDotGithubRepos,
   dotGithubRepoVisibility,
   dotGithubPrivateRepoVisibility,
-  issueFieldsFile
+  issueFieldsFile,
+  customPropertyValuesFile
 ) {
   if (
     issueFieldsFile === undefined &&
@@ -849,6 +890,11 @@ export function parseOrganizations(
   let baseCustomProperties = null;
   if (customPropertiesFile) {
     baseCustomProperties = parseCustomPropertiesFile(customPropertiesFile);
+  }
+
+  let baseCustomPropertyValues = null;
+  if (customPropertyValuesFile) {
+    baseCustomPropertyValues = parseCustomPropertyValuesFile(customPropertyValuesFile);
   }
 
   // Load base issue types from separate file (applies to all orgs)
@@ -934,6 +980,26 @@ export function parseOrganizations(
 
       // Clean up the intermediate field
       delete orgConfig.customPropertiesFile;
+
+      let orgCustomPropertyValuesBase = baseCustomPropertyValues;
+      if (orgConfig.customPropertyValuesFile) {
+        try {
+          orgCustomPropertyValuesBase = parseCustomPropertyValuesFile(orgConfig.customPropertyValuesFile);
+        } catch (error) {
+          throw new Error(
+            `Failed to parse custom property values file "${orgConfig.customPropertyValuesFile}" for organization "${orgConfig.org}": ${error.message}`,
+            { cause: error }
+          );
+        }
+      }
+
+      if (orgCustomPropertyValuesBase || orgConfig.customPropertyValues) {
+        orgConfig.customPropertyValues = [
+          ...(orgCustomPropertyValuesBase || []),
+          ...(orgConfig.customPropertyValues || [])
+        ];
+      }
+      delete orgConfig.customPropertyValuesFile;
 
       // Per-org issue-types-file overrides the base for this org
       let orgIssueTypesBase = baseIssueTypes;
@@ -1155,6 +1221,7 @@ export function parseOrganizations(
   return orgs.map(org => ({
     org,
     ...(baseCustomProperties ? { customProperties: baseCustomProperties } : {}),
+    ...(baseCustomPropertyValues ? { customPropertyValues: baseCustomPropertyValues } : {}),
     ...(baseIssueTypes ? { issueTypes: baseIssueTypes } : {}),
     ...(baseIssueFields ? { issueFields: baseIssueFields } : {}),
     ...(rulesetsFiles && rulesetsFiles.length > 0 ? { rulesetsFiles } : {}),
@@ -1731,7 +1798,7 @@ export function mergeOrgProfile(baseProfile, orgProfile) {
 /**
  * Parse the organizations YAML config file.
  * @param {string} filePath - Path to the YAML file
- * @returns {Array<{ org: string, customPropertiesFile?: string, customProperties?: Array, issueTypesFile?: string, issueTypes?: Array, issueFieldsFile?: string, issueFields?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, deleteUnmanagedProperties?: boolean, deleteUnmanagedIssueTypes?: boolean, deleteUnmanagedIssueFields?: boolean, memberPrivileges?: Object, orgProfile?: Object, codeSecurityConfigurationsFile?: string, codeSecurityConfigurations?: Array, deleteUnmanagedCodeSecurityConfigurations?: boolean, actionsPolicy?: Object, actionsAllowListFile?: string, organizationRoleTeamAssignments?: Array, organizationRoleTeamAssignmentsFile?: string }>}
+ * @returns {Array<{ org: string, customPropertiesFile?: string, customProperties?: Array, customPropertyValuesFile?: string, customPropertyValues?: Array, issueTypesFile?: string, issueTypes?: Array, issueFieldsFile?: string, issueFields?: Array, rulesetsFiles?: string[], deleteUnmanagedRulesets?: boolean, deleteUnmanagedProperties?: boolean, deleteUnmanagedIssueTypes?: boolean, deleteUnmanagedIssueFields?: boolean, memberPrivileges?: Object, orgProfile?: Object, codeSecurityConfigurationsFile?: string, codeSecurityConfigurations?: Array, deleteUnmanagedCodeSecurityConfigurations?: boolean, actionsPolicy?: Object, actionsAllowListFile?: string, organizationRoleTeamAssignments?: Array, organizationRoleTeamAssignmentsFile?: string }>}
  */
 export function parseOrganizationsFile(filePath) {
   if (!fs.existsSync(filePath)) {
@@ -1776,6 +1843,25 @@ export function parseOrganizationsFile(filePath) {
 
     if (orgConfig['custom-properties']) {
       result.customProperties = normalizeCustomProperties(orgConfig['custom-properties']);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'custom-property-values-file')) {
+      const cpvFile = orgConfig['custom-property-values-file'];
+      if (typeof cpvFile !== 'string' || cpvFile.trim() === '') {
+        throw new Error(
+          `Invalid "custom-property-values-file" for org "${orgConfig.org}": expected a non-empty string`
+        );
+      }
+      result.customPropertyValuesFile = cpvFile.trim();
+    }
+
+    if (Object.prototype.hasOwnProperty.call(orgConfig, 'custom-property-values')) {
+      const inlineBaseDir = basePath ? basePath : path.dirname(filePath);
+      result.customPropertyValues = normalizeCustomPropertyValueRules(
+        orgConfig['custom-property-values'],
+        `custom-property-values for org "${orgConfig.org}"`,
+        inlineBaseDir
+      );
     }
 
     if (Object.prototype.hasOwnProperty.call(orgConfig, 'issue-types-file')) {
@@ -2065,6 +2151,165 @@ export function parseCustomPropertiesFile(filePath) {
   }
 
   return normalizeCustomProperties(properties);
+}
+
+/**
+ * Parse a standalone custom property values YAML file.
+ * @param {string} filePath - Path to the YAML file
+ * @returns {Array<Object>} Normalized custom property value rules
+ */
+export function parseCustomPropertyValuesFile(filePath) {
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`Custom property values file not found: ${filePath}`);
+  }
+
+  const content = fs.readFileSync(filePath, 'utf8');
+  const rules = yaml.load(content);
+
+  return normalizeCustomPropertyValueRules(rules, `custom property values file "${filePath}"`, path.dirname(filePath));
+}
+
+/**
+ * Normalize custom property value assignment rules from YAML format.
+ * @param {*} rules - Raw custom property value rules
+ * @param {string} context - Human-readable context for errors
+ * @param {string} [baseDir] - Base directory for nested names-file paths
+ * @returns {Array<Object>} Normalized rules
+ */
+export function normalizeCustomPropertyValueRules(rules, context = 'custom property values', baseDir = '') {
+  if (!Array.isArray(rules)) {
+    throw new Error(`Invalid ${context}: expected an array of rules`);
+  }
+
+  return rules.map((rule, index) => normalizeCustomPropertyValueRule(rule, `${context} rule ${index + 1}`, baseDir));
+}
+
+function normalizeCustomPropertyValueRule(rule, context, baseDir) {
+  if (typeof rule !== 'object' || rule === null || Array.isArray(rule)) {
+    throw new Error(`Invalid ${context}: expected an object`);
+  }
+
+  if (typeof rule.repositories !== 'object' || rule.repositories === null || Array.isArray(rule.repositories)) {
+    throw new Error(`Invalid ${context}: expected "repositories" to be an object`);
+  }
+
+  const repositories = normalizeCustomPropertyValueRepositories(rule.repositories, context, baseDir);
+  const properties = normalizeCustomPropertyValueProperties(rule.properties, context);
+
+  if (repositories.names.length === 0 && !repositories.namesFile && !repositories.query) {
+    throw new Error(`Invalid ${context}: at least one repository selector is required`);
+  }
+
+  return { repositories, properties };
+}
+
+function normalizeCustomPropertyValueRepositories(repositories, context, baseDir) {
+  const names = normalizeRepositoryNames(repositories.names, `${context} repositories.names`);
+  let namesFile;
+  if (Object.prototype.hasOwnProperty.call(repositories, 'names-file')) {
+    const value = repositories['names-file'];
+    if (typeof value !== 'string' || value.trim() === '') {
+      throw new Error(`Invalid ${context} repositories.names-file: expected a non-empty string`);
+    }
+    namesFile = baseDir ? resolveFilePath(baseDir, value) : value.trim();
+  }
+
+  let query;
+  if (Object.prototype.hasOwnProperty.call(repositories, 'query')) {
+    if (typeof repositories.query !== 'string' || repositories.query.trim() === '') {
+      throw new Error(`Invalid ${context} repositories.query: expected a non-empty string`);
+    }
+    query = repositories.query.trim();
+  }
+
+  return { names, ...(namesFile ? { namesFile } : {}), ...(query ? { query } : {}) };
+}
+
+function normalizeRepositoryNames(value, context) {
+  if (value === undefined || value === null) {
+    return [];
+  }
+
+  const rawNames =
+    typeof value === 'string'
+      ? value
+          .split(',')
+          .map(v => v.trim())
+          .filter(v => v.length > 0)
+      : value;
+
+  if (!Array.isArray(rawNames)) {
+    throw new Error(`Invalid ${context}: expected a comma-separated string or array of repository names`);
+  }
+
+  const names = [];
+  const seen = new Set();
+  for (const name of rawNames) {
+    if (typeof name !== 'string' || name.trim() === '') {
+      throw new Error(`Invalid ${context}: expected repository names to be non-empty strings`);
+    }
+    const trimmed = name.trim();
+    if (trimmed.includes('/')) {
+      throw new Error(`Invalid ${context}: repository "${trimmed}" must be a bare repository name without "org/"`);
+    }
+    const key = trimmed.toLowerCase();
+    if (!seen.has(key)) {
+      names.push(trimmed);
+      seen.add(key);
+    }
+  }
+
+  return names;
+}
+
+function normalizeCustomPropertyValueProperties(properties, context) {
+  if (typeof properties !== 'object' || properties === null || Array.isArray(properties)) {
+    throw new Error(`Invalid ${context}: expected "properties" to be an object mapping property names to values`);
+  }
+
+  const normalized = [];
+  for (const [propertyName, value] of Object.entries(properties)) {
+    if (!propertyName.trim()) {
+      throw new Error(`Invalid ${context}: property names must be non-empty strings`);
+    }
+
+    normalized.push({
+      property_name: propertyName.trim(),
+      value: normalizeCustomPropertyValue(value)
+    });
+  }
+
+  if (normalized.length === 0) {
+    throw new Error(`Invalid ${context}: at least one property value is required`);
+  }
+
+  return normalized;
+}
+
+function normalizeCustomPropertyValue(value) {
+  if (value === null) {
+    return null;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(v => String(v));
+  }
+
+  return String(value);
+}
+
+function parseRepositoryNamesFile(filePath) {
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`Repository names file not found: ${filePath}`);
+  }
+
+  const content = fs.readFileSync(filePath, 'utf8');
+  const names = yaml.load(content);
+  if (names === null || names === undefined) {
+    return [];
+  }
+
+  return normalizeRepositoryNames(names, `repository names file "${filePath}"`);
 }
 
 /**
@@ -3551,6 +3796,305 @@ export async function syncCustomProperties(octokit, org, desiredProperties, dele
   }
 
   return { subResults, failed: false };
+}
+
+const CUSTOM_PROPERTY_VALUES_BATCH_SIZE = 30;
+
+/**
+ * Sync custom property values for repositories in an organization.
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} org - Organization name
+ * @param {Array<Object>} rules - Custom property value rules
+ * @param {boolean} dryRun - Preview mode
+ * @returns {Promise<Object>} Result object with subResults
+ */
+export async function syncCustomPropertyValues(octokit, org, rules, dryRun) {
+  const subResults = [];
+  const wouldPrefix = dryRun ? 'Would ' : '';
+
+  let repositories;
+  let currentEntries;
+  let schema;
+  try {
+    [repositories, currentEntries, schema] = await Promise.all([
+      octokit.paginate('GET /orgs/{org}/repos', { org, type: 'all', per_page: 100 }),
+      octokit.paginate('GET /orgs/{org}/properties/values', { org, per_page: 100 }),
+      (async () => {
+        const { data } = await octokit.request('GET /orgs/{org}/properties/schema', { org });
+        return data;
+      })()
+    ]);
+  } catch (error) {
+    if (isPermissionLikeFetchError(error)) {
+      const message = formatPermissionFetchWarning('custom property values', org, error);
+      core.warning(`  ⚠️  ${message}`);
+      subResults.push(createSubResult('custom-property-value-fetch', SubResultStatus.WARNING, message));
+      return { subResults, failed: false };
+    }
+    throw error;
+  }
+
+  const repoNameMap = new Map(repositories.map(repo => [repo.name.toLowerCase(), repo.name]));
+  const currentValueMap = buildCurrentPropertyValueMap(currentEntries);
+  const schemaMap = new Map(schema.map(prop => [prop.property_name, prop]));
+  const desiredByRepo = new Map();
+
+  for (const [index, rule] of rules.entries()) {
+    validateCustomPropertyValueRuleAgainstSchema(rule, schemaMap, `rule ${index + 1}`);
+
+    const selectedRepos = await resolveCustomPropertyValueRuleRepositories(
+      octokit,
+      org,
+      rule,
+      index + 1,
+      repoNameMap,
+      subResults
+    );
+
+    if (selectedRepos.length === 0) {
+      const message = `Rule ${index + 1} did not match any repositories`;
+      core.warning(`  ⚠️  ${message}`);
+      subResults.push(createSubResult('custom-property-value-select', SubResultStatus.WARNING, message));
+      continue;
+    }
+
+    for (const repoName of selectedRepos) {
+      if (!desiredByRepo.has(repoName)) {
+        desiredByRepo.set(repoName, new Map());
+      }
+      const repoProperties = desiredByRepo.get(repoName);
+      for (const property of rule.properties) {
+        const existing = repoProperties.get(property.property_name);
+        if (existing !== undefined && !customPropertyValuesEqual(existing, property.value)) {
+          const message =
+            `Repository "${repoName}" property "${property.property_name}" is set by multiple rules; ` +
+            `using value from rule ${index + 1}`;
+          core.warning(`  ⚠️  ${message}`);
+          subResults.push(createSubResult('custom-property-value-conflict', SubResultStatus.WARNING, message));
+        }
+        repoProperties.set(property.property_name, property.value);
+      }
+    }
+  }
+
+  const changes = [];
+  for (const [repoName, desiredProperties] of desiredByRepo.entries()) {
+    const currentProperties = currentValueMap.get(repoName.toLowerCase()) || new Map();
+    const changedProperties = [];
+
+    for (const [propertyName, desiredValue] of desiredProperties.entries()) {
+      const currentValue = currentProperties.get(propertyName);
+      if (!customPropertyValuesEqual(currentValue, desiredValue)) {
+        changedProperties.push({
+          property_name: propertyName,
+          value: desiredValue,
+          currentValue
+        });
+      }
+    }
+
+    if (changedProperties.length > 0) {
+      const diff = changedProperties
+        .map(
+          p =>
+            `${p.property_name}: ${formatCustomPropertyValue(p.currentValue)} -> ${formatCustomPropertyValue(p.value)}`
+        )
+        .join(', ');
+      core.info(`  📝 ${wouldPrefix}Update custom property values for ${repoName}: ${diff}`);
+      subResults.push(
+        createSubResult(
+          'custom-property-value-update',
+          SubResultStatus.CHANGED,
+          `${wouldPrefix}update "${repoName}" (${diff})`
+        )
+      );
+      changes.push({
+        repoName,
+        properties: changedProperties.map(({ property_name, value }) => ({ property_name, value }))
+      });
+    } else {
+      core.info(`  ✅ Custom property values unchanged for ${repoName}`);
+    }
+  }
+
+  if (dryRun || changes.length === 0) {
+    return { subResults, failed: false };
+  }
+
+  let failed = false;
+  for (const group of groupCustomPropertyValueChanges(changes)) {
+    for (const repoChunk of chunkArray(group.repositoryNames, CUSTOM_PROPERTY_VALUES_BATCH_SIZE)) {
+      try {
+        await octokit.request('PATCH /orgs/{org}/properties/values', {
+          org,
+          repository_names: repoChunk,
+          properties: group.properties
+        });
+      } catch (error) {
+        failed = true;
+        const message = `Failed to update custom property values for ${repoChunk.join(', ')}: ${error.message}`;
+        core.warning(`  ⚠️  ${message}`);
+        subResults.push(createSubResult('custom-property-value-update', SubResultStatus.WARNING, message));
+      }
+    }
+  }
+
+  return { subResults, failed };
+}
+
+async function resolveCustomPropertyValueRuleRepositories(octokit, org, rule, ruleNumber, repoNameMap, subResults) {
+  const selected = new Map();
+  const addHardSelectedName = name => {
+    const repoName = repoNameMap.get(name.toLowerCase());
+    if (!repoName) {
+      const message = `Repository "${name}" from custom property value rule ${ruleNumber} was not found in organization "${org}"`;
+      core.warning(`  ⚠️  ${message}`);
+      subResults.push(createSubResult('custom-property-value-select', SubResultStatus.WARNING, message));
+      return;
+    }
+    selected.set(repoName.toLowerCase(), repoName);
+  };
+
+  for (const name of rule.repositories.names) {
+    addHardSelectedName(name);
+  }
+
+  if (rule.repositories.namesFile) {
+    const fileNames = parseRepositoryNamesFile(rule.repositories.namesFile);
+    if (fileNames.length === 0) {
+      const message = `Repository names file "${rule.repositories.namesFile}" is empty`;
+      core.warning(`  ⚠️  ${message}`);
+      subResults.push(createSubResult('custom-property-value-select', SubResultStatus.WARNING, message));
+    }
+    for (const name of fileNames) {
+      addHardSelectedName(name);
+    }
+  }
+
+  if (rule.repositories.query) {
+    const matchingEntries = await octokit.paginate('GET /orgs/{org}/properties/values', {
+      org,
+      repository_query: rule.repositories.query,
+      per_page: 100
+    });
+
+    if (matchingEntries.length === 0) {
+      const message = `Repository query "${rule.repositories.query}" in custom property value rule ${ruleNumber} matched no repositories`;
+      core.warning(`  ⚠️  ${message}`);
+      subResults.push(createSubResult('custom-property-value-select', SubResultStatus.WARNING, message));
+    }
+
+    for (const entry of matchingEntries) {
+      if (entry.repository_name) {
+        selected.set(entry.repository_name.toLowerCase(), entry.repository_name);
+      }
+    }
+  }
+
+  return Array.from(selected.values()).sort((a, b) => a.localeCompare(b));
+}
+
+function validateCustomPropertyValueRuleAgainstSchema(rule, schemaMap, context) {
+  for (const property of rule.properties) {
+    const schema = schemaMap.get(property.property_name);
+    if (!schema) {
+      throw new Error(`Custom property value ${context} references unknown property "${property.property_name}"`);
+    }
+
+    if (property.value === null) {
+      if (schema.required) {
+        throw new Error(`Custom property value ${context} cannot unset required property "${property.property_name}"`);
+      }
+      continue;
+    }
+
+    if (schema.value_type === 'multi_select') {
+      if (!Array.isArray(property.value)) {
+        throw new Error(`Custom property value ${context} property "${property.property_name}" must be an array`);
+      }
+      validateAllowedCustomPropertyValues(property, schema, context);
+    } else {
+      if (Array.isArray(property.value)) {
+        throw new Error(`Custom property value ${context} property "${property.property_name}" must not be an array`);
+      }
+      validateAllowedCustomPropertyValues(property, schema, context);
+    }
+  }
+}
+
+function validateAllowedCustomPropertyValues(property, schema, context) {
+  if (!Array.isArray(schema.allowed_values) || schema.allowed_values.length === 0) {
+    return;
+  }
+
+  const values = Array.isArray(property.value) ? property.value : [property.value];
+  const invalid = values.filter(value => !schema.allowed_values.includes(value));
+  if (invalid.length > 0) {
+    throw new Error(
+      `Custom property value ${context} property "${property.property_name}" has value(s) not in allowed_values: ${invalid.join(', ')}`
+    );
+  }
+}
+
+function buildCurrentPropertyValueMap(currentEntries) {
+  const result = new Map();
+  for (const entry of currentEntries) {
+    const repoName = entry.repository_name;
+    if (!repoName) continue;
+    const properties = new Map();
+    for (const property of entry.properties || []) {
+      properties.set(property.property_name, normalizeCustomPropertyValue(property.value));
+    }
+    result.set(repoName.toLowerCase(), properties);
+  }
+  return result;
+}
+
+function customPropertyValuesEqual(a, b) {
+  if (a === undefined || a === null) {
+    return b === undefined || b === null;
+  }
+  if (b === undefined || b === null) {
+    return false;
+  }
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) {
+      return false;
+    }
+    const sortedA = [...a].sort();
+    const sortedB = [...b].sort();
+    return sortedA.every((value, index) => value === sortedB[index]);
+  }
+  return String(a) === String(b);
+}
+
+function groupCustomPropertyValueChanges(changes) {
+  const groups = new Map();
+  for (const change of changes) {
+    const properties = [...change.properties].sort((a, b) => a.property_name.localeCompare(b.property_name));
+    const key = JSON.stringify(properties);
+    if (!groups.has(key)) {
+      groups.set(key, { properties, repositoryNames: [] });
+    }
+    groups.get(key).repositoryNames.push(change.repoName);
+  }
+
+  return Array.from(groups.values());
+}
+
+function chunkArray(values, size) {
+  const chunks = [];
+  for (let i = 0; i < values.length; i += size) {
+    chunks.push(values.slice(i, i + size));
+  }
+  return chunks;
+}
+
+function formatCustomPropertyValue(value) {
+  if (value === undefined) return '(unset)';
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return `[${value.join(', ')}]`;
+  return String(value);
 }
 
 // ─── Member Privileges Sync ─────────────────────────────────────────────────────
@@ -5757,6 +6301,7 @@ export async function run() {
     const organizationsInput = core.getInput('organizations');
     const organizationsFile = core.getInput('organizations-file');
     const customPropertiesFile = core.getInput('custom-properties-file');
+    const customPropertyValuesFile = core.getInput('custom-property-values-file');
     const deleteUnmanagedProperties = getBooleanInput('delete-unmanaged-properties') ?? false;
     const rulesetsFileInput = core.getInput('rulesets-file');
     const rulesetsFiles = parseRulesetsFileValue(rulesetsFileInput);
@@ -5821,11 +6366,13 @@ export async function run() {
       createMissingDotGithubRepos,
       dotGithubRepoVisibility,
       dotGithubPrivateRepoVisibility,
-      issueFieldsFile
+      issueFieldsFile,
+      customPropertyValuesFile
     );
 
     // Check that at least one setting type is specified
     const hasCustomProperties = orgList.some(o => o.customProperties && o.customProperties.length > 0);
+    const hasCustomPropertyValues = orgList.some(o => o.customPropertyValues && o.customPropertyValues.length > 0);
     const hasRulesets = orgList.some(o => o.rulesetsFiles && o.rulesetsFiles.length > 0);
     const hasIssueTypes = orgList.some(o => o.issueTypes && o.issueTypes.length > 0);
     const hasIssueFields = orgList.some(o => o.issueFields && o.issueFields.length > 0);
@@ -5853,6 +6400,7 @@ export async function run() {
     );
     if (
       !hasCustomProperties &&
+      !hasCustomPropertyValues &&
       !hasRulesets &&
       !hasIssueTypes &&
       !hasIssueFields &&
@@ -5869,6 +6417,7 @@ export async function run() {
       throw new Error(
         'At least one setting must be specified. Provide custom properties via ' +
           '"organizations-file" or via "organizations" + "custom-properties-file" inputs, ' +
+          'custom property values via "custom-property-values-file", ' +
           'provide issue types via "issue-types-file", issue fields via "issue-fields-file", rulesets via "rulesets-file", ' +
           'member privileges via individual inputs (e.g., "default-repository-permission"), ' +
           'organization role team assignments via "organization-role-team-assignments-file", ' +
@@ -5954,6 +6503,20 @@ export async function run() {
           if (cpResult.failed) {
             result.success = false;
             result.error = 'Custom properties sync failed';
+          }
+        }
+
+        // Sync custom property values after schema sync so newly-defined properties can be assigned.
+        if (orgConfig.customPropertyValues && orgConfig.customPropertyValues.length > 0) {
+          core.info(`  🏷️  Syncing custom property values (${orgConfig.customPropertyValues.length} rule(s))...`);
+          const cpvResult = await syncCustomPropertyValues(octokit, org, orgConfig.customPropertyValues, dryRun);
+          result.subResults.push(...cpvResult.subResults);
+
+          if (cpvResult.failed) {
+            result.success = false;
+            result.error = result.error
+              ? `${result.error}; Custom property values sync failed`
+              : 'Custom property values sync failed';
           }
         }
 

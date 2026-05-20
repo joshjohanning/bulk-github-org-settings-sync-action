@@ -27,6 +27,9 @@ inputs:
   custom-properties-file:
     description: 'Path to a YAML file defining custom property schemas to sync to target organizations'
     required: false
+  custom-property-values-file:
+    description: 'Path to a YAML file defining custom property values to sync to target organization repositories'
+    required: false
   delete-unmanaged-properties:
     description: 'Delete custom properties not defined in the configuration file'
     required: false
