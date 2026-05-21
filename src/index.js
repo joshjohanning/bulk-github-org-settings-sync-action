@@ -2291,6 +2291,10 @@ function normalizeCustomPropertyValue(value) {
     return null;
   }
 
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
   if (Array.isArray(value)) {
     return value.map(v => String(v));
   }
@@ -3812,12 +3816,10 @@ export async function syncCustomPropertyValues(octokit, org, rules, dryRun) {
   const subResults = [];
   const wouldPrefix = dryRun ? 'Would ' : '';
 
-  let repositories;
   let currentEntries;
   let schema;
   try {
-    [repositories, currentEntries, schema] = await Promise.all([
-      octokit.paginate('GET /orgs/{org}/repos', { org, type: 'all', per_page: 100 }),
+    [currentEntries, schema] = await Promise.all([
       octokit.paginate('GET /orgs/{org}/properties/values', { org, per_page: 100 }),
       (async () => {
         const { data } = await octokit.request('GET /orgs/{org}/properties/schema', { org });
@@ -3834,7 +3836,9 @@ export async function syncCustomPropertyValues(octokit, org, rules, dryRun) {
     throw error;
   }
 
-  const repoNameMap = new Map(repositories.map(repo => [repo.name.toLowerCase(), repo.name]));
+  const repoNameMap = new Map(
+    currentEntries.map(entry => [entry.repository_name.toLowerCase(), entry.repository_name])
+  );
   const currentValueMap = buildCurrentPropertyValueMap(currentEntries);
   const schemaMap = new Map(schema.map(prop => [prop.property_name, prop]));
   const desiredByRepo = new Map();
@@ -4013,6 +4017,12 @@ function validateCustomPropertyValueRuleAgainstSchema(rule, schemaMap, context) 
         throw new Error(`Custom property value ${context} property "${property.property_name}" must be an array`);
       }
       validateAllowedCustomPropertyValues(property, schema, context);
+    } else if (schema.value_type === 'true_false') {
+      if (typeof property.value !== 'boolean') {
+        throw new Error(
+          `Custom property value ${context} property "${property.property_name}" must be a boolean (true or false)`
+        );
+      }
     } else {
       if (Array.isArray(property.value)) {
         throw new Error(`Custom property value ${context} property "${property.property_name}" must not be an array`);
@@ -6417,7 +6427,7 @@ export async function run() {
       throw new Error(
         'At least one setting must be specified. Provide custom properties via ' +
           '"organizations-file" or via "organizations" + "custom-properties-file" inputs, ' +
-          'custom property values via "custom-property-values-file", ' +
+          'custom property values via "organizations-file" or via "organizations" + "custom-property-values-file" inputs, ' +
           'provide issue types via "issue-types-file", issue fields via "issue-fields-file", rulesets via "rulesets-file", ' +
           'member privileges via individual inputs (e.g., "default-repository-permission"), ' +
           'organization role team assignments via "organization-role-team-assignments-file", ' +

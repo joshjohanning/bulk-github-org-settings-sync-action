@@ -1559,6 +1559,17 @@ orgs:
         )
       ).toThrow('bare repository name');
     });
+
+    test('should preserve boolean values for true_false properties', () => {
+      const result = normalizeCustomPropertyValueRules(
+        [{ repositories: { names: ['api'] }, properties: { 'is-public': true, 'is-archived': false } }],
+        'custom property values'
+      );
+      const prop1 = result[0].properties.find(p => p.property_name === 'is-public');
+      const prop2 = result[0].properties.find(p => p.property_name === 'is-archived');
+      expect(prop1.value).toBe(true);
+      expect(prop2.value).toBe(false);
+    });
   });
 
   // ─── mergeCustomProperties ───────────────────────────────────────────
@@ -2555,9 +2566,6 @@ orgs:
 
     function mockCustomPropertyValueFetches() {
       mockPaginate.mockImplementation((route, params) => {
-        if (route === 'GET /orgs/{org}/repos') {
-          return Promise.resolve([{ name: 'api' }, { name: 'web' }]);
-        }
         if (route === 'GET /orgs/{org}/properties/values' && params.repository_query) {
           return Promise.resolve([{ repository_name: 'web', properties: [] }]);
         }
@@ -2629,9 +2637,6 @@ orgs:
 
     test('should warn on conflicting rule values and let later rules win', async () => {
       mockPaginate.mockImplementation(route => {
-        if (route === 'GET /orgs/{org}/repos') {
-          return Promise.resolve([{ name: 'api' }]);
-        }
         if (route === 'GET /orgs/{org}/properties/values') {
           return Promise.resolve([
             { repository_name: 'api', properties: [{ property_name: 'team', value: 'frontend' }] }
@@ -2668,6 +2673,27 @@ orgs:
         repository_names: ['api'],
         properties: [{ property_name: 'team', value: 'platform' }]
       });
+    });
+
+    test('should throw on schema validation failure when true_false property has non-boolean value', async () => {
+      mockPaginate.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/properties/values') {
+          return Promise.resolve([{ repository_name: 'api', properties: [] }]);
+        }
+        return Promise.resolve([]);
+      });
+      mockRequest.mockResolvedValueOnce({
+        data: [{ property_name: 'is-public', value_type: 'true_false', required: false }]
+      });
+
+      await expect(
+        syncCustomPropertyValues(
+          mockOctokit,
+          'my-org',
+          [{ repositories: { names: ['api'] }, properties: [{ property_name: 'is-public', value: 'yes' }] }],
+          false
+        )
+      ).rejects.toThrow('must be a boolean');
     });
   });
 
