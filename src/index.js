@@ -3810,9 +3810,11 @@ const CUSTOM_PROPERTY_VALUES_BATCH_SIZE = 30;
  * @param {string} org - Organization name
  * @param {Array<Object>} rules - Custom property value rules
  * @param {boolean} dryRun - Preview mode
+ * @param {Array<Object>} [desiredProperties] - Custom property schema definitions from config; used in
+ *   dry-run to avoid false validation failures when properties are newly defined in the same run.
  * @returns {Promise<Object>} Result object with subResults
  */
-export async function syncCustomPropertyValues(octokit, org, rules, dryRun) {
+export async function syncCustomPropertyValues(octokit, org, rules, dryRun, desiredProperties = []) {
   const subResults = [];
   const wouldPrefix = dryRun ? 'Would ' : '';
 
@@ -3841,7 +3843,20 @@ export async function syncCustomPropertyValues(octokit, org, rules, dryRun) {
   );
   const currentValueMap = buildCurrentPropertyValueMap(currentEntries);
   const schemaMap = new Map(schema.map(prop => [prop.property_name, prop]));
+
+  // In dry-run, the schema PATCH was also skipped, so merge the desired property definitions
+  // into the schema map to avoid false "unknown property" validation errors when new properties
+  // and their values are introduced in the same run.
+  if (dryRun && desiredProperties.length > 0) {
+    for (const prop of desiredProperties) {
+      if (!schemaMap.has(prop.property_name)) {
+        schemaMap.set(prop.property_name, prop);
+      }
+    }
+  }
+
   const desiredByRepo = new Map();
+  const queryCache = new Map();
 
   for (const [index, rule] of rules.entries()) {
     validateCustomPropertyValueRuleAgainstSchema(rule, schemaMap, `rule ${index + 1}`);
@@ -3852,7 +3867,8 @@ export async function syncCustomPropertyValues(octokit, org, rules, dryRun) {
       rule,
       index + 1,
       repoNameMap,
-      subResults
+      subResults,
+      queryCache
     );
 
     if (selectedRepos.length === 0) {
@@ -3869,24 +3885,25 @@ export async function syncCustomPropertyValues(octokit, org, rules, dryRun) {
       const repoProperties = desiredByRepo.get(repoName);
       for (const property of rule.properties) {
         const existing = repoProperties.get(property.property_name);
-        if (existing !== undefined && !customPropertyValuesEqual(existing, property.value)) {
+        if (existing !== undefined && !customPropertyValuesEqual(existing.value, property.value)) {
           const message =
-            `Repository "${repoName}" property "${property.property_name}" is set by multiple rules; ` +
-            `using value from rule ${index + 1}`;
+            `Repository "${repoName}" property "${property.property_name}" is set by rule ${existing.ruleNumber} ` +
+            `(${formatCustomPropertyValue(existing.value)}) and rule ${index + 1} ` +
+            `(${formatCustomPropertyValue(property.value)}); using value from rule ${index + 1}`;
           core.warning(`  ⚠️  ${message}`);
           subResults.push(createSubResult('custom-property-value-conflict', SubResultStatus.WARNING, message));
         }
-        repoProperties.set(property.property_name, property.value);
+        repoProperties.set(property.property_name, { value: property.value, ruleNumber: index + 1 });
       }
     }
   }
 
   const changes = [];
-  for (const [repoName, desiredProperties] of desiredByRepo.entries()) {
+  for (const [repoName, repoDesiredProperties] of desiredByRepo.entries()) {
     const currentProperties = currentValueMap.get(repoName.toLowerCase()) || new Map();
     const changedProperties = [];
 
-    for (const [propertyName, desiredValue] of desiredProperties.entries()) {
+    for (const [propertyName, { value: desiredValue }] of repoDesiredProperties.entries()) {
       const currentValue = currentProperties.get(propertyName);
       if (!customPropertyValuesEqual(currentValue, desiredValue)) {
         changedProperties.push({
@@ -3946,10 +3963,33 @@ export async function syncCustomPropertyValues(octokit, org, rules, dryRun) {
   return { subResults, failed };
 }
 
-async function resolveCustomPropertyValueRuleRepositories(octokit, org, rule, ruleNumber, repoNameMap, subResults) {
+async function resolveCustomPropertyValueRuleRepositories(
+  octokit,
+  org,
+  rule,
+  ruleNumber,
+  repoNameMap,
+  subResults,
+  queryCache = new Map()
+) {
   const selected = new Map();
-  const addHardSelectedName = name => {
-    const repoName = repoNameMap.get(name.toLowerCase());
+  const addHardSelectedName = async name => {
+    let repoName = repoNameMap.get(name.toLowerCase());
+    if (!repoName) {
+      // The /properties/values endpoint normally returns all org repos, but repos the token
+      // cannot see or repos that were very recently created may be absent. Do a single fallback
+      // lookup before warning so we don't produce false "not found" warnings.
+      try {
+        const { data: repo } = await octokit.request('GET /repos/{owner}/{repo}', {
+          owner: org,
+          repo: name
+        });
+        repoName = repo.name;
+        repoNameMap.set(repoName.toLowerCase(), repoName);
+      } catch (lookupError) {
+        if (lookupError.status !== 404) throw lookupError;
+      }
+    }
     if (!repoName) {
       const message = `Repository "${name}" from custom property value rule ${ruleNumber} was not found in organization "${org}"`;
       core.warning(`  ⚠️  ${message}`);
@@ -3960,7 +4000,7 @@ async function resolveCustomPropertyValueRuleRepositories(octokit, org, rule, ru
   };
 
   for (const name of rule.repositories.names) {
-    addHardSelectedName(name);
+    await addHardSelectedName(name);
   }
 
   if (rule.repositories.namesFile) {
@@ -3971,16 +4011,22 @@ async function resolveCustomPropertyValueRuleRepositories(octokit, org, rule, ru
       subResults.push(createSubResult('custom-property-value-select', SubResultStatus.WARNING, message));
     }
     for (const name of fileNames) {
-      addHardSelectedName(name);
+      await addHardSelectedName(name);
     }
   }
 
   if (rule.repositories.query) {
-    const matchingEntries = await octokit.paginate('GET /orgs/{org}/properties/values', {
-      org,
-      repository_query: rule.repositories.query,
-      per_page: 100
-    });
+    let matchingEntries;
+    if (queryCache.has(rule.repositories.query)) {
+      matchingEntries = queryCache.get(rule.repositories.query);
+    } else {
+      matchingEntries = await octokit.paginate('GET /orgs/{org}/properties/values', {
+        org,
+        repository_query: rule.repositories.query,
+        per_page: 100
+      });
+      queryCache.set(rule.repositories.query, matchingEntries);
+    }
 
     if (matchingEntries.length === 0) {
       const message = `Repository query "${rule.repositories.query}" in custom property value rule ${ruleNumber} matched no repositories`;
@@ -3999,51 +4045,58 @@ async function resolveCustomPropertyValueRuleRepositories(octokit, org, rule, ru
 }
 
 function validateCustomPropertyValueRuleAgainstSchema(rule, schemaMap, context) {
+  const errors = [];
   for (const property of rule.properties) {
     const schema = schemaMap.get(property.property_name);
     if (!schema) {
-      throw new Error(`Custom property value ${context} references unknown property "${property.property_name}"`);
+      errors.push(`Custom property value ${context} references unknown property "${property.property_name}"`);
+      continue;
     }
 
     if (property.value === null) {
       if (schema.required) {
-        throw new Error(`Custom property value ${context} cannot unset required property "${property.property_name}"`);
+        errors.push(`Custom property value ${context} cannot unset required property "${property.property_name}"`);
       }
       continue;
     }
 
     if (schema.value_type === 'multi_select') {
       if (!Array.isArray(property.value)) {
-        throw new Error(`Custom property value ${context} property "${property.property_name}" must be an array`);
+        errors.push(`Custom property value ${context} property "${property.property_name}" must be an array`);
+      } else {
+        const err = getCustomPropertyAllowedValuesError(property, schema, context);
+        if (err) errors.push(err);
       }
-      validateAllowedCustomPropertyValues(property, schema, context);
     } else if (schema.value_type === 'true_false') {
       if (typeof property.value !== 'boolean') {
-        throw new Error(
+        errors.push(
           `Custom property value ${context} property "${property.property_name}" must be a boolean (true or false)`
         );
       }
     } else {
       if (Array.isArray(property.value)) {
-        throw new Error(`Custom property value ${context} property "${property.property_name}" must not be an array`);
+        errors.push(`Custom property value ${context} property "${property.property_name}" must not be an array`);
+      } else {
+        const err = getCustomPropertyAllowedValuesError(property, schema, context);
+        if (err) errors.push(err);
       }
-      validateAllowedCustomPropertyValues(property, schema, context);
     }
+  }
+  if (errors.length > 0) {
+    throw new Error(errors.join('; '));
   }
 }
 
-function validateAllowedCustomPropertyValues(property, schema, context) {
+function getCustomPropertyAllowedValuesError(property, schema, context) {
   if (!Array.isArray(schema.allowed_values) || schema.allowed_values.length === 0) {
-    return;
+    return null;
   }
-
   const values = Array.isArray(property.value) ? property.value : [property.value];
   const invalid = values.filter(value => !schema.allowed_values.includes(value));
   if (invalid.length > 0) {
-    throw new Error(
-      `Custom property value ${context} property "${property.property_name}" has value(s) not in allowed_values: ${invalid.join(', ')}`
-    );
+    return `Custom property value ${context} property "${property.property_name}" has value(s) not in allowed_values: ${invalid.join(', ')}`;
   }
+  return null;
 }
 
 function buildCurrentPropertyValueMap(currentEntries) {
@@ -4061,12 +4114,9 @@ function buildCurrentPropertyValueMap(currentEntries) {
 }
 
 function customPropertyValuesEqual(a, b) {
-  if (a === undefined || a === null) {
-    return b === undefined || b === null;
-  }
-  if (b === undefined || b === null) {
-    return false;
-  }
+  const isEmpty = v => v === undefined || v === null || (Array.isArray(v) && v.length === 0);
+  if (isEmpty(a) && isEmpty(b)) return true;
+  if (isEmpty(a) || isEmpty(b)) return false;
   if (Array.isArray(a) || Array.isArray(b)) {
     if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) {
       return false;
@@ -4081,7 +4131,12 @@ function customPropertyValuesEqual(a, b) {
 function groupCustomPropertyValueChanges(changes) {
   const groups = new Map();
   for (const change of changes) {
-    const properties = [...change.properties].sort((a, b) => a.property_name.localeCompare(b.property_name));
+    const properties = [...change.properties]
+      .sort((a, b) => a.property_name.localeCompare(b.property_name))
+      .map(p => ({
+        property_name: p.property_name,
+        value: Array.isArray(p.value) ? [...p.value].sort() : p.value
+      }));
     const key = JSON.stringify(properties);
     if (!groups.has(key)) {
       groups.set(key, { properties, repositoryNames: [] });
@@ -6519,7 +6574,13 @@ export async function run() {
         // Sync custom property values after schema sync so newly-defined properties can be assigned.
         if (orgConfig.customPropertyValues && orgConfig.customPropertyValues.length > 0) {
           core.info(`  🏷️  Syncing custom property values (${orgConfig.customPropertyValues.length} rule(s))...`);
-          const cpvResult = await syncCustomPropertyValues(octokit, org, orgConfig.customPropertyValues, dryRun);
+          const cpvResult = await syncCustomPropertyValues(
+            octokit,
+            org,
+            orgConfig.customPropertyValues,
+            dryRun,
+            orgConfig.customProperties || []
+          );
           result.subResults.push(...cpvResult.subResults);
 
           if (cpvResult.failed) {

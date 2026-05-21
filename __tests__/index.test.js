@@ -2604,6 +2604,8 @@ orgs:
 
     test('should diff values, warn on missing hard-selected repos, and patch changed repos', async () => {
       mockCustomPropertyValueFetches();
+      // fallback GET /repos/{owner}/{repo} for 'missing' (not in /properties/values)
+      mockRequest.mockRejectedValueOnce(Object.assign(new Error('Not Found'), { status: 404 }));
       mockRequest.mockResolvedValueOnce({});
 
       const result = await syncCustomPropertyValues(mockOctokit, 'my-org', valueRules, false);
@@ -2628,11 +2630,13 @@ orgs:
 
     test('should not patch in dry-run mode', async () => {
       mockCustomPropertyValueFetches();
+      // fallback GET /repos/{owner}/{repo} for 'missing' (not in /properties/values)
+      mockRequest.mockRejectedValueOnce(Object.assign(new Error('Not Found'), { status: 404 }));
 
       const result = await syncCustomPropertyValues(mockOctokit, 'my-org', valueRules, true);
 
       expect(result.subResults.some(r => r.kind === 'custom-property-value-update')).toBe(true);
-      expect(mockRequest).toHaveBeenCalledTimes(1);
+      expect(mockRequest).toHaveBeenCalledTimes(2); // schema fetch + fallback GET
     });
 
     test('should warn on conflicting rule values and let later rules win', async () => {
@@ -2668,11 +2672,68 @@ orgs:
       );
 
       expect(result.subResults.some(r => r.kind === 'custom-property-value-conflict')).toBe(true);
+      // conflict warning should name both rule numbers and values
+      const conflictResult = result.subResults.find(r => r.kind === 'custom-property-value-conflict');
+      expect(conflictResult.message).toMatch(/rule 1/);
+      expect(conflictResult.message).toMatch(/rule 2/);
       expect(mockRequest).toHaveBeenCalledWith('PATCH /orgs/{org}/properties/values', {
         org: 'my-org',
         repository_names: ['api'],
         properties: [{ property_name: 'team', value: 'platform' }]
       });
+    });
+
+    test('should resolve empty array as equal to null to prevent infinite diff', async () => {
+      mockPaginate.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/properties/values') {
+          return Promise.resolve([
+            {
+              repository_name: 'api',
+              properties: [{ property_name: 'environments', value: null }]
+            }
+          ]);
+        }
+        return Promise.resolve([]);
+      });
+      mockRequest.mockResolvedValueOnce({
+        data: [{ property_name: 'environments', value_type: 'multi_select', required: false, allowed_values: [] }]
+      });
+
+      // desired = [] (empty array), current = null — should be treated as equal
+      const result = await syncCustomPropertyValues(
+        mockOctokit,
+        'my-org',
+        [{ repositories: { names: ['api'] }, properties: [{ property_name: 'environments', value: [] }] }],
+        false
+      );
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults.filter(r => r.kind === 'custom-property-value-update')).toHaveLength(0);
+      // PATCH should NOT be called since [] == null
+      expect(mockRequest).toHaveBeenCalledTimes(1); // schema only
+    });
+
+    test('should merge desired schema in dry-run to avoid false unknown-property errors', async () => {
+      mockPaginate.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/properties/values') {
+          return Promise.resolve([{ repository_name: 'api', properties: [] }]);
+        }
+        return Promise.resolve([]);
+      });
+      // schema does NOT contain 'new-prop' yet
+      mockRequest.mockResolvedValueOnce({ data: [] });
+
+      const desiredProperties = [{ property_name: 'new-prop', value_type: 'string', required: false }];
+
+      await expect(
+        syncCustomPropertyValues(
+          mockOctokit,
+          'my-org',
+          [{ repositories: { names: ['api'] }, properties: [{ property_name: 'new-prop', value: 'hello' }] }],
+          true, // dry-run
+          desiredProperties
+        )
+      ).resolves.not.toThrow();
     });
 
     test('should throw on schema validation failure when true_false property has non-boolean value', async () => {
