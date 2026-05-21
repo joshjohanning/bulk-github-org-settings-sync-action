@@ -37,6 +37,8 @@ inputs:
     description: 'Path to YAML file'
   custom-properties-file:
     description: 'Custom properties file'
+  custom-property-values-file:
+    description: 'Custom property values file'
   delete-unmanaged-properties:
     description: 'Delete unmanaged properties'
   issue-types-file:
@@ -207,9 +209,12 @@ const {
   parseOrganizations,
   parseOrganizationsFile,
   parseCustomPropertiesFile,
+  parseCustomPropertyValuesFile,
+  normalizeCustomPropertyValueRules,
   normalizeCustomProperties,
   compareCustomProperty,
   syncCustomProperties,
+  syncCustomPropertyValues,
   parseIssueTypesFile,
   normalizeIssueTypes,
   compareIssueType,
@@ -1508,6 +1513,65 @@ orgs:
     });
   });
 
+  // ─── parseCustomPropertyValuesFile ───────────────────────────────────────
+
+  describe('parseCustomPropertyValuesFile', () => {
+    test('should parse custom property value rules and resolve names-file relative to values file', () => {
+      const valuesYaml = `- repositories:
+    names: [api, web]
+    names-file: teams/platform.yml
+    query: 'topic:platform archived:false'
+  properties:
+    team: platform
+    environments: [production, staging]
+    owner: null
+`;
+      setMockFileContent(valuesYaml, '/mock/config/custom-property-values.yml');
+
+      const result = parseCustomPropertyValuesFile('/mock/config/custom-property-values.yml');
+
+      expect(result).toEqual([
+        {
+          repositories: {
+            names: ['api', 'web'],
+            namesFile: '/mock/config/teams/platform.yml',
+            query: 'topic:platform archived:false'
+          },
+          properties: [
+            { property_name: 'team', value: 'platform' },
+            { property_name: 'environments', value: ['production', 'staging'] },
+            { property_name: 'owner', value: null }
+          ]
+        }
+      ]);
+    });
+
+    test('should reject owner/name repository identifiers', () => {
+      expect(() =>
+        normalizeCustomPropertyValueRules(
+          [
+            {
+              repositories: { names: ['my-org/api'] },
+              properties: { team: 'platform' }
+            }
+          ],
+          'custom property values'
+        )
+      ).toThrow('bare repository name');
+    });
+
+    test('should preserve boolean values for true_false properties', () => {
+      const result = normalizeCustomPropertyValueRules(
+        [{ repositories: { names: ['api'] }, properties: { 'is-public': true, 'is-archived': false } }],
+        'custom property values'
+      );
+      const prop1 = result[0].properties.find(p => p.property_name === 'is-public');
+      const prop2 = result[0].properties.find(p => p.property_name === 'is-archived');
+      expect(prop1.value).toBe(true);
+      expect(prop2.value).toBe(false);
+    });
+  });
+
   // ─── mergeCustomProperties ───────────────────────────────────────────
 
   describe('mergeCustomProperties', () => {
@@ -2481,6 +2545,216 @@ orgs:
       expect(result.subResults[0].message).toContain('proper permissions');
       expect(result.failed).toBe(false);
       expect(mockRequest).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // ─── syncCustomPropertyValues ────────────────────────────────────────────
+
+  describe('syncCustomPropertyValues', () => {
+    const valueRules = [
+      {
+        repositories: {
+          names: ['api', 'missing'],
+          query: 'topic:platform archived:false'
+        },
+        properties: [
+          { property_name: 'team', value: 'platform' },
+          { property_name: 'environments', value: ['production', 'staging'] }
+        ]
+      }
+    ];
+
+    function mockCustomPropertyValueFetches() {
+      mockPaginate.mockImplementation((route, params) => {
+        if (route === 'GET /orgs/{org}/properties/values' && params.repository_query) {
+          return Promise.resolve([{ repository_name: 'web', properties: [] }]);
+        }
+        if (route === 'GET /orgs/{org}/properties/values') {
+          return Promise.resolve([
+            {
+              repository_name: 'api',
+              properties: [
+                { property_name: 'team', value: 'frontend' },
+                { property_name: 'environments', value: ['staging', 'production'] }
+              ]
+            },
+            { repository_name: 'web', properties: [] }
+          ]);
+        }
+        return Promise.resolve([]);
+      });
+
+      mockRequest.mockResolvedValueOnce({
+        data: [
+          {
+            property_name: 'team',
+            value_type: 'single_select',
+            required: false,
+            allowed_values: ['platform', 'frontend']
+          },
+          {
+            property_name: 'environments',
+            value_type: 'multi_select',
+            required: false,
+            allowed_values: ['production', 'staging']
+          }
+        ]
+      });
+    }
+
+    test('should diff values, warn on missing hard-selected repos, and patch changed repos', async () => {
+      mockCustomPropertyValueFetches();
+      // fallback GET /repos/{owner}/{repo} for 'missing' (not in /properties/values)
+      mockRequest.mockRejectedValueOnce(Object.assign(new Error('Not Found'), { status: 404 }));
+      mockRequest.mockResolvedValueOnce({});
+
+      const result = await syncCustomPropertyValues(mockOctokit, 'my-org', valueRules, false);
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults.some(r => r.kind === 'custom-property-value-select')).toBe(true);
+      expect(result.subResults.filter(r => r.kind === 'custom-property-value-update')).toHaveLength(2);
+      expect(mockRequest).toHaveBeenCalledWith('PATCH /orgs/{org}/properties/values', {
+        org: 'my-org',
+        repository_names: ['api'],
+        properties: [{ property_name: 'team', value: 'platform' }]
+      });
+      expect(mockRequest).toHaveBeenCalledWith('PATCH /orgs/{org}/properties/values', {
+        org: 'my-org',
+        repository_names: ['web'],
+        properties: [
+          { property_name: 'environments', value: ['production', 'staging'] },
+          { property_name: 'team', value: 'platform' }
+        ]
+      });
+    });
+
+    test('should not patch in dry-run mode', async () => {
+      mockCustomPropertyValueFetches();
+      // fallback GET /repos/{owner}/{repo} for 'missing' (not in /properties/values)
+      mockRequest.mockRejectedValueOnce(Object.assign(new Error('Not Found'), { status: 404 }));
+
+      const result = await syncCustomPropertyValues(mockOctokit, 'my-org', valueRules, true);
+
+      expect(result.subResults.some(r => r.kind === 'custom-property-value-update')).toBe(true);
+      expect(mockRequest).toHaveBeenCalledTimes(2); // schema fetch + fallback GET
+    });
+
+    test('should warn on conflicting rule values and let later rules win', async () => {
+      mockPaginate.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/properties/values') {
+          return Promise.resolve([
+            { repository_name: 'api', properties: [{ property_name: 'team', value: 'frontend' }] }
+          ]);
+        }
+        return Promise.resolve([]);
+      });
+      mockRequest
+        .mockResolvedValueOnce({
+          data: [
+            {
+              property_name: 'team',
+              value_type: 'single_select',
+              required: false,
+              allowed_values: ['platform', 'frontend']
+            }
+          ]
+        })
+        .mockResolvedValueOnce({});
+
+      const result = await syncCustomPropertyValues(
+        mockOctokit,
+        'my-org',
+        [
+          { repositories: { names: ['api'] }, properties: [{ property_name: 'team', value: 'frontend' }] },
+          { repositories: { names: ['api'] }, properties: [{ property_name: 'team', value: 'platform' }] }
+        ],
+        false
+      );
+
+      expect(result.subResults.some(r => r.kind === 'custom-property-value-conflict')).toBe(true);
+      // conflict warning should name both rule numbers and values
+      const conflictResult = result.subResults.find(r => r.kind === 'custom-property-value-conflict');
+      expect(conflictResult.message).toMatch(/rule 1/);
+      expect(conflictResult.message).toMatch(/rule 2/);
+      expect(mockRequest).toHaveBeenCalledWith('PATCH /orgs/{org}/properties/values', {
+        org: 'my-org',
+        repository_names: ['api'],
+        properties: [{ property_name: 'team', value: 'platform' }]
+      });
+    });
+
+    test('should resolve empty array as equal to null to prevent infinite diff', async () => {
+      mockPaginate.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/properties/values') {
+          return Promise.resolve([
+            {
+              repository_name: 'api',
+              properties: [{ property_name: 'environments', value: null }]
+            }
+          ]);
+        }
+        return Promise.resolve([]);
+      });
+      mockRequest.mockResolvedValueOnce({
+        data: [{ property_name: 'environments', value_type: 'multi_select', required: false, allowed_values: [] }]
+      });
+
+      // desired = [] (empty array), current = null — should be treated as equal
+      const result = await syncCustomPropertyValues(
+        mockOctokit,
+        'my-org',
+        [{ repositories: { names: ['api'] }, properties: [{ property_name: 'environments', value: [] }] }],
+        false
+      );
+
+      expect(result.failed).toBe(false);
+      expect(result.subResults.filter(r => r.kind === 'custom-property-value-update')).toHaveLength(0);
+      // PATCH should NOT be called since [] == null
+      expect(mockRequest).toHaveBeenCalledTimes(1); // schema only
+    });
+
+    test('should merge desired schema in dry-run to avoid false unknown-property errors', async () => {
+      mockPaginate.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/properties/values') {
+          return Promise.resolve([{ repository_name: 'api', properties: [] }]);
+        }
+        return Promise.resolve([]);
+      });
+      // schema does NOT contain 'new-prop' yet
+      mockRequest.mockResolvedValueOnce({ data: [] });
+
+      const desiredProperties = [{ property_name: 'new-prop', value_type: 'string', required: false }];
+
+      await expect(
+        syncCustomPropertyValues(
+          mockOctokit,
+          'my-org',
+          [{ repositories: { names: ['api'] }, properties: [{ property_name: 'new-prop', value: 'hello' }] }],
+          true, // dry-run
+          desiredProperties
+        )
+      ).resolves.not.toThrow();
+    });
+
+    test('should throw on schema validation failure when true_false property has non-boolean value', async () => {
+      mockPaginate.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/properties/values') {
+          return Promise.resolve([{ repository_name: 'api', properties: [] }]);
+        }
+        return Promise.resolve([]);
+      });
+      mockRequest.mockResolvedValueOnce({
+        data: [{ property_name: 'is-public', value_type: 'true_false', required: false }]
+      });
+
+      await expect(
+        syncCustomPropertyValues(
+          mockOctokit,
+          'my-org',
+          [{ repositories: { names: ['api'] }, properties: [{ property_name: 'is-public', value: 'yes' }] }],
+          false
+        )
+      ).rejects.toThrow('must be a boolean');
     });
   });
 

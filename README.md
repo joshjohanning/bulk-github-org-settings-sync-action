@@ -16,6 +16,7 @@ Please refer to the [release page](https://github.com/joshjohanning/bulk-github-
 ## Features
 
 - 🏷️ Sync custom property definitions across organizations
+- 🏷️ Sync custom property values onto selected organization repositories
 - 📋 Sync organization-level rulesets across organizations
 - 🏷️ Sync issue type definitions across organizations
 - 🧩 Sync issue field definitions across organizations
@@ -73,7 +74,7 @@ For stronger security and higher rate limits, use a GitHub App:
 
    **Organization permissions:**
    - **Administration**: Read and write (required for managing organization settings, rulesets, and organization role team assignments)
-   - **Custom properties**: Admin (required for managing custom property definitions)
+   - **Custom properties**: Admin (required for managing custom property definitions) or Write (required for managing repository custom property values)
    - **Custom organization roles**: Write (required for managing custom organization roles)
    - **Custom repository roles**: Write (required for managing custom repository roles)
    - **Issue types**: Write (required for managing issue type definitions)
@@ -191,7 +192,7 @@ orgs:
 
 **Optional: `base-path`**
 
-Use the `base-path` top-level property to avoid repeating a common directory prefix for all file-path settings (`custom-properties-file`, `issue-types-file`, `issue-fields-file`, `rulesets-file`). Relative paths in per-org overrides are resolved relative to `base-path`. Absolute paths are left unchanged.
+Use the `base-path` top-level property to avoid repeating a common directory prefix for all file-path settings (`custom-properties-file`, `custom-property-values-file`, `issue-types-file`, `issue-fields-file`, `rulesets-file`). Relative paths in per-org overrides are resolved relative to `base-path`. Absolute paths are left unchanged.
 
 ```yaml
 base-path: './config/'
@@ -263,20 +264,21 @@ The file-based form lets you keep per-org config in separate files while still u
 
 ### Supported features
 
-| Feature                            | Inline key                           | File-path key                             | Per-org semantics          |
-| ---------------------------------- | ------------------------------------ | ----------------------------------------- | -------------------------- |
-| Custom properties                  | `custom-properties`                  | `custom-properties-file`                  | Merge by `name` with base  |
-| Issue types                        | `issue-types`                        | `issue-types-file`                        | Merge by `name` with base  |
-| Issue fields                       | `issue-fields`                       | `issue-fields-file`                       | Merge by `name` with base  |
-| Custom organization roles          | `custom-org-roles`                   | `custom-org-roles-file`                   | Merge by `name` with base  |
-| Custom repository roles            | `custom-repo-roles`                  | `custom-repo-roles-file`                  | Merge by `name` with base  |
-| Code security configurations       | `code-security-configurations`       | `code-security-configurations-file`       | Merge by `name` with base  |
-| Organization role team assignments | `organization-role-team-assignments` | `organization-role-team-assignments-file` | Replaces base for that org |
-| Member privileges                  | `member-privileges`                  | _(direct action inputs serve as base)_    | Per-key override of base   |
-| Organization profile               | `org-profile`                        | _(direct action inputs serve as base)_    | Per-key override of base   |
-| Actions policy                     | `actions-policy`                     | _(direct action inputs serve as base)_    | Per-key override of base   |
-| Rulesets                           | _(file only — no inline form)_       | `rulesets-file` (string or YAML array)    | Replaces base for that org |
-| Actions allow list                 | _(file only — no inline form)_       | `actions-allow-list-file`                 | Replaces base for that org |
+| Feature                            | Inline key                           | File-path key                             | Per-org semantics                  |
+| ---------------------------------- | ------------------------------------ | ----------------------------------------- | ---------------------------------- |
+| Custom properties                  | `custom-properties`                  | `custom-properties-file`                  | Merge by `name` with base          |
+| Custom property values             | `custom-property-values`             | `custom-property-values-file`             | File replaces base; inline appends |
+| Issue types                        | `issue-types`                        | `issue-types-file`                        | Merge by `name` with base          |
+| Issue fields                       | `issue-fields`                       | `issue-fields-file`                       | Merge by `name` with base          |
+| Custom organization roles          | `custom-org-roles`                   | `custom-org-roles-file`                   | Merge by `name` with base          |
+| Custom repository roles            | `custom-repo-roles`                  | `custom-repo-roles-file`                  | Merge by `name` with base          |
+| Code security configurations       | `code-security-configurations`       | `code-security-configurations-file`       | Merge by `name` with base          |
+| Organization role team assignments | `organization-role-team-assignments` | `organization-role-team-assignments-file` | Replaces base for that org         |
+| Member privileges                  | `member-privileges`                  | _(direct action inputs serve as base)_    | Per-key override of base           |
+| Organization profile               | `org-profile`                        | _(direct action inputs serve as base)_    | Per-key override of base           |
+| Actions policy                     | `actions-policy`                     | _(direct action inputs serve as base)_    | Per-key override of base           |
+| Rulesets                           | _(file only — no inline form)_       | `rulesets-file` (string or YAML array)    | Replaces base for that org         |
+| Actions allow list                 | _(file only — no inline form)_       | `actions-allow-list-file`                 | Replaces base for that org         |
 
 ### Precedence
 
@@ -290,10 +292,12 @@ When both inline and file-based per-org overrides are set for the same org:
 
 - For **replace-semantics** features (currently `organization-role-team-assignments`), inline takes precedence and the per-org file is ignored.
 - For **merge-by-name** features (`custom-properties`, `issue-types`, `issue-fields`, `custom-org-roles`, `custom-repo-roles`, `code-security-configurations`), the per-org file becomes that org's base and inline entries then merge on top by `name`.
+- For **custom property values**, the per-org file replaces the base values file for that org, and inline `custom-property-values` rules append after file rules. Later rules win if they set the same property on the same repository.
 
 ### Merge vs replace
 
 - **Merge by `name`** — per-org list items with the same `name` override the base item; other base items are preserved.
+- **File replaces base; inline appends** — the per-org file replaces the base file, then inline per-org rules are appended and can override earlier rules by order.
 - **Replaces base for that org** — the entire per-org value replaces the base (no merge).
 - **Per-key override of base** — keys present in the per-org block override base values for those keys only; other base keys are preserved.
 
@@ -426,6 +430,101 @@ By default, syncing custom properties will create or update the specified proper
 - Updates properties that differ from the config
 - **Deletes all other properties not defined in the config**
 - In dry-run mode, shows which properties would be deleted without actually deleting them
+
+---
+
+## Syncing Custom Property Values
+
+Sync custom property values onto repositories in each organization. This assigns values for properties that already exist in the org schema, such as setting `team=platform` on selected repositories.
+
+> [!TIP]
+> 📄 **See full example:** [sample-configuration/custom-property-values.yml](sample-configuration/custom-property-values.yml)
+
+Create a `custom-property-values.yml` file:
+
+```yaml
+- repositories:
+    names:
+      - api
+      - web
+    names-file: teams/platform-repos.yml
+    query: 'topic:platform archived:false'
+  properties:
+    team: platform
+    environment:
+      - production
+      - staging
+
+- repositories:
+    names-file: teams/infra-repos.yml
+  properties:
+    team: infrastructure
+```
+
+Use it in a workflow:
+
+```yml
+- name: Sync Organization Settings
+  uses: joshjohanning/bulk-github-org-settings-sync-action@v1
+  with:
+    github-token: ${{ secrets.ORG_ADMIN_TOKEN }}
+    organizations: 'my-org'
+    custom-properties-file: './custom-properties.yml'
+    custom-property-values-file: './custom-property-values.yml'
+    dry-run: ${{ github.event_name == 'pull_request' }}
+```
+
+**Repository selectors:**
+
+| Selector                  | Description                                                                                                                                                                                                                                                  |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `repositories.names`      | Explicit bare repository names in the current org. `org/repo` is rejected because the action already runs per org and the API accepts bare names.                                                                                                            |
+| `repositories.names-file` | YAML file containing a list of bare repository names. Paths are resolved relative to the custom property values file that references them. Inline `orgs.yml` rules resolve relative to `base-path`, or the `orgs.yml` directory when `base-path` is not set. |
+| `repositories.query`      | GitHub repository query passed to `GET /orgs/{org}/properties/values` as `repository_query`.                                                                                                                                                                 |
+
+Selectors in one rule are unioned. Missing repositories from `names` or `names-file` warn and are skipped. Query selectors that match zero repositories warn and continue.
+
+`names-file` is useful when a team owns a repo list through CODEOWNERS and normal pull request review:
+
+```yaml
+# teams/platform-repos.yml
+- api
+- web
+- worker
+```
+
+> [!IMPORTANT]
+> CODEOWNERS provides review and audit workflow, not an authorization boundary. The token running this action can still apply values to any repository it can manage.
+
+**Conflict and update behavior:**
+
+- Rules are resolved before any writes happen.
+- If multiple rules set the same property on the same repo, later rules win and a warning is logged.
+- If multiple rules set different properties on the same repo, the values are merged.
+- Existing unmanaged values are left alone. To unset a value, set that property to `null` explicitly.
+- `multi_select` values are compared order-insensitively to avoid unnecessary updates.
+- Updates are batched in groups of up to 30 repositories, matching GitHub's API limit.
+
+> [!NOTE]
+> Query selectors depend on GitHub repository search behavior and can be affected by indexing latency or result limits. Prefer `names` or `names-file` for large or freshness-sensitive selections.
+
+### Per-Org Custom Property Value Overrides
+
+In `orgs.yml`, use `custom-property-values-file` to replace the base values file for a specific org, and `custom-property-values` to append org-specific rules after file rules:
+
+```yaml
+orgs:
+  - org: my-org
+    # inherits base custom-property-values-file as-is
+
+  - org: my-other-org
+    custom-property-values-file: './config/custom-property-values/other-org.yml'
+    custom-property-values:
+      - repositories:
+          names: [special-service]
+        properties:
+          team: platform
+```
 
 ---
 
@@ -1354,6 +1453,7 @@ orgs:
 | `organizations`                                           | Comma-separated list of organization names                                                           | No       |                         |
 | `organizations-file`                                      | Path to YAML file containing organization settings configuration                                     | No       |                         |
 | `custom-properties-file`                                  | Path to a YAML file defining custom property schemas                                                 | No       |                         |
+| `custom-property-values-file`                             | Path to a YAML file defining custom property values for selected organization repositories           | No       |                         |
 | `delete-unmanaged-properties`                             | Delete custom properties not defined in the configuration file                                       | No       | `false`                 |
 | `issue-types-file`                                        | Path to a YAML file defining issue type definitions                                                  | No       |                         |
 | `delete-unmanaged-issue-types`                            | Delete issue types not defined in the configuration file                                             | No       | `false`                 |
@@ -1410,7 +1510,7 @@ orgs:
 | `dry-run`                                                 | Preview changes without applying them                                                                | No       | `false`                 |
 
 > [!NOTE]
-> You must provide either `organizations` or `organizations-file`. The `custom-properties-file`, `issue-types-file`, `issue-fields-file`, `rulesets-file`, `custom-org-roles-file`, `custom-repo-roles-file`, `actions-allow-list-file`, `code-security-configurations-file`, and `organization-role-team-assignments-file` inputs provide base settings for all orgs and can be combined with either approach. Member privilege settings can be provided as individual inputs (e.g., `default-repository-permission`). Actions policy settings can be provided as individual inputs (e.g., `actions-policy-allowed-actions`). Org profile settings can be provided as individual inputs (e.g., `org-name`). The `dot-github-source-dir` and `dot-github-private-source-dir` inputs sync a local directory to the respective special repositories via PR, and `create-missing-dot-github-repos` plus the repo-visibility inputs control optional repo bootstrapping before sync. Per-org overrides in `organizations-file` layer on top of the base unless otherwise noted — see [Per-Org Overrides: Inline vs File-Based](#per-org-overrides-inline-vs-file-based) for which features support inline vs file-path overrides and their precedence and merge semantics.
+> You must provide either `organizations` or `organizations-file`. The `custom-properties-file`, `custom-property-values-file`, `issue-types-file`, `issue-fields-file`, `rulesets-file`, `custom-org-roles-file`, `custom-repo-roles-file`, `actions-allow-list-file`, `code-security-configurations-file`, and `organization-role-team-assignments-file` inputs provide base settings for all orgs and can be combined with either approach. Member privilege settings can be provided as individual inputs (e.g., `default-repository-permission`). Actions policy settings can be provided as individual inputs (e.g., `actions-policy-allowed-actions`). Org profile settings can be provided as individual inputs (e.g., `org-name`). The `dot-github-source-dir` and `dot-github-private-source-dir` inputs sync a local directory to the respective special repositories via PR, and `create-missing-dot-github-repos` plus the repo-visibility inputs control optional repo bootstrapping before sync. Per-org overrides in `organizations-file` layer on top of the base unless otherwise noted — see [Per-Org Overrides: Inline vs File-Based](#per-org-overrides-inline-vs-file-based) for which features support inline vs file-path overrides and their precedence and merge semantics.
 
 ## Action Outputs
 
