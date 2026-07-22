@@ -2293,14 +2293,13 @@ function normalizeCustomPropertyValue(value) {
     return null;
   }
 
-  if (typeof value === 'boolean') {
-    return value;
-  }
-
   if (Array.isArray(value)) {
     return value.map(v => String(v));
   }
 
+  // The custom properties API transports all scalar values as strings, including
+  // true_false properties (which use the strings "true"/"false", not JSON booleans).
+  // Coerce booleans and numbers to strings so YAML `true`/`false` become "true"/"false".
   return String(value);
 }
 
@@ -3861,44 +3860,55 @@ export async function syncCustomPropertyValues(octokit, org, rules, dryRun, desi
 
   const desiredByRepo = new Map();
   const queryCache = new Map();
+  let failed = false;
 
   for (const [index, rule] of rules.entries()) {
-    validateCustomPropertyValueRuleAgainstSchema(rule, schemaMap, `rule ${index + 1}`);
+    try {
+      validateCustomPropertyValueRuleAgainstSchema(rule, schemaMap, `rule ${index + 1}`);
 
-    const selectedRepos = await resolveCustomPropertyValueRuleRepositories(
-      octokit,
-      org,
-      rule,
-      index + 1,
-      repoNameMap,
-      subResults,
-      queryCache
-    );
+      const selectedRepos = await resolveCustomPropertyValueRuleRepositories(
+        octokit,
+        org,
+        rule,
+        index + 1,
+        repoNameMap,
+        subResults,
+        queryCache
+      );
 
-    if (selectedRepos.length === 0) {
-      const message = `Rule ${index + 1} did not match any repositories`;
+      if (selectedRepos.length === 0) {
+        const message = `Rule ${index + 1} did not match any repositories`;
+        core.warning(`  ⚠️  ${message}`);
+        subResults.push(createSubResult('custom-property-value-select', SubResultStatus.WARNING, message));
+        continue;
+      }
+
+      for (const repoName of selectedRepos) {
+        if (!desiredByRepo.has(repoName)) {
+          desiredByRepo.set(repoName, new Map());
+        }
+        const repoProperties = desiredByRepo.get(repoName);
+        for (const property of rule.properties) {
+          const existing = repoProperties.get(property.property_name);
+          if (existing !== undefined && !customPropertyValuesEqual(existing.value, property.value)) {
+            const message =
+              `Repository "${repoName}" property "${property.property_name}" is set by rule ${existing.ruleNumber} ` +
+              `(${formatCustomPropertyValue(existing.value)}) and rule ${index + 1} ` +
+              `(${formatCustomPropertyValue(property.value)}); using value from rule ${index + 1}`;
+            core.warning(`  ⚠️  ${message}`);
+            subResults.push(createSubResult('custom-property-value-conflict', SubResultStatus.WARNING, message));
+          }
+          repoProperties.set(property.property_name, { value: property.value, ruleNumber: index + 1 });
+        }
+      }
+    } catch (error) {
+      // Degrade gracefully: one bad rule (unknown property, bad value, missing names
+      // file, or a non-404 repo lookup error) shouldn't abort the org's other rules or
+      // subsequent syncs. Mark the values sync failed and continue with remaining rules.
+      failed = true;
+      const message = `Custom property value rule ${index + 1} failed: ${error.message}`;
       core.warning(`  ⚠️  ${message}`);
       subResults.push(createSubResult('custom-property-value-select', SubResultStatus.WARNING, message));
-      continue;
-    }
-
-    for (const repoName of selectedRepos) {
-      if (!desiredByRepo.has(repoName)) {
-        desiredByRepo.set(repoName, new Map());
-      }
-      const repoProperties = desiredByRepo.get(repoName);
-      for (const property of rule.properties) {
-        const existing = repoProperties.get(property.property_name);
-        if (existing !== undefined && !customPropertyValuesEqual(existing.value, property.value)) {
-          const message =
-            `Repository "${repoName}" property "${property.property_name}" is set by rule ${existing.ruleNumber} ` +
-            `(${formatCustomPropertyValue(existing.value)}) and rule ${index + 1} ` +
-            `(${formatCustomPropertyValue(property.value)}); using value from rule ${index + 1}`;
-          core.warning(`  ⚠️  ${message}`);
-          subResults.push(createSubResult('custom-property-value-conflict', SubResultStatus.WARNING, message));
-        }
-        repoProperties.set(property.property_name, { value: property.value, ruleNumber: index + 1 });
-      }
     }
   }
 
@@ -3943,10 +3953,9 @@ export async function syncCustomPropertyValues(octokit, org, rules, dryRun, desi
   }
 
   if (dryRun || changes.length === 0) {
-    return { subResults, failed: false };
+    return { subResults, failed };
   }
 
-  let failed = false;
   for (const group of groupCustomPropertyValueChanges(changes)) {
     for (const repoChunk of chunkArray(group.repositoryNames, CUSTOM_PROPERTY_VALUES_BATCH_SIZE)) {
       try {
@@ -4072,18 +4081,12 @@ function validateCustomPropertyValueRuleAgainstSchema(rule, schemaMap, context) 
         if (err) errors.push(err);
       }
     } else if (schema.value_type === 'true_false') {
-      if (typeof property.value !== 'boolean') {
-        errors.push(
-          `Custom property value ${context} property "${property.property_name}" must be a boolean (true or false)`
-        );
+      if (property.value !== 'true' && property.value !== 'false') {
+        errors.push(`Custom property value ${context} property "${property.property_name}" must be true or false`);
       }
     } else {
       if (Array.isArray(property.value)) {
         errors.push(`Custom property value ${context} property "${property.property_name}" must not be an array`);
-      } else if (typeof property.value === 'boolean') {
-        errors.push(
-          `Custom property value ${context} property "${property.property_name}" must be a string, not a boolean (only true_false properties accept booleans)`
-        );
       } else {
         const err = getCustomPropertyAllowedValuesError(property, schema, context);
         if (err) errors.push(err);

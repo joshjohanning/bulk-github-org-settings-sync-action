@@ -1560,15 +1560,16 @@ orgs:
       ).toThrow('bare repository name');
     });
 
-    test('should preserve boolean values for true_false properties', () => {
+    test('should coerce boolean values to "true"/"false" strings for true_false properties', () => {
       const result = normalizeCustomPropertyValueRules(
         [{ repositories: { names: ['api'] }, properties: { 'is-public': true, 'is-archived': false } }],
         'custom property values'
       );
       const prop1 = result[0].properties.find(p => p.property_name === 'is-public');
       const prop2 = result[0].properties.find(p => p.property_name === 'is-archived');
-      expect(prop1.value).toBe(true);
-      expect(prop2.value).toBe(false);
+      // The custom properties API transports true_false values as strings, not JSON booleans
+      expect(prop1.value).toBe('true');
+      expect(prop2.value).toBe('false');
     });
   });
 
@@ -2736,7 +2737,7 @@ orgs:
       ).resolves.not.toThrow();
     });
 
-    test('should throw on schema validation failure when true_false property has non-boolean value', async () => {
+    test('should fail the rule (not throw) when a true_false property has a non-true/false value', async () => {
       mockPaginate.mockImplementation(route => {
         if (route === 'GET /orgs/{org}/properties/values') {
           return Promise.resolve([{ repository_name: 'api', properties: [] }]);
@@ -2747,17 +2748,21 @@ orgs:
         data: [{ property_name: 'is-public', value_type: 'true_false', required: false }]
       });
 
-      await expect(
-        syncCustomPropertyValues(
-          mockOctokit,
-          'my-org',
-          [{ repositories: { names: ['api'] }, properties: [{ property_name: 'is-public', value: 'yes' }] }],
-          false
-        )
-      ).rejects.toThrow('must be a boolean');
+      const result = await syncCustomPropertyValues(
+        mockOctokit,
+        'my-org',
+        [{ repositories: { names: ['api'] }, properties: [{ property_name: 'is-public', value: 'yes' }] }],
+        false
+      );
+
+      // One bad rule degrades gracefully: failed flag set, warning emitted, no throw
+      expect(result.failed).toBe(true);
+      expect(result.subResults.some(r => r.status === 'warning' && r.message.includes('must be true or false'))).toBe(
+        true
+      );
     });
 
-    test('should throw when a non-true_false property is given a boolean value', async () => {
+    test('should send true_false values to the API as "true"/"false" strings, not booleans', async () => {
       mockPaginate.mockImplementation(route => {
         if (route === 'GET /orgs/{org}/properties/values') {
           return Promise.resolve([{ repository_name: 'api', properties: [] }]);
@@ -2765,17 +2770,58 @@ orgs:
         return Promise.resolve([]);
       });
       mockRequest.mockResolvedValueOnce({
+        data: [{ property_name: 'is-public', value_type: 'true_false', required: false }]
+      });
+      mockRequest.mockResolvedValueOnce({}); // PATCH
+
+      // Rules arrive already normalized (parseOrgConfig coerces booleans to "true"/"false")
+      const result = await syncCustomPropertyValues(
+        mockOctokit,
+        'my-org',
+        [{ repositories: { names: ['api'] }, properties: [{ property_name: 'is-public', value: 'true' }] }],
+        false
+      );
+
+      expect(result.failed).toBe(false);
+      expect(mockRequest).toHaveBeenCalledWith('PATCH /orgs/{org}/properties/values', {
+        org: 'my-org',
+        repository_names: ['api'],
+        properties: [{ property_name: 'is-public', value: 'true' }]
+      });
+    });
+
+    test('should continue processing other rules when one rule fails validation', async () => {
+      mockPaginate.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/properties/values') {
+          return Promise.resolve([
+            { repository_name: 'api', properties: [] },
+            { repository_name: 'web', properties: [] }
+          ]);
+        }
+        return Promise.resolve([]);
+      });
+      mockRequest.mockResolvedValueOnce({
         data: [{ property_name: 'team', value_type: 'string', required: false }]
       });
+      mockRequest.mockResolvedValueOnce({}); // PATCH for the valid rule
 
-      await expect(
-        syncCustomPropertyValues(
-          mockOctokit,
-          'my-org',
-          [{ repositories: { names: ['api'] }, properties: [{ property_name: 'team', value: true }] }],
-          false
-        )
-      ).rejects.toThrow('must be a string, not a boolean');
+      const result = await syncCustomPropertyValues(
+        mockOctokit,
+        'my-org',
+        [
+          // rule 1 is invalid (unknown property) — should not abort rule 2
+          { repositories: { names: ['api'] }, properties: [{ property_name: 'nope', value: 'x' }] },
+          { repositories: { names: ['web'] }, properties: [{ property_name: 'team', value: 'platform' }] }
+        ],
+        false
+      );
+
+      expect(result.failed).toBe(true);
+      expect(mockRequest).toHaveBeenCalledWith('PATCH /orgs/{org}/properties/values', {
+        org: 'my-org',
+        repository_names: ['web'],
+        properties: [{ property_name: 'team', value: 'platform' }]
+      });
     });
 
     test('should not crash when a properties/values entry is missing repository_name', async () => {

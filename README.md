@@ -461,6 +461,27 @@ Create a `custom-property-values.yml` file:
     team: infrastructure
 ```
 
+**Property value formats:**
+
+| Property type                    | YAML value                                                        |
+| -------------------------------- | ----------------------------------------------------------------- |
+| `string`, `single_select`, `url` | A string, e.g. `team: platform`                                   |
+| `multi_select`                   | A YAML list, e.g. `environment: [production, staging]`            |
+| `true_false`                     | `true` or `false` (also accepts the strings `'true'` / `'false'`) |
+| Unset a value                    | `null` (only allowed for non-required properties)                 |
+
+> [!NOTE]
+> The GitHub custom properties API stores every value as a string, so `true_false` values are sent as `"true"`/`"false"`. Writing `is-public: true` in YAML works — the action coerces it to the string form for you.
+
+```yaml
+# example true_false + unset
+- repositories:
+    names: [api]
+  properties:
+    is-public: true
+    cost-center: null
+```
+
 Use it in a workflow:
 
 ```yml
