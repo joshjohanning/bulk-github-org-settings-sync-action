@@ -52,9 +52,11 @@ function getKnownOrgConfigKeys() {
   // 'org-profile' is inline organization profile overrides (YAML-only, not an action input)
   // 'code-security-configurations' is inline code security configuration overrides (YAML-only, not an action input)
   // 'actions-policy' is inline actions policy overrides (YAML-only; individual settings are also available as action inputs)
+  // 'custom-property-values' is inline custom property value rules (YAML-only, not an action input)
   const keys = new Set([
     'org',
     'custom-properties',
+    'custom-property-values',
     'issue-types',
     'issue-fields',
     'member-privileges',
@@ -3839,7 +3841,9 @@ export async function syncCustomPropertyValues(octokit, org, rules, dryRun, desi
   }
 
   const repoNameMap = new Map(
-    currentEntries.map(entry => [entry.repository_name.toLowerCase(), entry.repository_name])
+    currentEntries
+      .filter(entry => entry.repository_name)
+      .map(entry => [entry.repository_name.toLowerCase(), entry.repository_name])
   );
   const currentValueMap = buildCurrentPropertyValueMap(currentEntries);
   const schemaMap = new Map(schema.map(prop => [prop.property_name, prop]));
@@ -4076,6 +4080,10 @@ function validateCustomPropertyValueRuleAgainstSchema(rule, schemaMap, context) 
     } else {
       if (Array.isArray(property.value)) {
         errors.push(`Custom property value ${context} property "${property.property_name}" must not be an array`);
+      } else if (typeof property.value === 'boolean') {
+        errors.push(
+          `Custom property value ${context} property "${property.property_name}" must be a string, not a boolean (only true_false properties accept booleans)`
+        );
       } else {
         const err = getCustomPropertyAllowedValuesError(property, schema, context);
         if (err) errors.push(err);

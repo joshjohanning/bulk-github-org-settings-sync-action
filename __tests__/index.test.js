@@ -2756,6 +2756,52 @@ orgs:
         )
       ).rejects.toThrow('must be a boolean');
     });
+
+    test('should throw when a non-true_false property is given a boolean value', async () => {
+      mockPaginate.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/properties/values') {
+          return Promise.resolve([{ repository_name: 'api', properties: [] }]);
+        }
+        return Promise.resolve([]);
+      });
+      mockRequest.mockResolvedValueOnce({
+        data: [{ property_name: 'team', value_type: 'string', required: false }]
+      });
+
+      await expect(
+        syncCustomPropertyValues(
+          mockOctokit,
+          'my-org',
+          [{ repositories: { names: ['api'] }, properties: [{ property_name: 'team', value: true }] }],
+          false
+        )
+      ).rejects.toThrow('must be a string, not a boolean');
+    });
+
+    test('should not crash when a properties/values entry is missing repository_name', async () => {
+      mockPaginate.mockImplementation(route => {
+        if (route === 'GET /orgs/{org}/properties/values') {
+          return Promise.resolve([
+            { properties: [] }, // malformed entry with no repository_name
+            { repository_name: 'api', properties: [] }
+          ]);
+        }
+        return Promise.resolve([]);
+      });
+      mockRequest.mockResolvedValueOnce({
+        data: [{ property_name: 'team', value_type: 'string', required: false }]
+      });
+      mockRequest.mockResolvedValueOnce({}); // PATCH for 'api'
+
+      const result = await syncCustomPropertyValues(
+        mockOctokit,
+        'my-org',
+        [{ repositories: { names: ['api'] }, properties: [{ property_name: 'team', value: 'frontend' }] }],
+        false
+      );
+
+      expect(result.failed).toBe(false);
+    });
   });
 
   // ─── run (integration) ─────────────────────────────────────────────────
