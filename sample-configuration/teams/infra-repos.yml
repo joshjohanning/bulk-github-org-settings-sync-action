@@ -1,0 +1,6 @@
+# Repo list that can be owned by a team via CODEOWNERS / PR review.
+# CODEOWNERS is a review workflow, not an authorization boundary.
+
+- infra-terraform
+- infra-ansible
+- platform-observability

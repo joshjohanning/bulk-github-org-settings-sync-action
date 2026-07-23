@@ -2607,7 +2607,8 @@ orgs:
       mockCustomPropertyValueFetches();
       // fallback GET /repos/{owner}/{repo} for 'missing' (not in /properties/values)
       mockRequest.mockRejectedValueOnce(Object.assign(new Error('Not Found'), { status: 404 }));
-      mockRequest.mockResolvedValueOnce({});
+      mockRequest.mockResolvedValueOnce({}); // PATCH for 'api'
+      mockRequest.mockResolvedValueOnce({}); // PATCH for 'web'
 
       const result = await syncCustomPropertyValues(mockOctokit, 'my-org', valueRules, false);
 
