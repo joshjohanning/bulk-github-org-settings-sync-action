@@ -257,6 +257,7 @@ const {
   syncActionsPolicy,
   validateOrgConfig,
   resetKnownOrgConfigKeysCache,
+  parseMultiValueInput,
   resolveFilePath,
   applyBasePathToOrgConfig,
   listFilesRecursively,
@@ -275,6 +276,19 @@ describe('Bulk GitHub Organization Settings Sync Action', () => {
     mockPaginate.mockReset();
     setupDefaultMocks();
     resetKnownOrgConfigKeysCache();
+  });
+
+  // ─── parseMultiValueInput ─────────────────────────────────────────────────
+
+  describe('parseMultiValueInput', () => {
+    test('should parse comma, newline, CRLF, and mixed delimiters', () => {
+      expect(parseMultiValueInput(' first.json, second.json\nthird.json\r\n\n fourth.json, ')).toEqual([
+        'first.json',
+        'second.json',
+        'third.json',
+        'fourth.json'
+      ]);
+    });
   });
 
   // ─── validateOrgConfig ───────────────────────────────────────────────
@@ -1305,6 +1319,20 @@ orgs:
 orgs:
   - org: my-org
     rulesets-file: 'rulesets/a.json, rulesets/b.json'
+`;
+      setMockFileContent(orgsYaml, '/mock/orgs.yml');
+      const result = parseOrganizationsFile('/mock/orgs.yml');
+
+      expect(result[0].rulesetsFiles).toEqual(['config/rulesets/a.json', 'config/rulesets/b.json']);
+    });
+
+    test('should resolve base-path with newline-separated rulesets-file', () => {
+      const orgsYaml = `base-path: './config/'
+orgs:
+  - org: my-org
+    rulesets-file: |
+      rulesets/a.json
+      rulesets/b.json
 `;
       setMockFileContent(orgsYaml, '/mock/orgs.yml');
       const result = parseOrganizationsFile('/mock/orgs.yml');
@@ -3242,7 +3270,7 @@ orgs:
       expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('Failed to update my-org'));
     });
 
-    test('should process organizations with rulesets-file input', async () => {
+    test('should process multiple ruleset files from a newline-separated action input', async () => {
       const rulesetContent = JSON.stringify({
         name: 'test-ruleset',
         target: 'branch',
@@ -3253,7 +3281,18 @@ orgs:
         },
         rules: [{ type: 'deletion' }]
       });
+      const tagRulesetContent = JSON.stringify({
+        name: 'test-tag-ruleset',
+        target: 'tag',
+        enforcement: 'active',
+        conditions: {
+          ref_name: { include: ['~ALL'], exclude: [] },
+          repository_name: { include: ['~ALL'], exclude: [] }
+        },
+        rules: [{ type: 'non_fast_forward' }]
+      });
       setMockFileContent(rulesetContent, '/mock/test-ruleset.json');
+      setMockFileContent(tagRulesetContent, '/mock/test-tag-ruleset.json');
 
       mockCore.getInput.mockImplementation(name => {
         const inputs = {
@@ -3262,7 +3301,7 @@ orgs:
           organizations: 'my-org',
           'organizations-file': '',
           'custom-properties-file': '',
-          'rulesets-file': '/mock/test-ruleset.json',
+          'rulesets-file': '/mock/test-ruleset.json\n/mock/test-tag-ruleset.json',
           'delete-unmanaged-properties': 'false',
           'delete-unmanaged-rulesets': 'false',
           'dry-run': 'true'
@@ -3284,6 +3323,9 @@ orgs:
       expect(mockCore.setFailed).not.toHaveBeenCalled();
       expect(mockCore.setOutput).toHaveBeenCalledWith('updated-organizations', '1');
       expect(mockCore.setOutput).toHaveBeenCalledWith('changed-organizations', '1');
+      expect(mockCore.info).toHaveBeenCalledWith('  📋 Syncing rulesets from 2 file(s)...');
+      expect(mockFs.readFileSync).toHaveBeenCalledWith('/mock/test-ruleset.json', 'utf8');
+      expect(mockFs.readFileSync).toHaveBeenCalledWith('/mock/test-tag-ruleset.json', 'utf8');
     });
 
     test('should process organizations with issue-types-file input', async () => {
