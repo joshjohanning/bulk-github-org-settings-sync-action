@@ -551,7 +551,7 @@ orgs:
 
 ## Syncing Organization Rulesets
 
-Sync organization-level rulesets across organizations. Rulesets define rules that apply to repositories within the organization (e.g., branch protection rules, tag rules). Each ruleset is defined in its own JSON file, and `rulesets-file` accepts comma-separated paths to sync multiple rulesets.
+Sync organization-level rulesets across organizations. Rulesets define rules that apply to repositories within the organization (e.g., branch protection rules, tag rules). Each ruleset is defined in its own JSON file, and `rulesets-file` accepts comma- or newline-separated paths to sync multiple rulesets.
 
 > [!TIP]
 > 📄 **See full examples:** [sample-configuration/rulesets/](sample-configuration/rulesets/)
@@ -632,7 +632,7 @@ Create a JSON file for each ruleset (one ruleset per file):
 }
 ```
 
-Sync both rulesets using comma-separated paths:
+Sync multiple rulesets using the recommended YAML literal block:
 
 ```yml
 - name: Sync Organization Settings
@@ -640,7 +640,15 @@ Sync both rulesets using comma-separated paths:
   with:
     github-token: ${{ secrets.ORG_ADMIN_TOKEN }}
     organizations: 'my-org'
-    rulesets-file: './rulesets/branch-protection.json, ./rulesets/tag-protection.json'
+    rulesets-file: |
+      ./rulesets/branch-protection.json
+      ./rulesets/tag-protection.json
+```
+
+Comma-separated paths remain supported:
+
+```yml
+rulesets-file: './rulesets/branch-protection.json, ./rulesets/tag-protection.json'
 ```
 
 > [!TIP]
@@ -1501,7 +1509,7 @@ orgs:
 | `members-can-view-dependency-insights`                    | Whether members can view dependency insights                                                         | No       |                         |
 | `display-commenter-full-name-setting-enabled`             | Whether to display commenter full name in issues and PRs                                             | No       |                         |
 | `organization-role-team-assignments-file`                 | Path to a YAML file defining organization role team assignments                                      | No       |                         |
-| `rulesets-file`                                           | Comma-separated paths to JSON files, each with a single org ruleset config                           | No       |                         |
+| `rulesets-file`                                           | Comma- or newline-separated paths to JSON files, each with a single org ruleset config               | No       |                         |
 | `delete-unmanaged-rulesets`                               | Delete all other rulesets besides those being synced                                                 | No       | `false`                 |
 | `custom-org-roles-file`                                   | Path to a YAML file defining custom organization role definitions (GHEC only)                        | No       |                         |
 | `delete-unmanaged-org-roles`                              | Delete custom org roles not defined in the configuration file                                        | No       | `false`                 |

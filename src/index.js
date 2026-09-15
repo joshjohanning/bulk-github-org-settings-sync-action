@@ -33,6 +33,19 @@ function getBooleanInput(name) {
   return core.getBooleanInput(name);
 }
 
+/**
+ * Parse a comma- or newline-separated string input into trimmed, non-empty values.
+ * Supports LF, CRLF, and mixed delimiters.
+ * @param {string} value - Raw string input
+ * @returns {string[]} Parsed values
+ */
+export function parseMultiValueInput(value) {
+  return value
+    .split(/[,\r\n]+/)
+    .map(entry => entry.trim())
+    .filter(entry => entry.length > 0);
+}
+
 // ─── YAML key validation ────────────────────────────────────────────────────────
 
 /**
@@ -556,7 +569,7 @@ export function resolveFilePath(basePath, filePath) {
 
 /**
  * Apply base-path resolution to all file-path config values in an org config object.
- * Handles string values, comma-separated strings (for rulesets-file),
+ * Handles string values, multi-value strings (for rulesets-file),
  * and array values.
  * @param {Object} orgConfig - Organization configuration object
  * @param {string} basePath - Base path to prepend to relative file paths
@@ -571,12 +584,9 @@ export function applyBasePathToOrgConfig(orgConfig, basePath) {
 
     const value = resolved[key];
     if (typeof value === 'string') {
-      // rulesets-file supports comma-separated paths
+      // rulesets-file supports comma- or newline-separated paths
       if (key === 'rulesets-file') {
-        resolved[key] = value
-          .split(',')
-          .map(p => p.trim())
-          .filter(p => p.length > 0)
+        resolved[key] = parseMultiValueInput(value)
           .map(p => resolveFilePath(basePath, p))
           .join(',');
       } else {
@@ -2098,7 +2108,7 @@ export function parseOrganizationsFile(filePath) {
 
 /**
  * Parse a rulesets-file value into an array of file paths.
- * Accepts a single string (comma-separated), a YAML array of strings,
+ * Accepts a single string (comma- or newline-separated), a YAML array of strings,
  * or an empty/falsy value (returns empty array).
  * @param {string|string[]} value - The rulesets-file value from config
  * @param {string} [context] - Context for error messages (e.g., org name)
@@ -2124,12 +2134,11 @@ function parseRulesetsFileValue(value, context) {
       return v.trim();
     });
   } else if (typeof value === 'string') {
-    paths = value
-      .split(',')
-      .map(p => p.trim())
-      .filter(p => p.length > 0);
+    paths = parseMultiValueInput(value);
   } else {
-    throw new Error(`Invalid "rulesets-file"${label}: expected a string, comma-separated string, or array of strings`);
+    throw new Error(
+      `Invalid "rulesets-file"${label}: expected a string, comma- or newline-separated string, or array of strings`
+    );
   }
 
   return paths;

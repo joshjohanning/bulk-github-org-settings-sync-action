@@ -184,7 +184,7 @@ inputs:
 
   # === Rulesets ===
   rulesets-file:
-    description: 'Comma-separated paths to JSON files, each containing a single organization ruleset configuration to sync'
+    description: 'Comma- or newline-separated paths to JSON files, each containing a single organization ruleset configuration to sync'
     required: false
   delete-unmanaged-rulesets:
     description: 'Delete all other rulesets besides those being synced'
